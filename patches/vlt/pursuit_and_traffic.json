@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "id": "pursuit_and_traffic",
+  "name": "Rockport 2026 Livelier Traffic & Intensified Pursuits",
+  "description": "Raises Rockport street/highway traffic flow speeds and district spawn cadence, and tunes Heat 1-5 police patrol presence, spawn cadence, roadblock probability, and engagement caps. Verified against untouched SLUS-21351 GLOBAL\\ATTRIBUTES.BIN.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+    "vault": "db"
+  },
+  "patches": [
+    {
+      "class": "trafficpattern",
+      "node": "default",
+      "field": "SpawnTime",
+      "expected_offset": "0x0006f6a0",
+      "expected_orig": 4.0,
+      "new_value": 2.8,
+      "note": "Faster base traffic spawn replenishment across inheriting Rockport districts"
+    },
+    {
+      "class": "trafficpattern",
+      "node": "default",
+      "field": "SpeedStreet",
+      "expected_offset": "0x0006f6ac",
+      "expected_orig": 35.0,
+      "new_value": 42.0,
+      "note": "Livelier city street traffic cruising speed"
+    },
+    {
+      "class": "trafficpattern",
+      "node": "default",
+      "field": "SpeedHighway",
+      "expected_offset": "0x0006f6b8",
+      "expected_orig": 55.0,
+      "new_value": 68.0,
+      "note": "Modern highway traffic cruising speed"
+    },
+    {
+      "class": "trafficpattern",
+      "node": "downtown",
+      "field": "Vehicles",
+      "index": 0,
+      "member": "Rate",
+      "expected_offset": "0x0002b3a4",
+      "expected_orig": 3.0,
+      "new_value": 2.2,
+      "note": "Higher downtown taxi spawn cadence (traftaxi)"
+    },
+    {
+      "class": "trafficpattern",
+      "node": "downtown",
+      "field": "Vehicles",
+      "index": 4,
+      "member": "Rate",
+      "expected_offset": "0x0002b404",
+      "expected_orig": 6.0,
+      "new_value": 4.0,
+      "note": "Higher downtown sedan spawn cadence (traf4dseda)"
+    },
+    {
+      "class": "trafficpattern",
+      "node": "cityhighway",
+      "field": "Vehicles",
+      "index": 3,
+      "member": "Rate",
+      "expected_offset": "0x0002b2cc",
+      "expected_orig": 6.0,
+      "new_value": 4.2,
+      "note": "Higher city highway sedan traffic flow (traf4dsedc)"
+    },
+    {
+      "class": "trafficpattern",
+      "node": "collegehighway",
+      "field": "Vehicles",
+      "index": 3,
+      "member": "Rate",
+      "expected_offset": "0x0002b124",
+      "expected_orig": 6.0,
+      "new_value": 4.2,
+      "note": "Higher college highway sedan traffic flow (traf4dseda)"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_01",
+      "field": "TimeBetweenCopSpawn",
+      "expected_offset": "0x0003dc30",
+      "expected_orig": 10.0,
+      "new_value": 8.0,
+      "note": "Heat 1 faster initial patrol spawn"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_01",
+      "field": "NumPatrolCars",
+      "expected_offset": "0x00078a54",
+      "expected_orig": 1,
+      "new_value": 2,
+      "note": "Heat 1 extra freeroam patrol cruiser"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_02",
+      "field": "roadblockprobability",
+      "expected_offset": "0x0003d5ec",
+      "expected_orig": 10.0,
+      "new_value": 18.0,
+      "note": "Heat 2 livelier roadblock appearances"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_02",
+      "field": "TimeBetweenCopSpawn",
+      "expected_offset": "0x0003d610",
+      "expected_orig": 10.0,
+      "new_value": 7.5,
+      "note": "Heat 2 brisker undercover cruiser reinforcements"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_02",
+      "field": "NumPatrolCars",
+      "expected_offset": "0x00078518",
+      "expected_orig": 1,
+      "new_value": 2,
+      "note": "Heat 2 extra freeroam patrol cruiser"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_03",
+      "field": "roadblockprobability",
+      "expected_offset": "0x0003dd2c",
+      "expected_orig": 25.0,
+      "new_value": 32.0,
+      "note": "Heat 3 increased state-pursuit roadblocks"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_03",
+      "field": "FullEngagementCopCount",
+      "expected_offset": "0x0003dd40",
+      "expected_orig": 15,
+      "new_value": 18,
+      "note": "Heat 3 higher full-engagement pursuit unit cap"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_03",
+      "field": "NumPatrolCars",
+      "expected_offset": "0x00078bbc",
+      "expected_orig": 1,
+      "new_value": 2,
+      "note": "Heat 3 extra freeroam state patrol cruiser"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_04",
+      "field": "roadblockprobability",
+      "expected_offset": "0x0003df5c",
+      "expected_orig": 30.0,
+      "new_value": 38.0,
+      "note": "Heat 4 heightened roadblock & spike pressure"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_04",
+      "field": "FullEngagementCopCount",
+      "expected_offset": "0x0003df70",
+      "expected_orig": 20,
+      "new_value": 24,
+      "note": "Heat 4 higher full-engagement pursuit unit cap"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_04",
+      "field": "TimeBetweenCopSpawn",
+      "expected_offset": "0x0003df80",
+      "expected_orig": 5.0,
+      "new_value": 4.0,
+      "note": "Heat 4 faster undercover GTO reinforcements"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_05",
+      "field": "cops",
+      "index": 0,
+      "member": "Count",
+      "expected_offset": "0x0003d7c8",
+      "expected_orig": 10,
+      "new_value": 12,
+      "note": "Heat 5 expanded Federal Corvette (copsporthench) pursuit pack"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_05",
+      "field": "roadblockprobability",
+      "expected_offset": "0x0003d80c",
+      "expected_orig": 40.0,
+      "new_value": 48.0,
+      "note": "Heat 5 high-intensity Federal roadblock probability"
+    },
+    {
+      "class": "pursuitlevels",
+      "node": "heat_05",
+      "field": "FullEngagementCopCount",
+      "expected_offset": "0x0003d820",
+      "expected_orig": 25,
+      "new_value": 30,
+      "note": "Heat 5 maximum Federal pursuit escalation cap"
+    }
+  ]
+}

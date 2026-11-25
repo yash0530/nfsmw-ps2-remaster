@@ -16,6 +16,9 @@ Production batch pipeline for Need for Speed: Most Wanted - Black Edition
                      preserving exact PCSX2 <TexHash>-<ClutHash>.dds filenames.
   4. render-hud-demo Procedurally generate a 2048x2048 supersampled Forza/GT7-inspired
                      modern racing tachometer/speedometer HUD prototype using Pillow.
+  5. check-env       Preflight audit of Apple Silicon MPS acceleration, installed Python
+                     packages, native macOS arm64 BC7 DDS encoders (dds_tool, kram,
+                     cuttlefish), and PCSX2 texture directories with exact install hints.
 
 Legal Notice:
   Copyrighted game dumps and AI-upscaled derivatives must remain strictly local
@@ -1397,6 +1400,183 @@ def cmd_render_hud_demo(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand 5: check-env (Apple Silicon MPS, Python packages, BC7 DDS encoders)
+# ---------------------------------------------------------------------------
+
+DDS_ENCODER_HINTS: Dict[str, str] = {
+    "dds_tool": "https://github.com/A-t-l-as/dds_tool  (Go/C fast BC7 + auto mipmaps; place binary on PATH)",
+    "kram": "https://github.com/alecazam/kram  (Apple Silicon arm64 Metal/BC7 CLI encoder; build via Xcode/CMake)",
+    "cuttlefish": "https://github.com/akb825/Cuttlefish  (CMake + ISPC BC7 encoder; brew install cmake && build)",
+}
+
+
+def check_environment() -> Dict[str, Any]:
+    """Inspect Apple Silicon MPS, Python imaging/AI packages, and native BC7 DDS encoders."""
+    import importlib
+    import platform
+
+    sys_info = {
+        "python_version": platform.python_version(),
+        "python_executable": sys.executable,
+        "os": platform.system(),
+        "os_release": platform.release(),
+        "machine": platform.machine(),
+        "is_apple_silicon": (platform.system() == "Darwin" and platform.machine() == "arm64"),
+    }
+
+    pkg_specs = [
+        ("pillow", "PIL", "core", "python3 -m pip install 'pillow>=10.3.0'"),
+        ("numpy", "numpy", "core", "python3 -m pip install 'numpy>=1.26.0'"),
+        ("scipy", "scipy", "optional", "pip install -r tools/requirements-textures.txt"),
+        ("torch", "torch", "ai_upscale", "pip install -r tools/requirements-textures.txt"),
+        ("spandrel", "spandrel", "ai_upscale", "pip install -r tools/requirements-textures.txt"),
+        ("tqdm", "tqdm", "optional", "pip install -r tools/requirements-textures.txt"),
+    ]
+
+    packages: Dict[str, Dict[str, Any]] = {}
+    torch_mod: Any = None
+    for pkg_name, import_name, tier, install_hint in pkg_specs:
+        try:
+            mod = importlib.import_module(import_name)
+            ver = getattr(mod, "__version__", "installed")
+            packages[pkg_name] = {
+                "installed": True,
+                "version": str(ver),
+                "tier": tier,
+                "install_hint": install_hint,
+            }
+            if import_name == "torch":
+                torch_mod = mod
+        except ImportError:
+            packages[pkg_name] = {
+                "installed": False,
+                "version": None,
+                "tier": tier,
+                "install_hint": install_hint,
+            }
+
+    if torch_mod is not None:
+        mps_backend = getattr(getattr(torch_mod, "backends", None), "mps", None)
+        mps_built = bool(mps_backend.is_built()) if mps_backend is not None else False
+        mps_avail = bool(mps_backend.is_available()) if mps_backend is not None else False
+        cuda_avail = bool(torch_mod.cuda.is_available())
+        recommended_device = "mps" if mps_avail else ("cuda" if cuda_avail else "cpu")
+    else:
+        mps_built = False
+        mps_avail = False
+        cuda_avail = False
+        recommended_device = "unavailable (install torch)"
+
+    acceleration = {
+        "mps_built": mps_built,
+        "mps_available": mps_avail,
+        "cuda_available": cuda_avail,
+        "recommended_device": recommended_device,
+        "mps_fallback_env": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", ""),
+        "install_hint": (
+            "uv venv --python 3.12 .venv-textures && source .venv-textures/bin/activate && "
+            "pip install -r tools/requirements-textures.txt"
+        ),
+    }
+
+    dds_encoders: Dict[str, Dict[str, Any]] = {}
+    available_encoders: List[str] = []
+    for enc_name, hint in DDS_ENCODER_HINTS.items():
+        binary = shutil.which(enc_name)
+        found = binary is not None
+        if found:
+            available_encoders.append(enc_name)
+        dds_encoders[enc_name] = {
+            "installed": found,
+            "path": binary,
+            "install_hint": hint,
+        }
+
+    pcsx2_dirs = {
+        "dumps_dir": str(DEFAULT_PCSX2_DUMPS),
+        "dumps_exists": DEFAULT_PCSX2_DUMPS.is_dir(),
+        "dumps_count": len(iter_image_files(DEFAULT_PCSX2_DUMPS, AUDIT_IMAGE_EXTS)) if DEFAULT_PCSX2_DUMPS.is_dir() else 0,
+        "replacements_dir": str(DEFAULT_PCSX2_REPLACEMENTS),
+        "replacements_exists": DEFAULT_PCSX2_REPLACEMENTS.is_dir(),
+        "replacements_count": (
+            len(iter_image_files(DEFAULT_PCSX2_REPLACEMENTS, AUDIT_IMAGE_EXTS))
+            if DEFAULT_PCSX2_REPLACEMENTS.is_dir()
+            else 0
+        ),
+    }
+
+    readiness = {
+        "pbr_and_hud_ready": packages["pillow"]["installed"] and packages["numpy"]["installed"],
+        "ai_upscale_ready": (
+            packages["torch"]["installed"]
+            and packages["spandrel"]["installed"]
+            and packages["pillow"]["installed"]
+            and packages["numpy"]["installed"]
+        ),
+        "mps_accelerated": mps_avail,
+        "dds_encode_ready": len(available_encoders) > 0,
+        "preferred_dds_encoder": available_encoders[0] if available_encoders else None,
+    }
+
+    return {
+        "schema_version": "1.0",
+        "system": sys_info,
+        "packages": packages,
+        "acceleration": acceleration,
+        "dds_encoders": dds_encoders,
+        "pcsx2_textures": pcsx2_dirs,
+        "readiness": readiness,
+    }
+
+
+def cmd_check_env(args: argparse.Namespace) -> int:
+    report = check_environment()
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0
+
+    sys_info = report["system"]
+    acc = report["acceleration"]
+    rd = report["readiness"]
+    print("=== NFSMW: Rockport 2026 — Texture Pipeline Environment Preflight ===")
+    print(
+        f"System        : {sys_info['os']} {sys_info['os_release']} ({sys_info['machine']}) "
+        f"| Python {sys_info['python_version']}"
+    )
+    print(
+        f"Apple Silicon : {'YES (arm64)' if sys_info['is_apple_silicon'] else 'NO'} "
+        f"| MPS built={acc['mps_built']} available={acc['mps_available']} "
+        f"| Device: {acc['recommended_device']}"
+    )
+
+    print("\nPython Packages:")
+    for name, info in report["packages"].items():
+        status = f"OK ({info['version']})" if info["installed"] else "MISSING"
+        print(f"  {name:<10} [{info['tier']:<10}] : {status}")
+        if not info["installed"]:
+            print(f"      -> install: {info['install_hint']}")
+
+    print("\nNative macOS arm64 BC7 DDS Encoders:")
+    for enc_name, info in report["dds_encoders"].items():
+        if info["installed"]:
+            print(f"  {enc_name:<10} : OK ({info['path']})")
+        else:
+            print(f"  {enc_name:<10} : MISSING")
+            print(f"      -> install: {info['install_hint']}")
+
+    p2 = report["pcsx2_textures"]
+    print("\nPCSX2 SLUS-21351 Texture Directories:")
+    print(f"  dumps        : {'exists' if p2['dumps_exists'] else 'not created yet'} ({p2['dumps_count']} files)")
+    print(f"  replacements : {'exists' if p2['replacements_exists'] else 'not created yet'} ({p2['replacements_count']} files)")
+
+    print("\nStage Readiness Summary:")
+    print(f"  CC0 PBR Bake & 4K HUD Gen : {'READY' if rd['pbr_and_hud_ready'] else 'MISSING DEPS'}")
+    print(f"  Local AI Upscaling (MPS)  : {'READY (' + acc['recommended_device'] + ')' if rd['ai_upscale_ready'] else 'OPTIONAL (install requirements-textures.txt)'}")
+    print(f"  Native BC7 DDS Encoding   : {'READY (' + str(rd['preferred_dds_encoder']) + ')' if rd['dds_encode_ready'] else 'MISSING ENCODER (use --dry-run or install dds_tool/kram/cuttlefish)'}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI Argument Parser
 # ---------------------------------------------------------------------------
 
@@ -1580,6 +1760,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only emit the transparent RGBA game texture (skip dark-backdrop preview PNG).",
     )
     p_hud.set_defaults(func=cmd_render_hud_demo)
+
+    # 5. check-env
+    p_env = subparsers.add_parser(
+        "check-env",
+        help="Inspect Apple Silicon MPS, Python packages, and native BC7 DDS encoders with install hints.",
+    )
+    p_env.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit structured JSON preflight report.",
+    )
+    p_env.set_defaults(func=cmd_check_env)
 
     return parser
 

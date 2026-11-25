@@ -1,30 +1,127 @@
 gametitle=Need for Speed - Most Wanted [Black Edition] (NTSC-U) [SLUS-21351]
-comment=NFSMW: Rockport 2026 — Verified PCSX2 v2 Patch Suite for SLUS-21351 (CRC: 0518D274)
+comment=NFSMW: Rockport 2026 — Binary-Verified PCSX2 v2 Patch Suite for SLUS-21351 (CRC: 0518D274)
 
-// Every static ELF offset below has been verified directly against SLUS_213.51 (Black Edition v1.01).
-// Enable/disable individual sections inside PCSX2: Game Properties -> Patches.
+// Every static ELF address and MIPS instruction below has been directly verified against
+// unmodified SLUS_213.51 (Black Edition NTSC-U v1.01, SHA-1 60289f3f8b643822a302720f9649ddc4ba55034b).
+// Toggle individual sections in PCSX2: Game Properties -> Patches.
+// NOTE: Enable only ONE aspect-ratio section at a time ([Widescreen 16:9], [Ultrawide 21:9], or [Wider Camera FOV +12% (16:9)]).
 
 [Widescreen 16:9]
 gsaspectratio=16:9
-author=PeterDelta (ported & verified for SLUS-21351)
-description=Enables native 16:9 widescreen mode and corrects horizontal projection aspect ratio (0.71f -> 0.75f).
-patch=1,EE,00AAFDD4,word,00000001
-patch=1,EE,0054BA38,word,3F400000
+author=PeterDelta / NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Enables true 16:9 widescreen natively via VideoSettings::Default (exact bool 1), forces BE runtime flag 0x00AAFE54=1 for existing 4:3 saves, and fixes 3D horizontal aspect projection (0.71f -> 0.75f). Auto-enabled by PCSX2 global Widescreen Patches toggle.
+patch=0,EE,0026D9F4,word,AC810000
+patch=0,EE,0026D9F8,word,24010001
+patch=0,EE,0026D9FC,word,AC81000C
+patch=1,EE,00AAFE54,word,00000001
+patch=0,EE,0054BA38,word,3F400000
+
+[Ultrawide 21:9 (Optional Alternative to 16:9)]
+gsaspectratio=21:9
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=True 21:9 (64:27) ultrawide projection (0.71f -> 0.5625f) plus widened frustum culling (0.71f -> 0.90f) to eliminate edge pop-in. Disable [Widescreen 16:9] when enabling this section.
+patch=0,EE,0026D9F4,word,AC810000
+patch=0,EE,0026D9F8,word,24010001
+patch=0,EE,0026D9FC,word,AC81000C
+patch=1,EE,00AAFE54,word,00000001
+patch=0,EE,0054BA38,word,3F100000
+patch=0,EE,0054E174,word,3F666666
+
+[Wider Camera FOV +12% (Optional 16:9 Alternative)]
+gsaspectratio=16:9
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Symmetric +12% wider 3D camera FOV on 16:9 (scales 3D X/Y projection by 1/1.12 and widens frustum culling to 0.80f while preserving exact 16:9 proportions and 2D HUD). Disable [Widescreen 16:9] when enabling this section.
+patch=0,EE,0026D9F4,word,AC810000
+patch=0,EE,0026D9F8,word,24010001
+patch=0,EE,0026D9FC,word,AC81000C
+patch=1,EE,00AAFE54,word,00000001
+patch=0,EE,0054BA38,word,3F2B6DB7
+patch=0,EE,0054BA3C,word,3F7B6DB7
+patch=0,EE,0054E174,word,3F4CCCCD
 
 [Remove Brown Filter]
-author=fobes
-description=Disables the 2005 brownish-yellow visual treatment post-processing pass for clean, vibrant colors.
+author=fobes (MIPS-verified for SLUS-21351)
+description=Skips the 2005 sepia/brown-yellow tint pass inside IVisualTreatmentPlat::ApplyColorBloom for clean, modern natural colors while preserving bloom.
 patch=1,EE,00550D58,word,00000001
 
-[Remove Motion Blur]
-author=PeterDelta (ported & verified for SLUS-21351)
-description=Eliminates low-res PS2 accumulation motion blur that causes heavy ghosting/smearing at 4K internal resolution.
-patch=0,EE,0055014C,word,00000000
-patch=0,EE,001FEDB8,word,24020000
-patch=0,EE,001FEDBC,word,10620004
-patch=0,EE,00550D28,word,00000000
+[Disable Motion Blur Effect]
+author=Steelmax / PeterDelta / NFSMW: Rockport 2026
+description=Disables PS2 accumulation smear motion blur cleanly via eAttachSmear2 (SmearNumSubStages=0, SmearEnable=0) without disabling bloom or other post-processing.
+patch=1,EE,00550150,word,00000000
+patch=1,EE,0055014C,word,00000000
+
+[Disable Bloom (Optional)]
+author=Steelmax (official PCSX2 March 2026, MIPS-verified for SLUS-21351)
+description=Skips the excessive PS2 additive bloom pass inside ApplyColorBloom while retaining remaining visual treatment.
+patch=1,EE,00550D5C,word,00000001
+
+[Disable All Post-processing (Optional)]
+author=Steelmax (official PCSX2 March 2026, MIPS-verified for SLUS-21351)
+description=Disables IVisualTreatmentPlat::RenderMWVisualLook completely (sepia, bloom, detail softening, pulse brightness). Also eliminates upscaled post-effect alignment offsets.
+patch=1,EE,00550D28,word,00000000
+
+[Disable Radial Blur (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Disables high-speed and Nitrous screen-edge radial blur by early-returning IVisualTreatmentPlat::Radialblur.
+patch=0,EE,00219A68,word,03E00008
+patch=0,EE,00219A6C,word,00000000
+
+[No Distant Fog (Optional)]
+author=Steelmax (official PCSX2 March 2026, MIPS-verified for SLUS-21351)
+description=Clears FogModeInfos[0] mode byte (0x00550029 -> 0x00) to remove distant horizon fog cleanly.
+patch=1,EE,00550028,word,01000000
 
 [Remove Distance Brume (Optional)]
-author=PeterDelta (ported & verified for SLUS-21351)
-description=Disables atmospheric distance brume/haze for crisp horizons. Toggle off if you prefer softer distant LOD transitions.
+author=PeterDelta (MIPS-verified for SLUS-21351)
+description=Disables atmospheric distance brume/haze volume overlay in eAttachFog for sharper horizon clarity at 4K.
 patch=0,EE,005500F0,word,00000000
+
+[Disable Screen Raindrops (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Disables low-res camera lens water droplet overlays in RainDrop() while keeping wet roads and rain audio.
+patch=0,EE,00211030,word,03E00008
+patch=0,EE,00211034,word,00000000
+
+[Force High-LOD Cars and Wheels]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Activates EA's built-in g_ForceCarBodyLOD and g_ForceCarTireLOD overrides (safely clamped per car via pmaxw/pminw to [mMinLodLevel, mMaxLodLevel]).
+patch=0,EE,0059FF28,word,00000000
+patch=0,EE,0059FF2C,word,00000000
+
+[Full-Rate Car Reflections (All 5 Faces Every Frame)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Bypasses the 5-frame round-robin envmap throttle in IsFaceEnabled() so all 5 visible car reflection faces update every single frame.
+patch=0,EE,0020F5B0,word,10000034
+
+[Extended Scenery Draw Distance and High-LOD World]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Lowers DrawAScenery projected-pixel cull cutoff from 18px to 6px (3x visibility) and extends high-detail scenery mesh LOD ratio from 8.7f to 3.0f.
+patch=0,EE,003DB110,word,2A020006
+patch=0,EE,003DB178,word,3C014040
+patch=0,EE,003DB17C,word,34210000
+
+[Disable AI Catch-Up / Rubber-Banding (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Forces GRaceParameters::GetCatchUp() to return 0, cleanly disabling AI catch-up rubber-banding in races.
+patch=0,EE,002B5958,word,03E00008
+patch=0,EE,002B595C,word,0000102D
+
+[Skip Intro Movies (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Sets built-in SkipMovies flag (0x00574660=1) so MoviePlayer::Play skips intro FMVs cleanly and boots straight to menu.
+patch=0,EE,00574660,word,00000001
+
+[Unlock All Cars and Parts (Optional Sandbox)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Enables built-in UnlockAllThings flag (0x00574624=1) across QuickRaceUnlocker, CareerUnlocker, and UnlockSystem.
+patch=1,EE,00574624,word,00000001
+
+[60 FPS Companion: Fix ScreenEFX 30Hz Timestep (Experimental)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=SLUS-21351 runs unlocked up to 60 FPS natively with PCSX2 EE Overclock (180%-300%) and 60 Hz physics. Fixes hardcoded 1/30f dt in UpdateAllScreenEFX() to 1/60f so screen effects play at normal 1x speed at 60 FPS.
+patch=0,EE,003DE778,word,3C013C88
+
+[Lock 30 FPS Frame Pacing (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Enables EA's hidden built-in 2-VBlank limiter (0x0054B5D8=1) in eDisplayFrame() for perfectly even 30 FPS frame pacing on lower-end hardware.
+patch=0,EE,0054B5D8,word,00000001

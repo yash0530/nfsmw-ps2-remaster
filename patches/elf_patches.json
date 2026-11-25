@@ -5,6 +5,7 @@
     "serial": "SLUS-21351",
     "elf_name": "SLUS_213.51",
     "elf_size": 4918740,
+    "elf_sha1": "60289f3f8b643822a302720f9649ddc4ba55034b",
     "elf_pcsx2_crc": "0518D274",
     "pt_load_vaddr": "0x00100000",
     "pt_load_file_offset": "0x00001000"
@@ -13,78 +14,426 @@
     {
       "id": "remove_brown_filter",
       "name": "Remove 2005 Brown/Yellow Visual Treatment",
-      "description": "Disables the heavy sepia/brown-yellow post-processing filter for clean, modern natural colors.",
-      "author": "fobes (verified on SLUS_213.51)",
+      "description": "Skips the heavy sepia/amber color-wash pass in IVisualTreatmentPlat::ApplyColorBloom and uses neutral RGBA compositing for crisp, modern natural colors while retaining bloom.",
+      "category": "visual",
+      "author": "fobes (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": true,
       "writes": [
         {
           "vaddr": "0x00550D58",
           "expected_orig": "0x00000000",
           "patched": "0x00000001",
-          "note": "Disable brownish-yellow visual treatment post-processing flag"
+          "note": "ApplyColorBloom (0x0021931C, 0x002196FC): skip sepia tint sprite pass and force neutral bloom color"
         }
       ]
     },
     {
       "id": "remove_motion_blur",
-      "name": "Remove Smeared PS2 Motion Blur",
-      "description": "Disables the low-res PS2 accumulation motion blur that smears and ghosts at 4K internal resolution.",
-      "author": "PeterDelta (verified on SLUS_213.51)",
+      "name": "Remove Smeared PS2 Motion Blur (Clean, Preserves Bloom)",
+      "description": "Disables the low-res PS2 smear/accumulation motion blur inside eAttachSmear2 without killing bloom or other post-processing passes.",
+      "category": "visual",
+      "author": "Steelmax / PeterDelta / NFSMW: Rockport 2026",
       "enabled_by_default": true,
       "writes": [
+        {
+          "vaddr": "0x00550150",
+          "expected_orig": "0x00000006",
+          "patched": "0x00000000",
+          "note": "eAttachSmear2 (0x00214184, 0x0021488C): SmearNumSubStages 6 -> 0 (matches official PCSX2 March 2026 Steelmax patch)"
+        },
         {
           "vaddr": "0x0055014C",
           "expected_orig": "0x00000001",
           "patched": "0x00000000",
-          "note": "Disable primary blur flag"
-        },
-        {
-          "vaddr": "0x001FEDB8",
-          "expected_orig": "0x24020001",
-          "patched": "0x24020000",
-          "note": "MIPS: addiu v0, zero, 1 -> addiu v0, zero, 0"
-        },
-        {
-          "vaddr": "0x001FEDBC",
-          "expected_orig": "0x14620004",
-          "patched": "0x10620004",
-          "note": "MIPS: bne v1, v0, +4 -> beq v1, v0, +4"
-        },
-        {
-          "vaddr": "0x00550D28",
-          "expected_orig": "0x00000001",
-          "patched": "0x00000000",
-          "note": "Disable secondary speed/depth blur toggle"
+          "note": "eAttachSmear2 (0x002146CC): SmearEnable 1 -> 0 (skips smear DMA draw submission cleanly)"
         }
       ]
     },
     {
-      "id": "widescreen_16_9_aspect",
-      "name": "Widescreen 16:9 Projection Ratio (Static ELF Portion)",
-      "description": "Updates the static projection aspect ratio constant from 0.71f (4:3) to 0.75f (16:9). Pair with the runtime widescreen flag (0x00AAFDD4=1) via .pnach or in-game widescreen toggle.",
-      "author": "PeterDelta (verified on SLUS_213.51)",
+      "id": "widescreen_16_9_native",
+      "name": "True Native 16:9 Widescreen (Auto-Default ON + 0.75f Projection)",
+      "description": "Fixes NTSC 16:9 horizontal 3D projection from EA's overscanned 0.71f to exact 0.75f (3/4) and patches VideoSettings::Default() to default WideScreen = 1 (exact integer bool 1 so in-game Options toggle still works cleanly on standalone modded ISOs without .pnach).",
+      "category": "display",
+      "author": "PeterDelta / NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": true,
       "writes": [
         {
           "vaddr": "0x0054BA38",
           "expected_orig": "0x3F35C28F",
           "patched": "0x3F400000",
-          "note": "float 0.71f -> 0.75f projection correction"
+          "note": "MaybeChangeViewMode (0x00201578): NTSC 16:9 AspectRatio3dx 0.71f -> 0.75f (propagated via UpdateGifTags to TARGET_PLAYER1+0x60 at 0x00553430)"
+        },
+        {
+          "vaddr": "0x0026D9F4",
+          "expected_orig": "0x44810000",
+          "patched": "0xAC810000",
+          "note": "VideoSettings::Default (0x0026D9F0): mtc1 $at,$f0 -> sw $at,0x0($a0) (stores 1.0f directly via GPR $at)"
+        },
+        {
+          "vaddr": "0x0026D9F8",
+          "expected_orig": "0xAC80000C",
+          "patched": "0x24010001",
+          "note": "VideoSettings::Default: sw $zero,0xc($a0) -> li $at,1 (clean integer 1 for WideScreen flag)"
+        },
+        {
+          "vaddr": "0x0026D9FC",
+          "expected_orig": "0xE4800000",
+          "patched": "0xAC81000C",
+          "note": "VideoSettings::Default: swc1 $f0,0x0($a0) -> sw $at,0xc($a0) (defaults WideScreen ON while keeping menu xori 1 toggle intact)"
+        }
+      ]
+    },
+    {
+      "id": "high_lod_cars",
+      "name": "Force Highest Available Car & Wheel LOD",
+      "description": "Enables EA's built-in g_ForceCarBodyLOD and g_ForceCarTireLOD overrides in CarRenderInfo::Render, which are safely clamped via R5900 pmaxw/pminw to each vehicle's [mMinLodLevel, mMaxLodLevel] so racer/cop cars stay at LOD A at all distances and traffic cars safely use their highest mesh.",
+      "category": "graphics",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": true,
+      "writes": [
+        {
+          "vaddr": "0x0059FF28",
+          "expected_orig": "0xFFFFFFFF",
+          "patched": "0x00000000",
+          "note": "CarRenderInfo::Render (0x003EC7A4): g_ForceCarBodyLOD -1 -> 0 (LOD A, clamped to mMinLodLevel)"
+        },
+        {
+          "vaddr": "0x0059FF2C",
+          "expected_orig": "0xFFFFFFFF",
+          "patched": "0x00000000",
+          "note": "CarRenderInfo::Render (0x003EC7CC): g_ForceCarTireLOD -1 -> 0 (LOD A, clamped to mMinLodLevel)"
+        }
+      ]
+    },
+    {
+      "id": "full_rate_car_reflections",
+      "name": "Full-Rate 5-Face Real-Time Car Reflections",
+      "description": "Bypasses the PS2 5-frame round-robin cubemap throttle in IsFaceEnabled() so all 5 visible environment-map reflection faces update every single frame instead of staggered partial updates.",
+      "category": "graphics",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": true,
+      "writes": [
+        {
+          "vaddr": "0x0020F5B0",
+          "expected_orig": "0x10400034",
+          "patched": "0x10000034",
+          "note": "IsFaceEnabled (0x0020F598): beq $v0,$zero,0x20F684 -> b 0x20F684 (always uses full-face table 0x0054FE50 [1,1,0,1,1,1])"
+        }
+      ]
+    },
+    {
+      "id": "extended_scenery_draw_distance",
+      "name": "Extended Scenery Draw Distance & High-Detail World LOD",
+      "description": "Lowers ScenerySectionHeader::DrawAScenery projected-pixel cull cutoff from 18 px to 6 px (3x scenery visibility) and extends the high-detail world mesh LOD threshold from 8.7f to 3.0f (~2.9x further high-poly buildings and trees).",
+      "category": "graphics",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": true,
+      "writes": [
+        {
+          "vaddr": "0x003DB110",
+          "expected_orig": "0x2A020012",
+          "patched": "0x2A020006",
+          "note": "DrawAScenery (0x003DB110): slti $v0,$s0,0x12 (18 px cull) -> slti $v0,$s0,0x06 (6 px cull)"
+        },
+        {
+          "vaddr": "0x003DB178",
+          "expected_orig": "0x3C01410B",
+          "patched": "0x3C014040",
+          "note": "DrawAScenery (0x003DB178): high-LOD ratio threshold 8.7f -> 3.0f (upper 16 bits)"
+        },
+        {
+          "vaddr": "0x003DB17C",
+          "expected_orig": "0x34213333",
+          "patched": "0x34210000",
+          "note": "DrawAScenery (0x003DB17C): high-LOD ratio threshold 8.7f -> 3.0f (lower 16 bits)"
+        }
+      ]
+    },
+    {
+      "id": "disable_bloom",
+      "name": "Disable Bloom Post-Processing",
+      "description": "Skips the PS2 additive bloom pass inside IVisualTreatmentPlat::ApplyColorBloom for a razor-sharp, glare-free image at 4K.",
+      "category": "visual",
+      "author": "Steelmax (official PCSX2 March 2026, MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x00550D5C",
+          "expected_orig": "0x00000000",
+          "patched": "0x00000001",
+          "note": "ApplyColorBloom (0x002193A8): SkipBloomPass 0 -> 1"
+        }
+      ]
+    },
+    {
+      "id": "disable_all_post_processing",
+      "name": "Disable All Post-Processing (Master Visual Treatment Switch)",
+      "description": "Turns off IVisualTreatmentPlat::RenderMWVisualLook entirely, disabling sepia tint, bloom, detail map softening, and pulse brightness in one switch. Also eliminates any remaining upscaled post-effect offset.",
+      "category": "visual",
+      "author": "Steelmax (official PCSX2 March 2026, MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x00550D28",
+          "expected_orig": "0x00000001",
+          "patched": "0x00000000",
+          "note": "RenderMWVisualLook (0x0021A01C): master enable 1 -> 0"
+        }
+      ]
+    },
+    {
+      "id": "disable_radial_blur",
+      "name": "Disable High-Speed / Nitrous Radial Blur",
+      "description": "Early-returns IVisualTreatmentPlat::Radialblur so high-speed and NOS screen-edge radial blur never obscures peripheral visibility at 4K.",
+      "category": "visual",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x00219A68",
+          "expected_orig": "0x27BDFF10",
+          "patched": "0x03E00008",
+          "note": "IVisualTreatmentPlat::Radialblur (0x00219A68): addiu $sp,$sp,-0xf0 -> jr $ra"
+        },
+        {
+          "vaddr": "0x00219A6C",
+          "expected_orig": "0x3C013C23",
+          "patched": "0x00000000",
+          "note": "IVisualTreatmentPlat::Radialblur (0x00219A6C): lui $at,0x3c23 -> nop (delay slot)"
         }
       ]
     },
     {
       "id": "remove_brume_fog",
-      "name": "Remove Atmospheric Brume / Distance Haze",
-      "description": "Clears thick 2005 distance haze/brume for sharper horizon visibility at 4K. Optional: can make distant LOD pop-in more visible until Phase 3 draw-distance patches land.",
-      "author": "PeterDelta (verified on SLUS_213.51)",
+      "name": "Remove Atmospheric Brume / Fog Volume Pass",
+      "description": "Disables the atmospheric distance brume/haze volume overlay in eAttachFog for crystal-clear horizons at 4K.",
+      "category": "visual",
+      "author": "PeterDelta (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": false,
       "writes": [
         {
           "vaddr": "0x005500F0",
           "expected_orig": "0x00000001",
           "patched": "0x00000000",
-          "note": "Disable distance brume/haze flag"
+          "note": "eAttachFog (0x00211324): disable fog palette DMA upload & volume overlay"
+        }
+      ]
+    },
+    {
+      "id": "no_distant_fog",
+      "name": "No Distant Fog (FogModeInfos[0])",
+      "description": "Clears the FogModeInfos[0] mode byte (0x00550029) to remove distant horizon fog completely. Matches official PCSX2 March 2026 Steelmax [No Distant Fog].",
+      "category": "visual",
+      "author": "Steelmax (official PCSX2 March 2026, MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x00550028",
+          "expected_orig": "0x01000100",
+          "patched": "0x01000000",
+          "note": "FogModeInfos[0] (0x00550028): clears byte at 0x00550029 from 0x01 to 0x00 (4-byte aligned word)"
+        }
+      ]
+    },
+    {
+      "id": "disable_screen_raindrops",
+      "name": "Disable Camera Lens Raindrop Overlays",
+      "description": "Early-returns RainDrop() to disable low-res screen-space water droplets on the camera lens while preserving wet road reflections and rain ambience.",
+      "category": "visual",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x00211030",
+          "expected_orig": "0x27BDFF20",
+          "patched": "0x03E00008",
+          "note": "RainDrop (0x00211030): addiu $sp,$sp,-0xe0 -> jr $ra"
+        },
+        {
+          "vaddr": "0x00211034",
+          "expected_orig": "0x3C020055",
+          "patched": "0x00000000",
+          "note": "RainDrop (0x00211034): lui $v0,0x0055 -> nop (delay slot)"
+        }
+      ]
+    },
+    {
+      "id": "ultrawide_21_9_native",
+      "name": "Ultrawide 21:9 (64:27) Aspect Ratio + Widened Frustum Culling",
+      "description": "Alternative to widescreen_16_9_native: sets NTSC 16:9 horizontal 3D scale to 0.5625f (9/16 = exact 64:27 cinema ultrawide) and widens CreateViewMatricies frustum culling width (0.71f -> 0.90f) to eliminate left/right edge pop-in on 21:9 displays. Use via --only instead of widescreen_16_9_native.",
+      "category": "display",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "mutually_exclusive_with": [
+        "widescreen_16_9_native",
+        "wider_camera_fov_12pct_16_9"
+      ],
+      "writes": [
+        {
+          "vaddr": "0x0054BA38",
+          "expected_orig": "0x3F35C28F",
+          "patched": "0x3F100000",
+          "note": "MaybeChangeViewMode (0x00201578): AspectRatio3dx 0.71f -> 0.5625f (4:3 / 64:27 = 9/16)"
+        },
+        {
+          "vaddr": "0x0054E174",
+          "expected_orig": "0x3F35C28F",
+          "patched": "0x3F666666",
+          "note": "MaybeChangeViewMode -> CreateViewMatricies (0x00206938): frustum culling half-width factor 0.71f -> 0.90f to prevent 21:9 edge pop-in"
+        },
+        {
+          "vaddr": "0x0026D9F4",
+          "expected_orig": "0x44810000",
+          "patched": "0xAC810000",
+          "note": "VideoSettings::Default: sw $at,0x0($a0)"
+        },
+        {
+          "vaddr": "0x0026D9F8",
+          "expected_orig": "0xAC80000C",
+          "patched": "0x24010001",
+          "note": "VideoSettings::Default: li $at,1"
+        },
+        {
+          "vaddr": "0x0026D9FC",
+          "expected_orig": "0xE4800000",
+          "patched": "0xAC81000C",
+          "note": "VideoSettings::Default: sw $at,0xc($a0) (WideScreen = 1)"
+        }
+      ]
+    },
+    {
+      "id": "wider_camera_fov_12pct_16_9",
+      "name": "Wider 3D Camera FOV (+12% Symmetric on 16:9)",
+      "description": "Alternative to widescreen_16_9_native: scales both 3D X and Y projection factors down by 1.12x (0.75f -> 0.66964f, 1.10f -> 0.98214f) and widens frustum culling (0.71f -> 0.80f) for a wider modern racing FOV while keeping exact 16:9 aspect ratio and untouched 2D HUD.",
+      "category": "camera",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "mutually_exclusive_with": [
+        "widescreen_16_9_native",
+        "ultrawide_21_9_native"
+      ],
+      "writes": [
+        {
+          "vaddr": "0x0054BA38",
+          "expected_orig": "0x3F35C28F",
+          "patched": "0x3F2B6DB7",
+          "note": "NTSC 16:9 AspectRatio3dx: 0.71f -> 0.669643f (0.75 / 1.12)"
+        },
+        {
+          "vaddr": "0x0054BA3C",
+          "expected_orig": "0x3F8CCCCD",
+          "patched": "0x3F7B6DB7",
+          "note": "NTSC AspectRatio3dy: 1.10f -> 0.982143f (1.10 / 1.12)"
+        },
+        {
+          "vaddr": "0x0054E174",
+          "expected_orig": "0x3F35C28F",
+          "patched": "0x3F4CCCCD",
+          "note": "16:9 frustum culling width multiplier: 0.71f -> 0.80f"
+        },
+        {
+          "vaddr": "0x0026D9F4",
+          "expected_orig": "0x44810000",
+          "patched": "0xAC810000",
+          "note": "VideoSettings::Default: sw $at,0x0($a0)"
+        },
+        {
+          "vaddr": "0x0026D9F8",
+          "expected_orig": "0xAC80000C",
+          "patched": "0x24010001",
+          "note": "VideoSettings::Default: li $at,1"
+        },
+        {
+          "vaddr": "0x0026D9FC",
+          "expected_orig": "0xE4800000",
+          "patched": "0xAC81000C",
+          "note": "VideoSettings::Default: sw $at,0xc($a0) (WideScreen = 1)"
+        }
+      ]
+    },
+    {
+      "id": "disable_ai_catchup",
+      "name": "Disable AI Rubber-Banding / Catch-Up",
+      "description": "Forces GRaceParameters::GetCatchUp() to return 0, cleanly disabling AI catch-up rubber-banding in AIPerpVehicle::ComputeSkill and GRaceStatus::SyncronizeAdaptiveBonus.",
+      "category": "gameplay",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x002B5958",
+          "expected_orig": "0x27BDFFE0",
+          "patched": "0x03E00008",
+          "note": "GRaceParameters::GetCatchUp (0x002B5958): addiu $sp,$sp,-0x20 -> jr $ra"
+        },
+        {
+          "vaddr": "0x002B595C",
+          "expected_orig": "0xFFB00000",
+          "patched": "0x0000102D",
+          "note": "GRaceParameters::GetCatchUp (0x002B595C): sd $s0,0x0($sp) -> move $v0,$zero (return false)"
+        }
+      ]
+    },
+    {
+      "id": "skip_intro_movies",
+      "name": "Skip Intro / FMV Movies",
+      "description": "Sets the engine's built-in SkipMovies flag (0x00574660 = 1) checked by MoviePlayer::Play and FEngMovieStarter::Callback so FMVs immediately emit MOVIE_DONE and boot straight to the main menu.",
+      "category": "qol",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x00574660",
+          "expected_orig": "0x00000000",
+          "patched": "0x00000001",
+          "note": "MoviePlayer::Play (0x00245814) & FEngMovieStarter::Callback (0x002423D0): SkipMovies 0 -> 1"
+        }
+      ]
+    },
+    {
+      "id": "unlock_all_cars_and_parts",
+      "name": "Unlock All Cars, Tracks & Parts (Sandbox / Quick Race)",
+      "description": "Enables the engine's built-in UnlockAllThings flag (0x00574624 = 1) checked by QuickRaceUnlocker, CareerUnlocker, UnlockSystem, and GRaceParameters::GetIsAvailable.",
+      "category": "gameplay",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x00574624",
+          "expected_orig": "0x00000000",
+          "patched": "0x00000001",
+          "note": "UnlockAllThings (18 unlocker xrefs): 0 -> 1"
+        }
+      ]
+    },
+    {
+      "id": "screen_efx_60fps_timing",
+      "name": "60 FPS Companion: Fix ScreenEFX 30Hz Timestep",
+      "description": "SLUS_213.51 already runs physics/Scheduler at native 60 Hz with no 30 FPS cap enabled (0x0054B5D8=0); PCSX2 EE Overclock (180%-300%) unlocks true 60 FPS natively. This patch fixes the one hardcoded 1/30f (0x3D088889) timestep inside UpdateAllScreenEFX() to 1/60f (0x3C888889) so screen particle/weather effects run at true 1x speed at 60 FPS.",
+      "category": "performance",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x003DE778",
+          "expected_orig": "0x3C013D08",
+          "patched": "0x3C013C88",
+          "note": "UpdateAllScreenEFX (0x003DE778): lui $at,0x3d08 (1/30f = 0x3D088889) -> lui $at,0x3c88 (1/60f = 0x3C888889)"
+        }
+      ]
+    },
+    {
+      "id": "lock_30fps_frame_pacing",
+      "name": "Lock 30 FPS Frame Pacing (Smooth 30Hz Cap)",
+      "description": "Activates EA's hidden built-in 2-VBlank frame limiter in eDisplayFrame (0x0020DA9C, default 0) for perfectly even 30 FPS pacing during gameplay on hardware that cannot hold locked 60 FPS.",
+      "category": "performance",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x0054B5D8",
+          "expected_orig": "0x00000000",
+          "patched": "0x00000001",
+          "note": "eDisplayFrame (0x0020DA9C): enables while(VBlank - LastSwap < 2) WaitUntilVSync() during GAMEFLOW_STATE_RACING"
         }
       ]
     }

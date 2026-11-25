@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "id": "modern_camera",
+  "name": "Rockport 2026 Modern Widescreen Camera Pack",
+  "description": "Refined 16:9 chase (close/far), hood, and bumper camera FOV, height, lag, and stiffness tuning for NFSMW Black Edition (PS2 SLUS-21351). Every expected_orig and expected_offset is verified against untouched GLOBAL\\ATTRIBUTES.BIN.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+    "vault": "db"
+  },
+  "patches": [
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "STIFFNESS",
+      "index": 0,
+      "expected_offset": "0x0002cd00",
+      "expected_orig": 0.5,
+      "new_value": 0.62,
+      "note": "More planted low-speed chase camera tracking"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "STIFFNESS",
+      "index": 1,
+      "expected_offset": "0x0002cd04",
+      "expected_orig": 0.5,
+      "new_value": 0.68,
+      "note": "Tighter high-speed chase camera stability"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "LAG",
+      "index": 0,
+      "expected_offset": "0x0002cd20",
+      "expected_orig": -4.7,
+      "new_value": -5.05,
+      "note": "Slightly pulled-back resting close chase framing for 16:9"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "LAG",
+      "index": 1,
+      "expected_offset": "0x0002cd24",
+      "expected_orig": -6.8,
+      "new_value": -7.1,
+      "note": "Smooth top-speed pullback distance"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "FOV",
+      "index": 0,
+      "expected_offset": "0x0002cd30",
+      "expected_orig": 78.0,
+      "new_value": 84.0,
+      "note": "Wider base close-chase FOV for 16:9 widescreen displays"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "FOV",
+      "index": 1,
+      "expected_offset": "0x0002cd34",
+      "expected_orig": 78.0,
+      "new_value": 92.0,
+      "note": "Dynamic high-speed FOV stretch for modern sense of speed"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "HEIGHT",
+      "index": 0,
+      "expected_offset": "0x0002cd40",
+      "expected_orig": 1.62,
+      "new_value": 1.48,
+      "note": "Lower modern motorsport chase camera elevation"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "HEIGHT",
+      "index": 1,
+      "expected_offset": "0x0002cd44",
+      "expected_orig": 1.7,
+      "new_value": 1.56,
+      "note": "Lower high-speed chase camera elevation"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "STIFFNESS",
+      "index": 0,
+      "expected_offset": "0x0002ce08",
+      "expected_orig": 0.5,
+      "new_value": 0.6,
+      "note": "More responsive far-chase low-speed tracking"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "STIFFNESS",
+      "index": 1,
+      "expected_offset": "0x0002ce0c",
+      "expected_orig": 0.5,
+      "new_value": 0.66,
+      "note": "Tighter far-chase high-speed tracking"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "FOV",
+      "index": 0,
+      "expected_offset": "0x0002ce38",
+      "expected_orig": 90.0,
+      "new_value": 92.0,
+      "note": "Subtle far-chase base FOV refinement"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "FOV",
+      "index": 1,
+      "expected_offset": "0x0002ce3c",
+      "expected_orig": 90.0,
+      "new_value": 98.0,
+      "note": "Dynamic high-speed FOV stretch in far chase view"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "HEIGHT",
+      "index": 0,
+      "expected_offset": "0x0002ce48",
+      "expected_orig": 1.7,
+      "new_value": 1.58,
+      "note": "Sleeker far-chase camera height"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "HEIGHT",
+      "index": 1,
+      "expected_offset": "0x0002ce4c",
+      "expected_orig": 1.85,
+      "new_value": 1.72,
+      "note": "Sleeker high-speed far-chase camera height"
+    },
+    {
+      "class": "camerainfo",
+      "node": "hood",
+      "field": "FOV",
+      "index": 0,
+      "expected_offset": "0x0002cfc4",
+      "expected_orig": 80.0,
+      "new_value": 86.0,
+      "note": "Wider hood-cam base FOV for 16:9 peripheral awareness"
+    },
+    {
+      "class": "camerainfo",
+      "node": "hood",
+      "field": "FOV",
+      "index": 1,
+      "expected_offset": "0x0002cfc8",
+      "expected_orig": 90.0,
+      "new_value": 96.0,
+      "note": "Wider hood-cam top-speed FOV"
+    },
+    {
+      "class": "camerainfo",
+      "node": "bumper",
+      "field": "FOV",
+      "index": 0,
+      "expected_offset": "0x0002ccac",
+      "expected_orig": 83.0,
+      "new_value": 88.0,
+      "note": "Wider bumper-cam base FOV for high-speed corner visibility"
+    },
+    {
+      "class": "camerainfo",
+      "node": "bumper",
+      "field": "FOV",
+      "index": 1,
+      "expected_offset": "0x0002ccb0",
+      "expected_orig": 90.0,
+      "new_value": 96.0,
+      "note": "Wider bumper-cam top-speed FOV"
+    }
+  ]
+}

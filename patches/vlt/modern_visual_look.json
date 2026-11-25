@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "id": "modern_visual_look",
+  "name": "Rockport 2026 Clean Neutral Visual Treatment (VLT)",
+  "description": "Rebalances PS2 NFSMW's visuallook color grading inside GLOBAL\\ATTRIBUTES.BIN: neutralizes the heavy 2005 amber/yellow ColourBloomTint ([0.87, 0.68, 0.04, 1.0]), reduces harsh shadow-crushing BlackBloomIntensity, and restores vivid natural color saturation for 4K displays. Verified against untouched SLUS-21351 GLOBAL\\ATTRIBUTES.BIN.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+    "vault": "db"
+  },
+  "patches": [
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x000457b0",
+      "expected_orig": [0.87, 0.68, 0.04, 1.0],
+      "new_value": [0.96, 0.94, 0.9, 1.0],
+      "note": "Replace heavy yellow-amber midday bloom tint with clean warm-white daylight"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x000457c0",
+      "expected_orig": 0.32,
+      "new_value": 0.18,
+      "note": "Subtle controlled daylight highlight bloom"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "Desaturation",
+      "expected_offset": "0x000457c4",
+      "expected_orig": 0.25,
+      "new_value": 0.06,
+      "note": "Restore crisp natural paint and sky saturation"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x000457cc",
+      "expected_orig": 0.38,
+      "new_value": 0.14,
+      "note": "Prevent shadow crushing on modern high-contrast displays"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x000456d0",
+      "expected_orig": [1.0, 0.44, 0.05, 1.0],
+      "new_value": [1.0, 0.72, 0.46, 1.0],
+      "note": "Natural golden-hour sunset bloom instead of clipped orange"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x000456e0",
+      "expected_orig": 0.3,
+      "new_value": 0.2,
+      "note": "Controlled sunset bloom intensity"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "Desaturation",
+      "expected_offset": "0x000456e4",
+      "expected_orig": 0.25,
+      "new_value": 0.08,
+      "note": "Vibrant sunset sky and car reflections"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x000456ec",
+      "expected_orig": 0.34,
+      "new_value": 0.16,
+      "note": "Clean sunset shadow detail"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x00045520",
+      "expected_orig": 0.47,
+      "new_value": 0.24,
+      "note": "Cleaner overdrive/high-heat cool-blue bloom"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "Desaturation",
+      "expected_offset": "0x00045524",
+      "expected_orig": 0.25,
+      "new_value": 0.1,
+      "note": "Cleaner overdrive color preservation"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x0004552c",
+      "expected_orig": 0.34,
+      "new_value": 0.16,
+      "note": "Preserve shadow clarity during intense pursuits"
+    }
+  ]
+}

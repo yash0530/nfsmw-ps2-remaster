@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "id": "modern_handling_tuning",
+  "name": "Rockport 2026 Modern Handling, Steering & NOS Tuning",
+  "description": "Modernizes analog steering linearity, global NOS punch & recharge pacing, and grip/yaw responsiveness on flagship NFSMW vehicles (BMW M3 GTR E46, Carrera GT, Gallardo, Corvette C6, Ford GT, Cobalt SS) without breaking arcade balance. Verified against untouched SLUS-21351 GLOBAL\\ATTRIBUTES.BIN.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+    "vault": "db"
+  },
+  "patches": [
+    {
+      "class": "world",
+      "node": "default",
+      "field": "CONTROLLER_CURVE",
+      "expected_offset": "0x0007b13c",
+      "expected_orig": 1.25,
+      "new_value": 1.12,
+      "note": "More linear analog steering response with reduced center sluggishness"
+    },
+    {
+      "class": "nos",
+      "node": "nos_base",
+      "field": "TORQUE_BOOST",
+      "expected_offset": "0x00008244",
+      "expected_orig": 0.75,
+      "new_value": 0.88,
+      "note": "Snappier base NOS acceleration surge"
+    },
+    {
+      "class": "nos",
+      "node": "nos_base",
+      "field": "RECHARGE_MIN",
+      "expected_offset": "0x0000824c",
+      "expected_orig": 50.0,
+      "new_value": 42.0,
+      "note": "Faster low-speed NOS recharge time (seconds)"
+    },
+    {
+      "class": "nos",
+      "node": "nos_base",
+      "field": "RECHARGE_MAX",
+      "expected_offset": "0x00008254",
+      "expected_orig": 30.0,
+      "new_value": 24.0,
+      "note": "Faster high-speed NOS recharge time (seconds)"
+    },
+    {
+      "class": "nos",
+      "node": "nos_top",
+      "field": "TORQUE_BOOST",
+      "expected_offset": "0x00008284",
+      "expected_orig": 1.0,
+      "new_value": 1.15,
+      "note": "Punchier top-tier NOS surge"
+    },
+    {
+      "class": "nos",
+      "node": "nos_top",
+      "field": "RECHARGE_MIN",
+      "expected_offset": "0x0000828c",
+      "expected_orig": 50.0,
+      "new_value": 40.0,
+      "note": "Faster top-tier low-speed NOS recharge"
+    },
+    {
+      "class": "nos",
+      "node": "nos_top",
+      "field": "RECHARGE_MAX",
+      "expected_offset": "0x00008294",
+      "expected_orig": 30.0,
+      "new_value": 22.0,
+      "note": "Faster top-tier high-speed NOS recharge"
+    },
+    {
+      "class": "tires",
+      "node": "bmwm3gtre46",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022438",
+      "expected_orig": 1.175,
+      "new_value": 1.22,
+      "note": "BMW M3 GTR E46 sharper front bite"
+    },
+    {
+      "class": "tires",
+      "node": "bmwm3gtre46",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002243c",
+      "expected_orig": 1.225,
+      "new_value": 1.26,
+      "note": "BMW M3 GTR E46 planted rear exit traction"
+    },
+    {
+      "class": "tires",
+      "node": "bmwm3gtre46",
+      "field": "STEERING",
+      "expected_offset": "0x00022468",
+      "expected_orig": 0.9,
+      "new_value": 1.05,
+      "note": "BMW M3 GTR E46 crisp modern turn-in response"
+    },
+    {
+      "class": "tires",
+      "node": "bmwm3gtre46",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002246c",
+      "expected_orig": 0.25,
+      "new_value": 0.34,
+      "note": "BMW M3 GTR E46 faster yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "bmwm3gtre46",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000246dc",
+      "expected_orig": 475.0,
+      "new_value": 540.0,
+      "note": "BMW M3 GTR E46 stronger front braking force"
+    },
+    {
+      "class": "brakes",
+      "node": "bmwm3gtre46",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000246e0",
+      "expected_orig": 600.0,
+      "new_value": 640.0,
+      "note": "BMW M3 GTR E46 stronger rear braking force"
+    },
+    {
+      "class": "tires",
+      "node": "m3gtre46careerstart",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00023c7c",
+      "expected_orig": 0.26,
+      "new_value": 0.34,
+      "note": "Prologue BMW M3 GTR E46 snappier yaw transition"
+    },
+    {
+      "class": "tires",
+      "node": "gallardo",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022708",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Lamborghini Gallardo enhanced AWD front grip"
+    },
+    {
+      "class": "tires",
+      "node": "gallardo",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002270c",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Lamborghini Gallardo enhanced AWD rear grip"
+    },
+    {
+      "class": "tires",
+      "node": "carreragt",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000222f8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Porsche Carrera GT refined front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "carreragt",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000222fc",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Porsche Carrera GT more composed rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "corvette",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000225c8",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Corvette C6 improved front grip"
+    },
+    {
+      "class": "tires",
+      "node": "corvette",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000225cc",
+      "expected_orig": 1.0,
+      "new_value": 1.09,
+      "note": "Corvette C6 reduced low-speed wheelspin"
+    },
+    {
+      "class": "tires",
+      "node": "corvette",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x000225fc",
+      "expected_orig": 0.3,
+      "new_value": 0.38,
+      "note": "Corvette C6 quicker steering transition"
+    },
+    {
+      "class": "tires",
+      "node": "fordgt",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00023158",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Ford GT sharper front turn-in"
+    },
+    {
+      "class": "tires",
+      "node": "fordgt",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002315c",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Ford GT planted high-speed rear stability"
+    },
+    {
+      "class": "tires",
+      "node": "cobaltss",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022d98",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Starter Cobalt SS crisper FWD front traction"
+    },
+    {
+      "class": "tires",
+      "node": "cobaltss",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022d9c",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Starter Cobalt SS balanced rear grip"
+    }
+  ]
+}
