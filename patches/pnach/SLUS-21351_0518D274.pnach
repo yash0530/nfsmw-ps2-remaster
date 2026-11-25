@@ -1,0 +1,30 @@
+gametitle=Need for Speed - Most Wanted [Black Edition] (NTSC-U) [SLUS-21351]
+comment=NFSMW: Rockport 2026 — Verified PCSX2 v2 Patch Suite for SLUS-21351 (CRC: 0518D274)
+
+// Every static ELF offset below has been verified directly against SLUS_213.51 (Black Edition v1.01).
+// Enable/disable individual sections inside PCSX2: Game Properties -> Patches.
+
+[Widescreen 16:9]
+gsaspectratio=16:9
+author=PeterDelta (ported & verified for SLUS-21351)
+description=Enables native 16:9 widescreen mode and corrects horizontal projection aspect ratio (0.71f -> 0.75f).
+patch=1,EE,00AAFDD4,word,00000001
+patch=1,EE,0054BA38,word,3F400000
+
+[Remove Brown Filter]
+author=fobes
+description=Disables the 2005 brownish-yellow visual treatment post-processing pass for clean, vibrant colors.
+patch=1,EE,00550D58,word,00000001
+
+[Remove Motion Blur]
+author=PeterDelta (ported & verified for SLUS-21351)
+description=Eliminates low-res PS2 accumulation motion blur that causes heavy ghosting/smearing at 4K internal resolution.
+patch=0,EE,0055014C,word,00000000
+patch=0,EE,001FEDB8,word,24020000
+patch=0,EE,001FEDBC,word,10620004
+patch=0,EE,00550D28,word,00000000
+
+[Remove Distance Brume (Optional)]
+author=PeterDelta (ported & verified for SLUS-21351)
+description=Disables atmospheric distance brume/haze for crisp horizons. Toggle off if you prefer softer distant LOD transitions.
+patch=0,EE,005500F0,word,00000000

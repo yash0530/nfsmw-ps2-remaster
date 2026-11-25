@@ -1,0 +1,53 @@
+# ==============================================================================
+# NFSMW: Rockport 2026 — Optional Local AI Upscaling Dependencies (Apple Silicon)
+# ==============================================================================
+#
+# NOTE:
+#   - tools/fetch_cc0_assets.py uses Python 3 stdlib ONLY (no venv required).
+#   - tools/texture_pipeline.py subcommands `audit`, `encode-dds`, and
+#     `render-hud-demo` require ONLY Pillow (`pillow`).
+#   - Install this file ONLY into an isolated local virtualenv when running
+#     `tools/texture_pipeline.py upscale` on Apple Silicon (M1–M5 macOS).
+#
+# Recommended setup (Python 3.12 via uv or Homebrew Python):
+#   uv venv --python 3.12 .venv-textures
+#   source .venv-textures/bin/activate
+#   pip install -r tools/requirements-textures.txt
+#
+# Apple Silicon MPS Runtime Note:
+#   Always run with `PYTORCH_ENABLE_MPS_FALLBACK=1` (also set automatically by
+#   `texture_pipeline.py upscale` before importing torch). Some attention/window
+#   ops in transformer upscalers (DAT2, SwinIR) transparently fall back to CPU
+#   while convolutions and matrix multiplications stay Metal/MPS-accelerated.
+#
+# Recommended OpenModelDB CC0 / Permissively Licensed Models (place in `models/`):
+#   1. 4x-PBRify_UpscalerDAT2  (CC0 1.0 — sharp PBR-aware detail preservation
+#      for asphalt, highway concrete, urban brick, and car body textures)
+#      https://openmodeldb.info/models/4x-PBRify-UpscalerDAT2
+#   2. 4x-NMKD-Siax            (CC0 / permissive — clean, low-artifact 4x
+#      upscaler suited for older PS2 diffuse textures, decals, and signage)
+#      https://openmodeldb.info/models/4x-NMKD-Siax-200k
+#
+# Legal Compliance:
+#   AI-upscaled derivatives of copyrighted EA PS2 textures MUST remain strictly
+#   local (`build/`, `dumps/`, `upscaled/`, `replacements/`, `models/`, `*.dds`,
+#   `*.pth` are all gitignored). Never commit game dumps or upscaled outputs.
+# ==============================================================================
+
+# Apple Silicon Metal (MPS) inference backend
+torch>=2.3.0,<3.0.0
+
+# Universal PyTorch super-resolution model loader (DAT2, ESRGAN, SwinIR, SPAN, etc.)
+spandrel>=0.3.4,<1.0.0
+
+# Image I/O, Power-of-Two normalization, and procedural 4K/2K HUD rendering
+pillow>=10.3.0,<12.0.0
+
+# Fast tensor/image array conversion and pure-NumPy alpha-bleed fallback
+numpy>=1.26.0,<3.0.0
+
+# Exact Euclidean nearest-opaque RGB Voronoi alpha-bleed dilation (distance_transform_edt)
+scipy>=1.13.0,<2.0.0
+
+# Clean batch progress bars during multi-thousand-texture upscaling runs
+tqdm>=4.66.0,<5.0.0

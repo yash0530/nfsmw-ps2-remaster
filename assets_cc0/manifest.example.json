@@ -1,0 +1,275 @@
+{
+  "schema_version": "1.0",
+  "project": "NFSMW: Rockport 2026",
+  "pcsx2_serial": "SLUS-21351",
+  "license_policy": "CC0-1.0",
+  "notes": [
+    "Curated starter manifest mapping Rockport 2026 remaster material slots to verified CC0 1.0 assets on Poly Haven and ambientCG.",
+    "Populate pcsx2_hash_mappings with exact <TexHash> / <ClutHash> pairs discovered via `python3 tools/texture_pipeline.py audit`.",
+    "Preview resolved URLs and sizes safely with: `python3 tools/fetch_cc0_assets.py fetch --manifest assets_cc0/manifest.example.json --out build/cc0_raw --dry-run`."
+  ],
+  "assets": [
+    {
+      "slot": "road_asphalt_dry",
+      "description": "Primary Rockport dry city & highway asphalt diffuse base (for tiling road strips and intersections).",
+      "source": "polyhaven",
+      "asset_id": "asphalt_02",
+      "asset_type": "texture",
+      "category": "asphalt",
+      "resolution": "2k",
+      "format": "png",
+      "maps": [
+        "Diffuse"
+      ],
+      "target_pot_resolution": [
+        2048,
+        2048
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_ROAD_ASPHALT_DRY_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Rosewood / Downtown primary road surface",
+          "notes": "Populate after PCSX2 dump audit."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    },
+    {
+      "slot": "road_asphalt_wet",
+      "description": "Dark damp/wet road surface material for reflective-look Rockport damp zones and shaded underpasses.",
+      "source": "ambientcg",
+      "asset_id": "Asphalt025C",
+      "asset_type": "material",
+      "category": "asphalt",
+      "resolution": "2k",
+      "format": "png",
+      "maps": [
+        "Color"
+      ],
+      "target_pot_resolution": [
+        2048,
+        2048
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_ROAD_ASPHALT_WET_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Camden Beach / coastal damp asphalt",
+          "notes": "Extract *_Color.png from downloaded ambientCG zip and bake subtle AO before BC7 compile."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    },
+    {
+      "slot": "highway_concrete",
+      "description": "Weathered highway concrete for Route 99 overpasses, Jersey barriers, tunnel walls, and bridge piers.",
+      "source": "polyhaven",
+      "asset_id": "concrete_wall_004",
+      "asset_type": "texture",
+      "category": "concrete",
+      "resolution": "2k",
+      "format": "png",
+      "maps": [
+        "Diffuse"
+      ],
+      "target_pot_resolution": [
+        2048,
+        2048
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_HIGHWAY_CONCRETE_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Highway 99 barriers & bridge structures",
+          "notes": "Populate after PCSX2 dump audit."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    },
+    {
+      "slot": "car_carbon_fiber",
+      "description": "Tight dark carbon-fiber weave pattern for aftermarket hoods, spoilers, roof scoops, and interior trim.",
+      "source": "ambientcg",
+      "asset_id": "Fabric004",
+      "asset_type": "material",
+      "category": "carbon",
+      "resolution": "1k",
+      "format": "png",
+      "maps": [
+        "Color"
+      ],
+      "target_pot_resolution": [
+        1024,
+        1024
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_CAR_CARBON_WEAVE_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Global vehicle carbon fiber tile",
+          "notes": "Verify tiling scale matches original PS2 UV repeat on hood/wing parts."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    },
+    {
+      "slot": "skybox_golden_hour",
+      "description": "Crisp golden-hour PureSky HDRI for modernized Rockport late-afternoon sky dome (tone-mapped to sRGB PNG/DDS).",
+      "source": "polyhaven",
+      "asset_id": "evening_road_01_puresky",
+      "asset_type": "hdri",
+      "category": "sunrise-sunset",
+      "resolution": "4k",
+      "format": "hdr",
+      "maps": [
+        "hdri"
+      ],
+      "target_pot_resolution": [
+        4096,
+        2048
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_SKYBOX_GOLDEN_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Rockport afternoon/golden-hour sky dome",
+          "notes": "Tone-map equirectangular HDR to PS2 sky hemisphere UV projection before DDS encode."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    },
+    {
+      "slot": "skybox_overcast",
+      "description": "Neutral overcast PureSky HDRI for clean modern daylight profile (pairs with brown-filter-off pnach).",
+      "source": "polyhaven",
+      "asset_id": "kloofendal_overcast_puresky",
+      "asset_type": "hdri",
+      "category": "overcast",
+      "resolution": "4k",
+      "format": "hdr",
+      "maps": [
+        "hdri"
+      ],
+      "target_pot_resolution": [
+        4096,
+        2048
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_SKYBOX_OVERCAST_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Rockport neutral overcast sky dome",
+          "notes": "Tone-map equirectangular HDR to PS2 sky hemisphere UV projection before DDS encode."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    },
+    {
+      "slot": "urban_brick",
+      "description": "Classic red-brown urban brick masonry for Rosewood campus, downtown warehouses, and Point Camden alleys.",
+      "source": "polyhaven",
+      "asset_id": "red_brick_03",
+      "asset_type": "texture",
+      "category": "brick",
+      "resolution": "2k",
+      "format": "png",
+      "maps": [
+        "Diffuse"
+      ],
+      "target_pot_resolution": [
+        2048,
+        2048
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_URBAN_BRICK_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Downtown Rockport & Rosewood masonry facades",
+          "notes": "Populate after PCSX2 dump audit."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    },
+    {
+      "slot": "foliage_autumn_leaves",
+      "description": "Iconic Rockport fallen autumn leaves ground cover for Rosewood parkways and shoulder verges.",
+      "source": "ambientcg",
+      "asset_id": "ScatteredLeaves008",
+      "asset_type": "material",
+      "category": "foliage",
+      "resolution": "2k",
+      "format": "png",
+      "maps": [
+        "Color"
+      ],
+      "target_pot_resolution": [
+        2048,
+        2048
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_FOLIAGE_GROUND_LEAVES_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Rosewood roadside autumn foliage",
+          "notes": "Populate after PCSX2 dump audit."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    },
+    {
+      "slot": "foliage_canopy_card",
+      "description": "High-resolution alpha-masked leaf texture source for roadside tree canopy cards (requires RGB alpha-bleed dilation).",
+      "source": "ambientcg",
+      "asset_id": "Leaf001",
+      "asset_type": "material",
+      "category": "foliage",
+      "resolution": "1k",
+      "format": "png",
+      "maps": [
+        "Color",
+        "Opacity"
+      ],
+      "target_pot_resolution": [
+        1024,
+        1024
+      ],
+      "dds_format": "BC7_UNORM",
+      "pcsx2_hash_mappings": [
+        {
+          "tex_hash": "TBD_FOLIAGE_TREE_CARD_TEX",
+          "clut_hash": "TBD_CLUT",
+          "region": "Tree canopy alpha-cutout billboard cards",
+          "notes": "Always run through `texture_pipeline.py encode-dds` with RGB alpha-bleed enabled to eliminate dark mipmap fringes."
+        }
+      ],
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sha256": null
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "target": {
+    "game": "Need for Speed: Most Wanted - Black Edition (NTSC-U)",
+    "serial": "SLUS-21351",
+    "elf_name": "SLUS_213.51",
+    "elf_size": 4918740,
+    "elf_pcsx2_crc": "0518D274",
+    "pt_load_vaddr": "0x00100000",
+    "pt_load_file_offset": "0x00001000"
+  },
+  "patches": [
+    {
+      "id": "remove_brown_filter",
+      "name": "Remove 2005 Brown/Yellow Visual Treatment",
+      "description": "Disables the heavy sepia/brown-yellow post-processing filter for clean, modern natural colors.",
+      "author": "fobes (verified on SLUS_213.51)",
+      "enabled_by_default": true,
+      "writes": [
+        {
+          "vaddr": "0x00550D58",
+          "expected_orig": "0x00000000",
+          "patched": "0x00000001",
+          "note": "Disable brownish-yellow visual treatment post-processing flag"
+        }
+      ]
+    },
+    {
+      "id": "remove_motion_blur",
+      "name": "Remove Smeared PS2 Motion Blur",
+      "description": "Disables the low-res PS2 accumulation motion blur that smears and ghosts at 4K internal resolution.",
+      "author": "PeterDelta (verified on SLUS_213.51)",
+      "enabled_by_default": true,
+      "writes": [
+        {
+          "vaddr": "0x0055014C",
+          "expected_orig": "0x00000001",
+          "patched": "0x00000000",
+          "note": "Disable primary blur flag"
+        },
+        {
+          "vaddr": "0x001FEDB8",
+          "expected_orig": "0x24020001",
+          "patched": "0x24020000",
+          "note": "MIPS: addiu v0, zero, 1 -> addiu v0, zero, 0"
+        },
+        {
+          "vaddr": "0x001FEDBC",
+          "expected_orig": "0x14620004",
+          "patched": "0x10620004",
+          "note": "MIPS: bne v1, v0, +4 -> beq v1, v0, +4"
+        },
+        {
+          "vaddr": "0x00550D28",
+          "expected_orig": "0x00000001",
+          "patched": "0x00000000",
+          "note": "Disable secondary speed/depth blur toggle"
+        }
+      ]
+    },
+    {
+      "id": "widescreen_16_9_aspect",
+      "name": "Widescreen 16:9 Projection Ratio (Static ELF Portion)",
+      "description": "Updates the static projection aspect ratio constant from 0.71f (4:3) to 0.75f (16:9). Pair with the runtime widescreen flag (0x00AAFDD4=1) via .pnach or in-game widescreen toggle.",
+      "author": "PeterDelta (verified on SLUS_213.51)",
+      "enabled_by_default": true,
+      "writes": [
+        {
+          "vaddr": "0x0054BA38",
+          "expected_orig": "0x3F35C28F",
+          "patched": "0x3F400000",
+          "note": "float 0.71f -> 0.75f projection correction"
+        }
+      ]
+    },
+    {
+      "id": "remove_brume_fog",
+      "name": "Remove Atmospheric Brume / Distance Haze",
+      "description": "Clears thick 2005 distance haze/brume for sharper horizon visibility at 4K. Optional: can make distant LOD pop-in more visible until Phase 3 draw-distance patches land.",
+      "author": "PeterDelta (verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x005500F0",
+          "expected_orig": "0x00000001",
+          "patched": "0x00000000",
+          "note": "Disable distance brume/haze flag"
+        }
+      ]
+    }
+  ]
+}

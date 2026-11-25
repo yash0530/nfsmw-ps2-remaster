@@ -1,0 +1,72 @@
+# ==============================================================================
+# NFSMW: Rockport 2026 — Legal & Build Artifact Ignore Rules
+# NEVER commit copyrighted EA/Sony binaries, game ISOs, extracted game archives,
+# or derivative AI-upscaled copyrighted textures to this public repository!
+# ==============================================================================
+
+# PlayStation 2 disc images & binary dumps
+*.iso
+*.ISO
+*.bin
+*.BIN
+*.bun
+*.BUN
+*.img
+*.IMG
+*.chd
+*.CHD
+*.elf
+*.ELF
+*.irx
+*.IRX
+*.tpk
+*.TPK
+*.abk
+*.ABK
+*.gin
+*.GIN
+*.vp6
+*.VP6
+*.mpf
+*.MPF
+*.mus
+*.MUS
+*.lzc
+*.LZC
+*.viv
+*.VIV
+*.big
+*.BIG
+*.tm2
+*.TM2
+*.xdelta
+*.vcdiff
+
+# Local build, extraction, texture dump, & upscale working directories
+build/
+extracted/
+dumps/
+replacements/
+upscaled/
+models/
+cc0_cache/
+tmp/
+*.dds
+*.DDS
+*.pth
+*.safetensors
+*.onnx
+
+# Python / macOS / IDE artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.DS_Store
+.AppleDouble
+.LSOverride
+*.swp
+*.swo
+.vscode/
+.idea/
