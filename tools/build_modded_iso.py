@@ -535,6 +535,86 @@ def stage_vlt_recipes(
     return staged_overrides
 
 
+def stage_lighting_recipes(
+    src_iso: Path,
+    lighting_recipes: List,
+    repo_root: Path,
+    staging_dir: Path,
+    existing_memfile: Optional[Path] = None,
+) -> Dict[str, Path]:
+    """Run declarative lighting recipes via `tools/lighting_ps2.py patch` into `staging_dir`.
+
+    When `existing_memfile` is provided (for example from `stage_vlt_recipes()`), passes it via
+    `--in-memfile` so `GLOBAL\\GLOBALMEMORYFILE.BIN` preserves Entry [1] (`GLOBAL\\ATTRIBUTES.BIN`)
+    while updating Entry [2] (`GLOBAL\\GLOBALB.LZC`).
+    """
+    if not lighting_recipes:
+        return {}
+
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    lighting_tool = repo_root / "tools" / "lighting_ps2.py"
+
+    recipe_paths: List[Path] = []
+    for item in lighting_recipes:
+        if isinstance(item, str):
+            recipe_rel = Path(item)
+            is_optional = False
+        elif isinstance(item, dict):
+            recipe_rel = Path(item["recipe"])
+            is_optional = bool(item.get("optional", False))
+        else:
+            raise ValueError(f"Unsupported lighting_recipes item: {item!r}")
+
+        recipe_path = recipe_rel if recipe_rel.is_absolute() else (repo_root / recipe_rel)
+        if not recipe_path.is_file():
+            if is_optional:
+                print(f"      [Lighting] Skipping optional missing recipe: {recipe_rel}")
+                continue
+            raise FileNotFoundError(f"Required lighting recipe not found: {recipe_path}")
+        recipe_paths.append(recipe_path)
+
+    if not recipe_paths:
+        return {}
+
+    out_lzc = staging_dir / "lighting_GLOBALB.LZC"
+    out_bun = staging_dir / "lighting_GLOBALB.BUN"
+    out_memfile = staging_dir / "lighting_GLOBALMEMORYFILE.BIN"
+
+    cmd = [
+        sys.executable,
+        str(lighting_tool),
+        "patch",
+        "--iso",
+        str(src_iso),
+        "--out-globalb",
+        str(out_lzc),
+        "--out-bun",
+        str(out_bun),
+        "--memfile-out",
+        str(out_memfile),
+    ]
+    if existing_memfile is not None and existing_memfile.is_file():
+        cmd.extend(["--in-memfile", str(existing_memfile)])
+    for rp in recipe_paths:
+        cmd.extend(["--recipe", str(rp)])
+
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"Lighting patch failed for recipes {[str(p) for p in recipe_paths]}:\n"
+            f"{res.stderr or res.stdout}"
+        )
+
+    staged_overrides: Dict[str, Path] = {
+        r"GLOBAL\GLOBALB.LZC": out_lzc,
+    }
+    if out_bun.is_file():
+        staged_overrides[r"GLOBAL\GLOBALB.BUN"] = out_bun
+    if out_memfile.is_file():
+        staged_overrides[r"GLOBAL\GLOBALMEMORYFILE.BIN"] = out_memfile
+    return staged_overrides
+
+
 def emit_companion_pnach(new_crc: str, out_path: Path, applied_ids: List[str]) -> None:
     """Emit a PCSX2 v2 .pnach matching the modded ISO's new ELF CRC for runtime/optional flags."""
     baked_str = ", ".join(applied_ids) if applied_ids else "none (stock ELF preserved)"
@@ -724,12 +804,22 @@ def main() -> int:
     profile_label = f" | profile={profile.get('profile_id', profile_path.name)}" if profile else ""
     print(f"[2/6] Verified clean source ISO: {expected_elf} (CRC {orig_crc}, {vol_sectors:,} sectors){profile_label}")
 
-    # Stage optional VLT recipes from profile (read-only from source ISO into build staging dir)
+    # Stage optional VLT & lighting recipes from profile (read-only from source ISO into build staging dir)
     overrides: Dict[str, Path] = {}
     if profile and profile.get("vlt_recipes"):
         staging_dir = dst.parent / ".vlt_staging"
         staged = stage_vlt_recipes(src, profile["vlt_recipes"], repo_root, staging_dir)
         overrides.update(staged)
+    if profile and profile.get("lighting_recipes"):
+        staging_dir = dst.parent / ".lighting_staging"
+        staged_light = stage_lighting_recipes(
+            src,
+            profile["lighting_recipes"],
+            repo_root,
+            staging_dir,
+            existing_memfile=overrides.get(r"GLOBAL\GLOBALMEMORYFILE.BIN"),
+        )
+        overrides.update(staged_light)
 
     # Load profile zz_overrides
     if profile and profile.get("zz_overrides"):

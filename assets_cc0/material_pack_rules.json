@@ -1,0 +1,296 @@
+{
+  "schema_version": "1.0",
+  "project": "NFSMW: Rockport 2026",
+  "license_policy": "CC0-1.0 / generated-procedural-assets",
+  "default_theme": "motorsport2026",
+  "available_themes": [
+    "motorsport2026",
+    "rockport_neon"
+  ],
+  "matching_defaults": {
+    "min_score": 0.72,
+    "max_dhash_hamming": 18,
+    "weights": {
+      "dhash": 0.45,
+      "phash": 0.35,
+      "color_hist": 0.2
+    }
+  },
+  "rules": [
+    {
+      "id": "hud_player_arrow",
+      "priority": 100,
+      "category": "hud_radar",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_player_arrow.png",
+      "name_patterns": [
+        "*RADAR_DIRECTIONARROW*",
+        "*PLAYER_ARROW*",
+        "*MINIMAP_PLAYER*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Player directional arrow in HUD minimap."
+    },
+    {
+      "id": "hud_minimap_frame",
+      "priority": 95,
+      "category": "hud_radar",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_minimap_frame.png",
+      "name_patterns": [
+        "*RADAR_BACKING*",
+        "*PDA_BACKING*",
+        "*RADAR_ICON*",
+        "*MINIMAP*FRAME*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "GPS radar frame and bezel backing."
+    },
+    {
+      "id": "hud_tach_needle",
+      "priority": 95,
+      "category": "hud_gauge",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_tach_needle.png",
+      "name_patterns": [
+        "*NEEDLE*",
+        "*TACH_NEEDLE*",
+        "*DRAG_TURBO_NEEDLE*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "High-contrast tachometer / turbo gauge needle."
+    },
+    {
+      "id": "hud_nos_arc",
+      "priority": 92,
+      "category": "hud_gauge",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_nos_arc.png",
+      "name_patterns": [
+        "*NOS*",
+        "*NITROUS*",
+        "*RADAR_LEDS*",
+        "*DRAG_TURBO_LINES*",
+        "*DRAG_TURBO_BACKING*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "Nitrous / boost LED bar arc."
+    },
+    {
+      "id": "hud_speedbreaker_arc",
+      "priority": 91,
+      "category": "hud_gauge",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_speedbreaker_arc.png",
+      "name_patterns": [
+        "*SPEEDBREAKER*",
+        "*REDLINE_COLOR*",
+        "*REDLINE_MASK*",
+        "*DRAG_REDLINE*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "Speedbreaker / redline gauge arc."
+    },
+    {
+      "id": "hud_tach_dial",
+      "priority": 90,
+      "category": "hud_gauge",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_tach_dial.png",
+      "name_patterns": [
+        "*METER_BACKING*",
+        "*DRAG_MAIN_METER*",
+        "*DRAG_SM_METER*",
+        "*DRAG_RPM_*",
+        "*TACH*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Primary tachometer dial ring and RPM markings."
+    },
+    {
+      "id": "hud_heat_level_5",
+      "priority": 89,
+      "category": "hud_heat",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_heat_5.png",
+      "name_patterns": [
+        "*HELICOPTER_ICON*",
+        "*COP_HEAT_5*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Maximum heat pursuit helicopter / Cross icon."
+    },
+    {
+      "id": "hud_heat_level_4",
+      "priority": 88,
+      "category": "hud_heat",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_heat_4.png",
+      "name_patterns": [
+        "*HEATMETER*",
+        "*DRAG_HEAT_FILL*",
+        "*PURSUIT_LEADERLIST*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Heat meter fill and high-heat alert emblem."
+    },
+    {
+      "id": "hud_heat_level_3",
+      "priority": 87,
+      "category": "hud_heat",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_heat_3.png",
+      "name_patterns": [
+        "*COPS_ICON*",
+        "*SPEEDTRAP_FLASHER*",
+        "*TOLLBOOTH_ICON*",
+        "*MINIMAP_ICON_ROADBLOCK*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Police cruiser / speedtrap pursuit icon."
+    },
+    {
+      "id": "hud_heat_level_2",
+      "priority": 86,
+      "category": "hud_heat",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_heat_2.png",
+      "name_patterns": [
+        "*GENERIC_INFRACTION*",
+        "*HIDE_CAR_ICON*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Infraction badge and cooldown icon."
+    },
+    {
+      "id": "hud_heat_level_1",
+      "priority": 85,
+      "category": "hud_heat",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_heat_1.png",
+      "name_patterns": [
+        "*ICON_WRONGWAY*",
+        "*HELICOPTER_LINE_OF_SIGHT*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Alert / hazard HUD emblem."
+    },
+    {
+      "id": "hud_speed_plate",
+      "priority": 84,
+      "category": "hud_gauge",
+      "source_type": "hud_pack",
+      "asset": "{theme}/hud_speed_plate.png",
+      "name_patterns": [
+        "*PURSUIT_BACKING*",
+        "*SPEED_PLATE*",
+        "*DRAG_SHIFT_LIGHT*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "Translucent pursuit/speedometer banner backing."
+    },
+    {
+      "id": "road_asphalt_wet",
+      "priority": 80,
+      "category": "road_asphalt_wet",
+      "source_type": "cc0_baked",
+      "asset": "asphalt_02_wet_4k.png",
+      "name_patterns": [
+        "*WET*ASPHALT*",
+        "*WET*ROAD*",
+        "*RAIN*ROAD*",
+        "*PUDDLE*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "4K CC0 wet puddle asphalt baked diffuse (Poly Haven asphalt_02)."
+    },
+    {
+      "id": "road_asphalt_dry",
+      "priority": 75,
+      "category": "road_asphalt_dry",
+      "source_type": "cc0_baked",
+      "asset": "asphalt_02_dry_4k.png",
+      "name_patterns": [
+        "*ASPHALT*",
+        "*SKID_ROAD*",
+        "*ROAD_*",
+        "*_ROAD*",
+        "*STREET*",
+        "*TARMAC*",
+        "*HIGHWAY*",
+        "*PAVEMENT*",
+        "*FREEWAY*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "4K CC0 dry sunlit asphalt baked diffuse (Poly Haven asphalt_02)."
+    },
+    {
+      "id": "concrete_barrier",
+      "priority": 72,
+      "category": "concrete_barrier",
+      "source_type": "cc0_baked",
+      "asset": "concrete_barrier_4k.png",
+      "name_patterns": [
+        "*CONCRETE*",
+        "*BARRIER*",
+        "*JERSEY*",
+        "*ROADBLOCK_BARREL*",
+        "*CURB*",
+        "*SIDEWALK*",
+        "*BRIDGE*",
+        "*TUNNEL*WALL*",
+        "*PILLAR*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "4K CC0 weathered concrete Jersey barrier baked diffuse (Poly Haven concrete_wall_004)."
+    },
+    {
+      "id": "car_carbon_fiber",
+      "priority": 70,
+      "category": "car_carbon_fiber",
+      "source_type": "cc0_baked",
+      "asset": "carbon_fiber_4k.png",
+      "name_patterns": [
+        "*CARBON*",
+        "*CF_*",
+        "*_CF*",
+        "*WEAVE*",
+        "*SPOILER*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "4K CC0 twill carbon fiber weave baked diffuse (ambientCG Fabric004)."
+    },
+    {
+      "id": "urban_brick_facade",
+      "priority": 65,
+      "category": "urban_brick",
+      "source_type": "cc0_baked",
+      "asset": "urban_brick_4k.png",
+      "name_patterns": [
+        "*BRICK*",
+        "*MASONRY*",
+        "*WAREHOUSE*",
+        "*DOWNTOWN*WALL*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "4K CC0 urban brick facade baked diffuse (Poly Haven red_brick_03)."
+    }
+  ]
+}

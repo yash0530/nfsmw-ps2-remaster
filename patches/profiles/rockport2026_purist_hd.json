@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "profile_id": "rockport2026_purist_hd",
+  "name": "NFSMW: Rockport 2026 — Purist HD Remaster (16:9)",
+  "description": "Authentic 2005 handling, traffic, and pursuits with a pure visual/LOD/60Hz-EFX remaster for SLUS-21351. Bakes 7 binary-verified MIPS ELF patches (neutral color treatment, bloom-preserving smear removal, native 16:9 widescreen, high-LOD cars & wheels, 5-face real-time reflections, 3x scenery draw distance, and 60fps ScreenEFX timing) while leaving GLOBAL\\ATTRIBUTES.BIN 100% stock.",
+  "target": {
+    "game": "Need for Speed: Most Wanted - Black Edition (NTSC-U)",
+    "serial": "SLUS-21351",
+    "elf_name": "SLUS_213.51",
+    "elf_pcsx2_crc": "0518D274"
+  },
+  "output_filename": "NFSMW_BlackEdition_Rockport2026_PuristHD.iso",
+  "elf_patches": {
+    "spec": "patches/elf_patches.json",
+    "include_ids": [
+      "remove_brown_filter",
+      "remove_motion_blur",
+      "widescreen_16_9_native",
+      "high_lod_cars",
+      "full_rate_car_reflections",
+      "extended_scenery_draw_distance",
+      "screen_efx_60fps_timing"
+    ],
+    "include_optional": false
+  },
+  "vlt_recipes": [],
+  "zz_overrides": [],
+  "allow_zzdata3_append": true
+}

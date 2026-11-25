@@ -6,6 +6,12 @@ Subcommands:
   status     Inspect untouched source ISO (read-only), built modded ISO & CRC,
              installed PCSX2 per-game .ini/.pnach profiles, texture dump/replacement
              counts, and optional AI/DDS tool readiness.
+  profiles   Scan and validate declarative build profiles in patches/profiles/*.json
+             against patches/elf_patches.json (checking mutually exclusive pairs)
+             and VLT recipe paths, printing a comparison table.
+  build      One-click reproducible modded ISO build via build_modded_iso.py
+             (--verify-source-sha256 enabled by default) with optional PCSX2 v2.6.3
+             per-game INI/AspectRatio & companion .pnach installation.
   dump-mode  Toggle DumpReplaceableTextures cleanly inside per-game
              gamesettings/SLUS-21351_<CRC>.ini ONLY (never touches global PCSX2.ini).
   verify     Run py_compile, audit_repo_clean.py, lint_pnach.py, and unittest in one shot.
@@ -19,11 +25,12 @@ import json
 import os
 import py_compile
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 TOOLS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TOOLS_DIR.parent
@@ -570,6 +577,856 @@ def run_verify(
 
 
 # ---------------------------------------------------------------------------
+# profiles (scan, validate mutually exclusive ELF IDs & VLT recipes, compare)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_vpath(vpath: str) -> str:
+    return vpath.strip().replace("/", "\\").upper()
+
+
+def _resolve_repo_path(raw: str, repo_root: Path) -> Path:
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p
+    return (repo_root / p).resolve()
+
+
+def infer_profile_aspect(include_ids: Sequence[str]) -> Tuple[str, str]:
+    """Return (display_aspect, pcsx2_v263_aspect_ratio) for a profile's ELF IDs."""
+    id_set = set(include_ids)
+    if "ultrawide_21_9_native" in id_set:
+        # PCSX2 v2.6.3 [EmuCore/GS] AspectRatio enum uses "Stretch" for 21:9 ultrawide.
+        return "21:9", "Stretch"
+    if "widescreen_16_9_native" in id_set or "wider_camera_fov_12pct_16_9" in id_set:
+        return "16:9", "16:9"
+    return "4:3", "Auto 4:3/3:2"
+
+
+def resolve_pcsx2_aspect(aspect_arg: str, include_ids: Sequence[str]) -> Tuple[str, str]:
+    """Map CLI --aspect value + profile ELF IDs to (display_aspect, PCSX2 AspectRatio)."""
+    cleaned = aspect_arg.strip()
+    low = cleaned.lower()
+    if low == "auto":
+        return infer_profile_aspect(include_ids)
+    if low in ("21:9", "stretch"):
+        return "21:9", "Stretch"
+    for valid in setup_pcsx2_macos.VALID_ASPECT_RATIOS:
+        if low == valid.lower():
+            return valid, valid
+    allowed = ("auto", "21:9") + setup_pcsx2_macos.VALID_ASPECT_RATIOS
+    raise ValueError(f"Unsupported aspect ratio {aspect_arg!r}; expected one of {allowed}")
+
+
+def resolve_profile_path(profile_arg: str, repo_root: Path) -> Path:
+    """Resolve a profile ID, filename, or path to an existing profile JSON file."""
+    profiles_dir = repo_root / "patches" / "profiles"
+    raw_path = Path(profile_arg).expanduser()
+    candidates = [
+        raw_path,
+        repo_root / raw_path,
+        profiles_dir / f"{profile_arg}.json",
+        profiles_dir / profile_arg,
+    ]
+    for cand in candidates:
+        if cand.is_file():
+            return cand.resolve()
+
+    if profiles_dir.is_dir():
+        for p in sorted(profiles_dir.glob("*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(data, dict) and data.get("profile_id") == profile_arg:
+                return p.resolve()
+
+    available = [p.stem for p in sorted(profiles_dir.glob("*.json"))] if profiles_dir.is_dir() else []
+    avail_str = ", ".join(available) if available else "(none found)"
+    raise FileNotFoundError(
+        f"Build profile not found: {profile_arg!r}. Available profiles in {profiles_dir}: {avail_str}"
+    )
+
+
+def validate_build_profile(
+    profile_path: Path,
+    repo_root: Path,
+    default_spec_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Load and validate a build profile JSON against ELF patch spec & VLT recipes."""
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "profile_id": profile_path.stem,
+            "file": str(profile_path),
+            "name": "",
+            "description": "",
+            "output_filename": "",
+            "aspect": "unknown",
+            "pcsx2_aspect_ratio": "16:9",
+            "elf_patch_count": 0,
+            "elf_patch_ids": [],
+            "vlt_recipe_count": 0,
+            "vlt_recipes": [],
+            "vlt_edit_count": 0,
+            "zz_override_count": 0,
+            "allow_zzdata3_append": True,
+            "valid": False,
+            "errors": [f"Failed to parse profile JSON: {exc}"],
+            "warnings": [],
+        }
+
+    if not isinstance(profile, dict):
+        errors.append("Profile root must be a JSON object")
+        profile = {}
+
+    if profile.get("schema_version") != 1:
+        errors.append(f"Expected schema_version == 1, got {profile.get('schema_version')!r}")
+
+    profile_id = str(profile.get("profile_id") or profile_path.stem)
+    name = str(profile.get("name") or "")
+    description = str(profile.get("description") or "")
+    output_filename = str(profile.get("output_filename") or "")
+
+    if not profile.get("profile_id"):
+        errors.append("Missing required 'profile_id'")
+    if not name.strip():
+        errors.append("Missing required 'name'")
+    if not output_filename.strip():
+        errors.append("Missing required 'output_filename'")
+
+    elf_cfg = profile.get("elf_patches")
+    if elf_cfg is None:
+        elf_cfg = {}
+    elif not isinstance(elf_cfg, dict):
+        errors.append("'elf_patches' must be a JSON object")
+        elf_cfg = {}
+
+    # Resolve ELF patches spec
+    spec_rel = elf_cfg.get("spec")
+    if spec_rel:
+        spec_path = _resolve_repo_path(str(spec_rel), repo_root)
+    elif default_spec_path is not None:
+        spec_path = default_spec_path.resolve()
+    else:
+        spec_path = (repo_root / "patches" / "elf_patches.json").resolve()
+
+    spec: Optional[Dict[str, Any]] = None
+    if not spec_path.is_file():
+        errors.append(f"Missing ELF patch spec: {spec_path}")
+    else:
+        try:
+            spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append(f"Invalid ELF patch spec JSON ({spec_path}): {exc}")
+
+    # Validate target metadata against ELF spec target
+    target = profile.get("target")
+    if target is not None and not isinstance(target, dict):
+        errors.append("'target' must be a JSON object")
+        target = {}
+    if isinstance(target, dict) and isinstance(spec, dict):
+        spec_target = spec.get("target", {})
+        for key in ("serial", "elf_name", "elf_pcsx2_crc"):
+            if key in target and key in spec_target and str(target[key]).upper() != str(spec_target[key]).upper():
+                errors.append(
+                    f"target.{key} mismatch: profile has {target[key]!r}, ELF spec has {spec_target[key]!r}"
+                )
+
+    # Validate ELF patch IDs, mutual exclusions, and write address collisions
+    selected_ids: List[str] = []
+    include_optional = bool(elf_cfg.get("include_optional", False))
+    if isinstance(spec, dict):
+        patches_list = spec.get("patches", [])
+        patch_by_id: Dict[str, Dict[str, Any]] = {p["id"]: p for p in patches_list if isinstance(p, dict) and "id" in p}
+        mutual_exclusions: Dict[str, Set[str]] = {pid: set() for pid in patch_by_id}
+        vaddrs_by_id: Dict[str, Set[int]] = {}
+        for pid, patch_obj in patch_by_id.items():
+            for other in patch_obj.get("mutually_exclusive_with", []) or []:
+                mutual_exclusions.setdefault(pid, set()).add(other)
+                mutual_exclusions.setdefault(other, set()).add(pid)
+            vaddrs_by_id[pid] = {
+                int(w["vaddr"], 16)
+                for w in patch_obj.get("writes", [])
+                if isinstance(w, dict) and "vaddr" in w
+            }
+
+        if "include_ids" in elf_cfg:
+            raw_ids = elf_cfg["include_ids"]
+            if not isinstance(raw_ids, list) or not all(isinstance(x, str) for x in raw_ids):
+                errors.append("'elf_patches.include_ids' must be a list of patch ID strings")
+            else:
+                selected_ids = list(raw_ids)
+        else:
+            selected_ids = [
+                p["id"]
+                for p in patches_list
+                if isinstance(p, dict) and "id" in p and (p.get("enabled_by_default", False) or include_optional)
+            ]
+
+        seen_ids: List[str] = []
+        claimed_vaddrs: Dict[int, str] = {}
+        for pid in selected_ids:
+            if pid not in patch_by_id:
+                errors.append(f"Unknown ELF patch ID: {pid!r}")
+                continue
+            if pid in seen_ids:
+                errors.append(f"Duplicate ELF patch ID in include_ids: {pid!r}")
+                continue
+            for prev_id in seen_ids:
+                if prev_id in mutual_exclusions.get(pid, set()):
+                    errors.append(f"Mutually exclusive ELF patches both enabled: {prev_id!r} and {pid!r}")
+            for vaddr in sorted(vaddrs_by_id.get(pid, set())):
+                if vaddr in claimed_vaddrs:
+                    errors.append(
+                        f"Overlapping ELF write at 0x{vaddr:08X} between {claimed_vaddrs[vaddr]!r} and {pid!r}"
+                    )
+                else:
+                    claimed_vaddrs[vaddr] = pid
+            seen_ids.append(pid)
+
+    # Validate VLT recipes
+    raw_vlt = profile.get("vlt_recipes", [])
+    validated_vlt: List[Dict[str, Any]] = []
+    total_vlt_edits = 0
+    seen_vlt_offsets: Dict[Tuple[str, int], str] = {}
+    if raw_vlt is not None and not isinstance(raw_vlt, list):
+        errors.append("'vlt_recipes' must be a list")
+        raw_vlt = []
+    for idx, item in enumerate(raw_vlt or []):
+        if not isinstance(item, dict):
+            errors.append(f"vlt_recipes[{idx}] must be an object")
+            continue
+        vpath = item.get("virtual_path")
+        recipe_rel = item.get("recipe")
+        is_optional = bool(item.get("optional", False))
+        if not isinstance(vpath, str) or not vpath.strip():
+            errors.append(f"vlt_recipes[{idx}] missing 'virtual_path'")
+            continue
+        if not isinstance(recipe_rel, str) or not recipe_rel.strip():
+            errors.append(f"vlt_recipes[{idx}] missing 'recipe'")
+            continue
+
+        norm_vpath = _normalize_vpath(vpath)
+        recipe_path = _resolve_repo_path(recipe_rel, repo_root)
+        entry: Dict[str, Any] = {
+            "virtual_path": norm_vpath,
+            "recipe": recipe_rel,
+            "optional": is_optional,
+            "exists": recipe_path.is_file(),
+            "edit_count": 0,
+        }
+
+        if not recipe_path.is_file():
+            if is_optional:
+                warnings.append(f"Optional VLT recipe missing: {recipe_rel}")
+            else:
+                errors.append(f"Missing VLT recipe file: {recipe_rel} ({recipe_path})")
+            validated_vlt.append(entry)
+            continue
+
+        try:
+            recipe_data = json.loads(recipe_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append(f"Invalid VLT recipe JSON ({recipe_rel}): {exc}")
+            validated_vlt.append(entry)
+            continue
+
+        if not isinstance(recipe_data, dict) or not isinstance(recipe_data.get("patches"), list):
+            errors.append(f"VLT recipe {recipe_rel} must be a JSON object with a 'patches' list")
+            validated_vlt.append(entry)
+            continue
+
+        recipe_vpath = recipe_data.get("target", {}).get("virtual_path")
+        if recipe_vpath and _normalize_vpath(str(recipe_vpath)) != norm_vpath:
+            errors.append(
+                f"VLT recipe {recipe_rel} targets {recipe_vpath!r}, but profile assigns {vpath!r}"
+            )
+
+        recipe_id = str(recipe_data.get("id") or recipe_path.stem)
+        patches_in_recipe = recipe_data["patches"]
+        entry["id"] = recipe_id
+        entry["edit_count"] = len(patches_in_recipe)
+        total_vlt_edits += len(patches_in_recipe)
+
+        for p_idx, p_edit in enumerate(patches_in_recipe):
+            if not isinstance(p_edit, dict):
+                errors.append(f"VLT recipe {recipe_rel} patches[{p_idx}] must be an object")
+                continue
+            off_raw = p_edit.get("expected_offset")
+            if isinstance(off_raw, str):
+                try:
+                    off_int = int(off_raw, 16)
+                except ValueError:
+                    errors.append(f"VLT recipe {recipe_rel} patches[{p_idx}] invalid expected_offset {off_raw!r}")
+                    continue
+                key = (norm_vpath, off_int)
+                if key in seen_vlt_offsets:
+                    errors.append(
+                        f"Overlapping VLT offset 0x{off_int:08X} in {norm_vpath} "
+                        f"between {seen_vlt_offsets[key]} and {recipe_rel}"
+                    )
+                else:
+                    seen_vlt_offsets[key] = recipe_rel
+
+        validated_vlt.append(entry)
+
+    # Validate optional lighting_recipes (GLOBALB.LZC SunInfos + LightMaterials)
+    raw_lighting = profile.get("lighting_recipes", [])
+    validated_lighting: List[Dict[str, Any]] = []
+    total_lighting_edits = 0
+    if raw_lighting is not None and not isinstance(raw_lighting, list):
+        errors.append("'lighting_recipes' must be a list")
+        raw_lighting = []
+    for idx, item in enumerate(raw_lighting or []):
+        if isinstance(item, str):
+            recipe_rel = item
+            is_optional = False
+        elif isinstance(item, dict):
+            recipe_rel = item.get("recipe", "")
+            is_optional = bool(item.get("optional", False))
+        else:
+            errors.append(f"lighting_recipes[{idx}] must be a path string or object")
+            continue
+        if not isinstance(recipe_rel, str) or not recipe_rel.strip():
+            errors.append(f"lighting_recipes[{idx}] missing 'recipe'")
+            continue
+        recipe_path = _resolve_repo_path(recipe_rel, repo_root)
+        lentry: Dict[str, Any] = {
+            "recipe": recipe_rel,
+            "optional": is_optional,
+            "exists": recipe_path.is_file(),
+            "edit_count": 0,
+        }
+        if not recipe_path.is_file():
+            if is_optional:
+                warnings.append(f"Optional lighting recipe missing: {recipe_rel}")
+            else:
+                errors.append(f"Missing lighting recipe file: {recipe_rel} ({recipe_path})")
+            validated_lighting.append(lentry)
+            continue
+        try:
+            ldata = json.loads(recipe_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append(f"Invalid lighting recipe JSON ({recipe_rel}): {exc}")
+            validated_lighting.append(lentry)
+            continue
+        if not isinstance(ldata, dict) or not isinstance(ldata.get("patches"), list):
+            errors.append(f"Lighting recipe {recipe_rel} must be a JSON object with a 'patches' list")
+            validated_lighting.append(lentry)
+            continue
+        lentry["id"] = str(ldata.get("id") or recipe_path.stem)
+        lentry["edit_count"] = len(ldata["patches"])
+        total_lighting_edits += len(ldata["patches"])
+        validated_lighting.append(lentry)
+
+    # Validate optional zz_overrides
+    raw_zz = profile.get("zz_overrides", [])
+    zz_items: List[Dict[str, Any]] = []
+    if isinstance(raw_zz, dict):
+        zz_items = [{"virtual_path": k, "file": v} for k, v in raw_zz.items()]
+    elif isinstance(raw_zz, list):
+        zz_items = [x for x in raw_zz if isinstance(x, dict)]
+    elif raw_zz is not None:
+        errors.append("'zz_overrides' must be a list or object")
+
+    for idx, item in enumerate(zz_items):
+        fp_raw = item.get("file")
+        if not isinstance(fp_raw, str) or not fp_raw.strip():
+            errors.append(f"zz_overrides[{idx}] missing 'file'")
+            continue
+        fp = _resolve_repo_path(fp_raw, repo_root)
+        if not fp.is_file() and not item.get("optional", False):
+            errors.append(f"Missing ZZ override file: {fp_raw}")
+
+    display_aspect, pcsx2_aspect = infer_profile_aspect(selected_ids)
+    return {
+        "profile_id": profile_id,
+        "file": str(profile_path),
+        "name": name,
+        "description": description,
+        "output_filename": output_filename,
+        "aspect": display_aspect,
+        "pcsx2_aspect_ratio": pcsx2_aspect,
+        "elf_spec": str(spec_path),
+        "elf_patch_count": len(selected_ids),
+        "elf_patch_ids": selected_ids,
+        "vlt_recipe_count": len(validated_vlt),
+        "vlt_recipes": validated_vlt,
+        "vlt_edit_count": total_vlt_edits,
+        "lighting_recipe_count": len(validated_lighting),
+        "lighting_recipes": validated_lighting,
+        "lighting_edit_count": total_lighting_edits,
+        "zz_override_count": len(zz_items),
+        "allow_zzdata3_append": bool(profile.get("allow_zzdata3_append", True)),
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def collect_profiles(
+    *,
+    repo_root: Path,
+    profiles_dir: Optional[Path] = None,
+    patches_spec: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Scan and validate all *.json build profiles under patches/profiles/."""
+    target_dir = (profiles_dir or (repo_root / "patches" / "profiles")).resolve()
+    spec_path = (patches_spec or (repo_root / "patches" / "elf_patches.json")).resolve()
+
+    profile_files = sorted(target_dir.glob("*.json")) if target_dir.is_dir() else []
+    entries: List[Dict[str, Any]] = []
+    seen_profile_ids: Dict[str, str] = {}
+
+    for pf in profile_files:
+        info = validate_build_profile(pf, repo_root=repo_root, default_spec_path=spec_path)
+        pid = info["profile_id"]
+        if pid in seen_profile_ids:
+            info["errors"].append(f"Duplicate profile_id {pid!r} (already defined in {seen_profile_ids[pid]})")
+            info["valid"] = False
+        else:
+            seen_profile_ids[pid] = pf.name
+        entries.append(info)
+
+    valid_count = sum(1 for e in entries if e["valid"])
+    invalid_count = len(entries) - valid_count
+    all_ok = bool(entries) and invalid_count == 0
+    return {
+        "status": "pass" if all_ok else "fail",
+        "profiles_dir": str(target_dir),
+        "elf_spec": str(spec_path),
+        "profile_count": len(entries),
+        "valid_count": valid_count,
+        "invalid_count": invalid_count,
+        "profiles": entries,
+    }
+
+
+def print_profiles_human(report: Dict[str, Any]) -> None:
+    print("NFSMW: Rockport 2026 (SLUS-21351) — Build Profiles")
+    print("=" * 96)
+    print(f"Profiles Dir : {report['profiles_dir']}")
+    print(f"ELF Spec     : {report['elf_spec']}")
+
+    entries = report["profiles"]
+    if not entries:
+        print("\nNo profile JSON files found.")
+        return
+
+    print("")
+    id_w = max(len("Profile ID"), max(len(e["profile_id"]) for e in entries)) + 2
+    header = (
+        f"{'Profile ID':<{id_w}} {'Aspect':<7} {'PCSX2 AR':<12} {'ELF':>3}  "
+        f"{'VLT (Edits)':<12} {'Status':<8} {'Output ISO'}"
+    )
+    print(header)
+    print("-" * len(header))
+    for e in entries:
+        vlt_col = f"{e['vlt_recipe_count']} ({e['vlt_edit_count']})"
+        status_col = "VALID" if e["valid"] else "INVALID"
+        print(
+            f"{e['profile_id']:<{id_w}} {e['aspect']:<7} {e['pcsx2_aspect_ratio']:<12} "
+            f"{e['elf_patch_count']:>3}  {vlt_col:<12} {status_col:<8} {e['output_filename']}"
+        )
+
+    print("\nDetails:")
+    for e in entries:
+        badge = "VALID" if e["valid"] else "INVALID"
+        print(f"  * {e['profile_id']} [{badge}] — {e['name']}")
+        if e["elf_patch_ids"]:
+            print(f"      ELF ({e['elf_patch_count']}): {', '.join(e['elf_patch_ids'])}")
+        if e["vlt_recipes"]:
+            vlt_names = [f"{Path(v['recipe']).name} ({v['edit_count']})" for v in e["vlt_recipes"]]
+            print(f"      VLT ({e['vlt_recipe_count']}): {', '.join(vlt_names)}")
+        else:
+            print("      VLT (0): Stock retail GLOBAL\\ATTRIBUTES.BIN preserved")
+        if e.get("lighting_recipes"):
+            light_names = [f"{Path(v['recipe']).name} ({v['edit_count']})" for v in e["lighting_recipes"]]
+            print(f"      Lighting ({e['lighting_recipe_count']}): {', '.join(light_names)}")
+        for w in e["warnings"]:
+            print(f"      WARN : {w}")
+        for err in e["errors"]:
+            print(f"      ERROR: {err}", file=sys.stderr)
+
+    print(
+        f"\nSummary: {report['valid_count']}/{report['profile_count']} profile(s) valid"
+        + ("" if report["invalid_count"] == 0 else f", {report['invalid_count']} invalid")
+    )
+
+
+# ---------------------------------------------------------------------------
+# build (one-click build_modded_iso.py + optional setup_pcsx2_macos.py)
+# ---------------------------------------------------------------------------
+
+
+def _extract_companion_pnach_patches(pnach_path: Path, is_ultrawide: bool) -> List[str]:
+    """Return section names from a modded companion .pnach that require explicit Enable."""
+    if not pnach_path.is_file():
+        return []
+    sections: List[str] = []
+    for raw_line in pnach_path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        m = _SECTION_RE.match(stripped)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        low = name.lower()
+        if "optional" in low or "experimental" in low:
+            continue
+        if ("21:9" in low or "ultrawide" in low) and not is_ultrawide:
+            continue
+        if name not in sections:
+            sections.append(name)
+    return sections
+
+
+def _apply_aspect_to_gamesettings_ini(ini_path: Path, pcsx2_dir: Path, aspect_ratio: str) -> bool:
+    """Set [EmuCore/GS] AspectRatio safely inside a per-game INI and validate against PCSX2 v2.6.3."""
+    if aspect_ratio not in setup_pcsx2_macos.VALID_ASPECT_RATIOS:
+        raise ValueError(
+            f"AspectRatio {aspect_ratio!r} not in PCSX2 v2.6.3 enum {setup_pcsx2_macos.VALID_ASPECT_RATIOS}"
+        )
+    global_ini = (pcsx2_dir / "inis" / "PCSX2.ini").resolve()
+    resolved = ini_path.resolve()
+    if resolved == global_ini or resolved.name.lower() == "pcsx2.ini" or resolved.parent.name == "inis":
+        raise RuntimeError(f"SAFETY ABORT: Refusing to modify global PCSX2 config: {ini_path}")
+    if not ini_path.is_file():
+        return False
+
+    orig = ini_path.read_text(encoding="utf-8")
+    updated = toggle_ini_key_in_section(orig, "EmuCore/GS", "AspectRatio", aspect_ratio)
+    errs = setup_pcsx2_macos.validate_gamesettings_ini(updated)
+    if errs:
+        raise RuntimeError("Updated gamesettings INI failed PCSX2 v2.6.3 validation:\n" + "\n".join(errs))
+    ini_path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def run_build(
+    *,
+    repo_root: Path,
+    profile_arg: str,
+    source_iso: Path,
+    output_iso: Optional[Path] = None,
+    verify_sha256: bool = True,
+    install_pcsx2: bool = False,
+    pcsx2_dir: Path = DEFAULT_PCSX2_DIR,
+    renderer: str = "metal",
+    upscale: int = 6,
+    anisotropy: int = 16,
+    ee_cycle_rate: int = 2,
+    aspect: str = "auto",
+    enable_dump: bool = False,
+    no_precache: bool = False,
+    dry_run: bool = False,
+) -> Tuple[int, Dict[str, Any]]:
+    """Execute or dry-run the one-click modded ISO build + optional PCSX2 install workflow."""
+    profile_path = resolve_profile_path(profile_arg, repo_root)
+    profile_info = validate_build_profile(profile_path, repo_root=repo_root)
+    if not profile_info["valid"]:
+        return 1, {
+            "status": "error",
+            "stage": "validate-profile",
+            "profile": profile_info,
+            "errors": profile_info["errors"],
+        }
+
+    src = source_iso.expanduser().resolve()
+    dst = (
+        output_iso.expanduser().resolve()
+        if output_iso is not None
+        else (repo_root / "build" / profile_info["output_filename"]).resolve()
+    )
+    if src == dst:
+        return 2, {
+            "status": "error",
+            "stage": "safety-check",
+            "errors": [f"Refused: output ISO path matches source ISO path ({src})"],
+        }
+
+    display_aspect, pcsx2_aspect = resolve_pcsx2_aspect(aspect, profile_info["elf_patch_ids"])
+    is_ultrawide = "ultrawide_21_9_native" in set(profile_info["elf_patch_ids"])
+
+    build_script = (repo_root / "tools" / "build_modded_iso.py").resolve()
+    setup_script = (repo_root / "tools" / "setup_pcsx2_macos.py").resolve()
+
+    build_cmd: List[str] = [
+        sys.executable,
+        str(build_script),
+        "--source",
+        str(src),
+        "--output",
+        str(dst),
+        "--profile",
+        str(profile_path),
+    ]
+    if verify_sha256:
+        build_cmd.append("--verify-source-sha256")
+
+    planned_setup_cmd: Optional[List[str]] = None
+    if install_pcsx2:
+        planned_setup_cmd = [
+            sys.executable,
+            str(setup_script),
+            "--pcsx2-dir",
+            str(pcsx2_dir),
+            "--crcs",
+            "<MODDED_CRC>",
+            "--extra-pnach",
+            str(dst.parent / f"{SERIAL}_<MODDED_CRC>.pnach"),
+            "--renderer",
+            renderer,
+            "--upscale",
+            str(upscale),
+            "--anisotropy",
+            str(anisotropy),
+            "--ee-cycle-rate",
+            str(ee_cycle_rate),
+        ]
+        if is_ultrawide:
+            planned_setup_cmd.extend(["--enable-patch", "Widescreen 21:9 (Runtime Confirm)"])
+        if enable_dump:
+            planned_setup_cmd.append("--enable-dump")
+        if no_precache:
+            planned_setup_cmd.append("--no-precache")
+
+    if dry_run:
+        src_info = inspect_iso_readonly(src, verify_sha256=False)
+        return 0, {
+            "status": "dry-run",
+            "dry_run": True,
+            "profile": profile_info,
+            "source_iso": src_info,
+            "output_iso": str(dst),
+            "verify_source_sha256": verify_sha256,
+            "display_aspect": display_aspect,
+            "pcsx2_aspect_ratio": pcsx2_aspect,
+            "install_pcsx2": install_pcsx2,
+            "build_command": build_cmd,
+            "setup_command": planned_setup_cmd,
+            "pcsx2_settings": {
+                "pcsx2_dir": str(pcsx2_dir),
+                "renderer": renderer,
+                "upscale": upscale,
+                "anisotropy": anisotropy,
+                "ee_cycle_rate": ee_cycle_rate,
+                "aspect_ratio": pcsx2_aspect,
+            },
+        }
+
+    if not src.is_file():
+        return 1, {
+            "status": "error",
+            "stage": "source-check",
+            "errors": [f"Source ISO not found: {src}"],
+        }
+
+    build_proc = subprocess.run(
+        build_cmd,
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    if build_proc.returncode != 0:
+        return build_proc.returncode, {
+            "status": "error",
+            "stage": "build_modded_iso",
+            "returncode": build_proc.returncode,
+            "stdout": build_proc.stdout,
+            "stderr": build_proc.stderr,
+            "errors": [f"build_modded_iso.py exited with code {build_proc.returncode}"],
+        }
+
+    manifest_path = dst.with_suffix(".build-manifest.json")
+    if not manifest_path.is_file():
+        return 1, {
+            "status": "error",
+            "stage": "read-manifest",
+            "stdout": build_proc.stdout,
+            "stderr": build_proc.stderr,
+            "errors": [f"Expected build manifest was not created: {manifest_path}"],
+        }
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    modded_crc = str(manifest["output_elf_crc"]).upper()
+    pnach_name = manifest.get("companion_pnach") or f"{SERIAL}_{modded_crc}.pnach"
+    companion_pnach = dst.parent / pnach_name
+
+    pcsx2_result: Optional[Dict[str, Any]] = None
+    if install_pcsx2:
+        setup_cmd = [
+            sys.executable,
+            str(setup_script),
+            "--pcsx2-dir",
+            str(pcsx2_dir),
+            "--crcs",
+            modded_crc,
+            "--renderer",
+            renderer,
+            "--upscale",
+            str(upscale),
+            "--anisotropy",
+            str(anisotropy),
+            "--ee-cycle-rate",
+            str(ee_cycle_rate),
+        ]
+        if companion_pnach.is_file():
+            setup_cmd.extend(["--extra-pnach", str(companion_pnach)])
+
+        # setup_pcsx2_macos.extract_default_pnach_sections skips "21:9"/"ultrawide" tokens
+        # (meant for optional sections in stock 0518D274.pnach); enable companion 21:9 explicitly.
+        if is_ultrawide:
+            explicit_sections = _extract_companion_pnach_patches(companion_pnach, is_ultrawide=True)
+            if not explicit_sections:
+                explicit_sections = ["Widescreen 21:9 (Runtime Confirm)"]
+            for sec_name in explicit_sections:
+                setup_cmd.extend(["--enable-patch", sec_name])
+
+        if enable_dump:
+            setup_cmd.append("--enable-dump")
+        if no_precache:
+            setup_cmd.append("--no-precache")
+
+        setup_proc = subprocess.run(
+            setup_cmd,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        if setup_proc.returncode != 0:
+            return setup_proc.returncode, {
+                "status": "error",
+                "stage": "setup_pcsx2_macos",
+                "returncode": setup_proc.returncode,
+                "stdout": setup_proc.stdout,
+                "stderr": setup_proc.stderr,
+                "errors": [f"setup_pcsx2_macos.py exited with code {setup_proc.returncode}"],
+            }
+
+        ini_path = pcsx2_dir / "gamesettings" / f"{SERIAL}_{modded_crc}.ini"
+        installed_pnach = pcsx2_dir / "patches" / companion_pnach.name
+        aspect_updated = _apply_aspect_to_gamesettings_ini(ini_path, pcsx2_dir, pcsx2_aspect)
+        enabled_patches: List[str] = []
+        if ini_path.is_file():
+            parsed_ini = parse_pcsx2_ini(ini_path.read_text(encoding="utf-8", errors="replace"))
+            enabled_patches = parsed_ini.get("Patches", {}).get("Enable", [])
+
+        pcsx2_result = {
+            "pcsx2_dir": str(pcsx2_dir),
+            "ini_path": str(ini_path),
+            "ini_exists": ini_path.is_file(),
+            "pnach_path": str(installed_pnach),
+            "pnach_exists": installed_pnach.is_file(),
+            "renderer": renderer,
+            "upscale": upscale,
+            "anisotropy": anisotropy,
+            "ee_cycle_rate": ee_cycle_rate,
+            "aspect_ratio": pcsx2_aspect,
+            "ini_aspect_updated": aspect_updated,
+            "enabled_patches": enabled_patches,
+            "global_ini_untouched": True,
+            "setup_command": setup_cmd,
+            "setup_stdout": setup_proc.stdout,
+        }
+
+    return 0, {
+        "status": "ok",
+        "dry_run": False,
+        "profile": profile_info,
+        "source_iso": str(src),
+        "source_elf_crc": manifest.get("source_elf_crc"),
+        "source_sha256_before": manifest.get("source_sha256_before"),
+        "source_sha256_after": manifest.get("source_sha256_after"),
+        "verify_source_sha256": verify_sha256,
+        "output_iso": str(dst),
+        "output_elf_crc": modded_crc,
+        "copy_mode": manifest.get("copy_mode"),
+        "companion_pnach": str(companion_pnach),
+        "manifest_path": str(manifest_path),
+        "applied_elf_patches": [p.get("id") for p in manifest.get("applied_elf_patches", [])],
+        "applied_zz_overrides": [z.get("virtual_path") for z in manifest.get("applied_zz_overrides", [])],
+        "iso_layout_update": manifest.get("iso_layout_update", {}),
+        "display_aspect": display_aspect,
+        "pcsx2_aspect_ratio": pcsx2_aspect,
+        "build_command": build_cmd,
+        "build_stdout": build_proc.stdout,
+        "pcsx2": pcsx2_result,
+    }
+
+
+def print_build_human(res: Dict[str, Any]) -> None:
+    prof = res["profile"]
+    if res.get("dry_run"):
+        print("NFSMW: Rockport 2026 (SLUS-21351) — Build Plan (Dry Run)")
+        print("=" * 68)
+        src = res["source_iso"]
+        if src.get("exists"):
+            crc = src.get("elf_crc", "unknown")
+            print(f"  Source ISO   : {src['path']} ({_fmt_size(src['size_bytes'])}, CRC {crc})")
+        else:
+            print(f"  Source ISO   : {src['path']} (not found locally; skipped read-only CRC check)")
+        print(f"  Profile      : {prof['profile_id']} — {prof['name']}")
+        print(f"  Output ISO   : {res['output_iso']}")
+        print(f"  Verify SHA256: {res['verify_source_sha256']}")
+        print(f"  ELF Patches  : {prof['elf_patch_count']} ({', '.join(prof['elf_patch_ids'])})")
+        print(f"  VLT Recipes  : {prof['vlt_recipe_count']} ({prof['vlt_edit_count']} field edits)")
+        print(f"  Aspect Ratio : {res['display_aspect']} (PCSX2 AspectRatio = {res['pcsx2_aspect_ratio']})")
+        print(f"  Build Cmd    : {shlex.join(res['build_command'])}")
+        if res.get("setup_command"):
+            print(f"  PCSX2 Cmd    : {shlex.join(res['setup_command'])}")
+        print("\nDry run only — no ISO, INI, or .pnach files were modified.")
+        return
+
+    print("NFSMW: Rockport 2026 (SLUS-21351) — Build & Launch Summary")
+    print("=" * 68)
+    print(f"  Profile         : {prof['profile_id']} — {prof['name']}")
+    print(f"  Source ISO      : {res['source_iso']} (CRC {res.get('source_elf_crc')})")
+    if res.get("verify_source_sha256"):
+        sha_ok = res.get("source_sha256_before") == res.get("source_sha256_after")
+        print(
+            f"  Source SHA-256  : {'UNCHANGED' if sha_ok else 'MISMATCH'} "
+            f"({res.get('source_sha256_after')})"
+        )
+    print(f"  Modded ISO      : {res['output_iso']} (via {res.get('copy_mode')})")
+    print(f"  Modded ELF CRC  : {res['output_elf_crc']} (stock was {res.get('source_elf_crc')})")
+    print(f"  Companion PNACH : {res['companion_pnach']}")
+    print(f"  Build Manifest  : {res['manifest_path']}")
+    elf_ids = res.get("applied_elf_patches") or []
+    zz_ovs = res.get("applied_zz_overrides") or []
+    print(f"  ELF Applied ({len(elf_ids):2d}): {', '.join(elf_ids) if elf_ids else '(none)'}")
+    print(f"  ZZ Overrides ({len(zz_ovs)}): {', '.join(zz_ovs) if zz_ovs else '(none — stock ZZDATA)'}")
+    print(f"  Aspect Ratio    : {res['display_aspect']} (PCSX2 AspectRatio = {res['pcsx2_aspect_ratio']})")
+
+    pcsx2 = res.get("pcsx2")
+    if pcsx2:
+        print("\n[PCSX2 Per-Game Profile Installed]")
+        print(f"  Gamesettings INI: {pcsx2['ini_path']}")
+        print(f"  Installed PNACH : {pcsx2['pnach_path']}")
+        print(
+            f"  Settings        : Renderer={pcsx2['renderer']}, Upscale={pcsx2['upscale']}x, "
+            f"AF={pcsx2['anisotropy']}x, EECycleRate={pcsx2['ee_cycle_rate']}, "
+            f"AspectRatio={pcsx2['aspect_ratio']}"
+        )
+        ep = pcsx2.get("enabled_patches") or []
+        print(f"  [Patches] Enable: {', '.join(ep) if ep else '(none)'}")
+        print("  Safety          : Global PCSX2.ini was NOT modified.")
+        print(f"\nReady to launch in PCSX2: open {res['output_iso']}")
+    else:
+        print("\nNext step — install PCSX2 per-game profile for this modded CRC:")
+        print(
+            f"  python3 tools/rockport_cli.py build --profile {prof['profile_id']} "
+            f"--source \"{res['source_iso']}\" --install-pcsx2"
+        )
+
+
+# ---------------------------------------------------------------------------
 # CLI entrypoint
 # ---------------------------------------------------------------------------
 
@@ -593,6 +1450,78 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("--pcsx2-dir", type=Path, default=DEFAULT_PCSX2_DIR)
     p_status.add_argument("--verify-sha256", action="store_true", help="Also hash full source ISO (slower)")
     p_status.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    # profiles
+    p_prof = sub.add_parser(
+        "profiles",
+        help="Scan patches/profiles/*.json, validate ELF IDs & VLT recipes, and show comparison table",
+    )
+    p_prof.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    p_prof.add_argument("--profiles-dir", type=Path, default=None, help="Override profiles directory")
+    p_prof.add_argument("--patches-spec", type=Path, default=None, help="Override ELF patches JSON spec")
+    p_prof.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    # build
+    p_build = sub.add_parser(
+        "build",
+        help="Build a modded ISO from a preset profile and optionally install PCSX2 v2.6.3 per-game settings",
+    )
+    p_build.add_argument(
+        "--profile",
+        default="rockport2026_v0.2",
+        help="Profile ID, filename, or path (default: rockport2026_v0.2)",
+    )
+    p_build.add_argument(
+        "--source",
+        "--source-iso",
+        dest="source",
+        type=Path,
+        default=Path(os.environ.get("ROCKPORT_SOURCE_ISO", str(DEFAULT_SOURCE_ISO))),
+        help="Path to clean untouched SLUS-21351 ISO (opened strictly read-only)",
+    )
+    p_build.add_argument("--output", type=Path, default=None, help="Optional custom output modded ISO path")
+    p_build.add_argument(
+        "--no-verify-sha256",
+        action="store_true",
+        help="Skip source ISO SHA-256 verification before/after build (verified by default)",
+    )
+    p_build.add_argument(
+        "--install-pcsx2",
+        action="store_true",
+        help="Install per-game PCSX2 .ini + companion .pnach for the newly built modded CRC",
+    )
+    p_build.add_argument("--pcsx2-dir", type=Path, default=DEFAULT_PCSX2_DIR)
+    p_build.add_argument(
+        "--renderer",
+        choices=("metal", "vulkan", "auto"),
+        default="metal",
+        help="PCSX2 v2.6.3 GPU backend (default: metal)",
+    )
+    p_build.add_argument("--upscale", type=int, default=6, help="Internal resolution multiplier (default: 6 = 4K)")
+    p_build.add_argument(
+        "--anisotropy",
+        type=int,
+        choices=setup_pcsx2_macos.VALID_ANISOTROPY,
+        default=16,
+        help="Anisotropic filtering (default: 16)",
+    )
+    p_build.add_argument(
+        "--ee-cycle-rate",
+        type=int,
+        default=2,
+        help="EE Cycle Rate index (default: 2 = 180%% for native 60 FPS)",
+    )
+    p_build.add_argument(
+        "--aspect",
+        default="auto",
+        choices=("auto", "16:9", "21:9", "Stretch", "4:3", "Auto 4:3/3:2", "10:7"),
+        help="PCSX2 AspectRatio override ('auto' maps 16:9->16:9 and 21:9->Stretch cleanly)",
+    )
+    p_build.add_argument("--enable-dump", action="store_true", help="Enable PCSX2 texture dumping on installed profile")
+    p_build.add_argument("--no-precache", action="store_true", help="Disable full-RAM texture precaching")
+    p_build.add_argument("--dry-run", action="store_true", help="Validate profile and print planned build/setup actions")
+    p_build.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    p_build.add_argument("--json", action="store_true", help="Emit JSON output")
 
     # dump-mode
     p_dump = sub.add_parser(
@@ -645,6 +1574,57 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         else:
             print_status_human(data)
         return 0
+
+    if args.command == "profiles":
+        report = collect_profiles(
+            repo_root=args.repo_root,
+            profiles_dir=args.profiles_dir,
+            patches_spec=args.patches_spec,
+        )
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print_profiles_human(report)
+        return 0 if report["status"] == "pass" else 1
+
+    if args.command == "build":
+        try:
+            rc, result = run_build(
+                repo_root=args.repo_root,
+                profile_arg=args.profile,
+                source_iso=args.source,
+                output_iso=args.output,
+                verify_sha256=not args.no_verify_sha256,
+                install_pcsx2=args.install_pcsx2,
+                pcsx2_dir=args.pcsx2_dir,
+                renderer=args.renderer,
+                upscale=args.upscale,
+                anisotropy=args.anisotropy,
+                ee_cycle_rate=args.ee_cycle_rate,
+                aspect=args.aspect,
+                enable_dump=args.enable_dump,
+                no_precache=args.no_precache,
+                dry_run=args.dry_run,
+            )
+        except Exception as exc:
+            if args.json:
+                print(json.dumps({"status": "error", "errors": [str(exc)]}, indent=2))
+            else:
+                print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+
+        if args.json:
+            print(json.dumps(result, indent=2))
+        elif rc != 0:
+            for err in result.get("errors", []):
+                print(f"ERROR: {err}", file=sys.stderr)
+            if result.get("stdout"):
+                print(result["stdout"], file=sys.stderr)
+            if result.get("stderr"):
+                print(result["stderr"], file=sys.stderr)
+        else:
+            print_build_human(result)
+        return rc
 
     if args.command == "dump-mode":
         enabled = args.state == "on"

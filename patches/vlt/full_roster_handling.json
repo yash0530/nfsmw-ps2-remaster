@@ -1,0 +1,2806 @@
+{
+  "schema_version": 1,
+  "id": "full_roster_handling",
+  "name": "NFSMW Rockport 2026 Full Roster Handling Overhaul",
+  "description": "Complete career & Black Edition 39-car handling, grip, steering, brake balance, and swaybar overhaul for SLUS-21351 GLOBAL\\ATTRIBUTES.BIN. Engineered with zero overlapping field offsets against modern_handling_tuning.json so both recipes apply cleanly standalone or stacked together.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+    "vault": "db"
+  },
+  "composition": {
+    "standalone_compatible": true,
+    "stacks_cleanly_with": [
+      "patches/vlt/modern_handling_tuning.json"
+    ],
+    "overlapping_offsets_with_modern_handling_tuning": 0,
+    "roster_cars_covered": 39
+  },
+  "patches": [
+    {
+      "class": "chassis",
+      "node": "bmwm3gtre46",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000865c",
+      "expected_orig": 200.0,
+      "new_value": 240.0,
+      "note": "BMW M3 GTR E46 (Race) firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "bmwm3gtre46",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008660",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "BMW M3 GTR E46 (Race) firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "m3gtre46careerstart",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00023c48",
+      "expected_orig": 1.15,
+      "new_value": 1.2,
+      "note": "BMW M3 GTR E46 (Prologue) improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "m3gtre46careerstart",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00023c4c",
+      "expected_orig": 1.2,
+      "new_value": 1.25,
+      "note": "BMW M3 GTR E46 (Prologue) planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "m3gtre46careerstart",
+      "field": "STEERING",
+      "expected_offset": "0x00023c78",
+      "expected_orig": 1.11,
+      "new_value": 1.14,
+      "note": "BMW M3 GTR E46 (Prologue) crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "m3gtre46careerstart",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000249e8",
+      "expected_orig": 475.0,
+      "new_value": 520.0,
+      "note": "BMW M3 GTR E46 (Prologue) stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "m3gtre46careerstart",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000249ec",
+      "expected_orig": 600.0,
+      "new_value": 635.0,
+      "note": "BMW M3 GTR E46 (Prologue) stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "m3gtre46careerstart",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000ab84",
+      "expected_orig": 330.0,
+      "new_value": 355.0,
+      "note": "BMW M3 GTR E46 (Prologue) firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "m3gtre46careerstart",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x0000ab88",
+      "expected_orig": 350.0,
+      "new_value": 375.0,
+      "note": "BMW M3 GTR E46 (Prologue) firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "bmwm3gtr",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022e38",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "BMW M3 GTR (Street) improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "bmwm3gtr",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022e3c",
+      "expected_orig": 1.0,
+      "new_value": 1.1,
+      "note": "BMW M3 GTR (Street) planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "bmwm3gtr",
+      "field": "STEERING",
+      "expected_offset": "0x00022e68",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "BMW M3 GTR (Street) crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "bmwm3gtr",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022e6c",
+      "expected_orig": 0.3,
+      "new_value": 0.38,
+      "note": "BMW M3 GTR (Street) balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "bmwm3gtr",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024858",
+      "expected_orig": 375.0,
+      "new_value": 435.0,
+      "note": "BMW M3 GTR (Street) stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "bmwm3gtr",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x0002485c",
+      "expected_orig": 500.0,
+      "new_value": 560.0,
+      "note": "BMW M3 GTR (Street) stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "bmwm3gtr",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000a770",
+      "expected_orig": 275.0,
+      "new_value": 310.0,
+      "note": "BMW M3 GTR (Street) firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "bmwm3gtr",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x0000a774",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "BMW M3 GTR (Street) firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "camaro",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022f28",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "1967 Chevrolet Camaro SS improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "camaro",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022f2c",
+      "expected_orig": 1.0,
+      "new_value": 1.09,
+      "note": "1967 Chevrolet Camaro SS planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "camaro",
+      "field": "STEERING",
+      "expected_offset": "0x00022f58",
+      "expected_orig": 1.1,
+      "new_value": 1.14,
+      "note": "1967 Chevrolet Camaro SS crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "camaro",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022f5c",
+      "expected_orig": 0.375,
+      "new_value": 0.44,
+      "note": "1967 Chevrolet Camaro SS balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "camaro",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000248bc",
+      "expected_orig": 300.0,
+      "new_value": 360.0,
+      "note": "1967 Chevrolet Camaro SS stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "camaro",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000248c0",
+      "expected_orig": 368.799988,
+      "new_value": 435.0,
+      "note": "1967 Chevrolet Camaro SS stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "camaro",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000096ac",
+      "expected_orig": 190.0,
+      "new_value": 230.0,
+      "note": "1967 Chevrolet Camaro SS firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "camaro",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000096b0",
+      "expected_orig": 195.0,
+      "new_value": 230.0,
+      "note": "1967 Chevrolet Camaro SS firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "corvettec6r",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00023518",
+      "expected_orig": 1.05,
+      "new_value": 1.11,
+      "note": "Chevrolet Corvette C6.R improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "corvettec6r",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002351c",
+      "expected_orig": 1.1,
+      "new_value": 1.16,
+      "note": "Chevrolet Corvette C6.R planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "corvettec6r",
+      "field": "STEERING",
+      "expected_offset": "0x00023548",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Chevrolet Corvette C6.R crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "corvettec6r",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002354c",
+      "expected_orig": 0.3,
+      "new_value": 0.38,
+      "note": "Chevrolet Corvette C6.R balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "corvettec6r",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024b64",
+      "expected_orig": 475.0,
+      "new_value": 520.0,
+      "note": "Chevrolet Corvette C6.R stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "corvettec6r",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024b68",
+      "expected_orig": 600.0,
+      "new_value": 640.0,
+      "note": "Chevrolet Corvette C6.R stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "corvettec6r",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000a6fc",
+      "expected_orig": 250.0,
+      "new_value": 280.0,
+      "note": "Chevrolet Corvette C6.R firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "corvettec6r",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x0000a700",
+      "expected_orig": 250.0,
+      "new_value": 280.0,
+      "note": "Chevrolet Corvette C6.R firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "911gt2",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022668",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Porsche 911 GT2 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "911gt2",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002266c",
+      "expected_orig": 1.0,
+      "new_value": 1.09,
+      "note": "Porsche 911 GT2 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "911gt2",
+      "field": "STEERING",
+      "expected_offset": "0x00022698",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Porsche 911 GT2 crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "911gt2",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002269c",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Porsche 911 GT2 balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "911gt2",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000245c4",
+      "expected_orig": 300.0,
+      "new_value": 355.0,
+      "note": "Porsche 911 GT2 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "911gt2",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000245c8",
+      "expected_orig": 500.0,
+      "new_value": 560.0,
+      "note": "Porsche 911 GT2 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "911gt2",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008ae4",
+      "expected_orig": 300.0,
+      "new_value": 335.0,
+      "note": "Porsche 911 GT2 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "911gt2",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008ae8",
+      "expected_orig": 320.0,
+      "new_value": 350.0,
+      "note": "Porsche 911 GT2 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "sl65",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022528",
+      "expected_orig": 1.05,
+      "new_value": 1.12,
+      "note": "Mercedes-Benz SL65 AMG improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "sl65",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002252c",
+      "expected_orig": 1.085,
+      "new_value": 1.17,
+      "note": "Mercedes-Benz SL65 AMG planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "sl65",
+      "field": "STEERING",
+      "expected_offset": "0x00022558",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Mercedes-Benz SL65 AMG crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "sl65",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002255c",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Mercedes-Benz SL65 AMG balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "sl65",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024754",
+      "expected_orig": 500.0,
+      "new_value": 560.0,
+      "note": "Mercedes-Benz SL65 AMG stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "sl65",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024758",
+      "expected_orig": 675.0,
+      "new_value": 730.0,
+      "note": "Mercedes-Benz SL65 AMG stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "sl65",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009794",
+      "expected_orig": 250.0,
+      "new_value": 285.0,
+      "note": "Mercedes-Benz SL65 AMG firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "sl65",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009798",
+      "expected_orig": 250.0,
+      "new_value": 285.0,
+      "note": "Mercedes-Benz SL65 AMG firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "carreragt",
+      "field": "STEERING",
+      "expected_offset": "0x00022328",
+      "expected_orig": 1.12,
+      "new_value": 1.15,
+      "note": "Porsche Carrera GT crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "carreragt",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002232c",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Porsche Carrera GT balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "carreragt",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x0002468c",
+      "expected_orig": 390.0,
+      "new_value": 450.0,
+      "note": "Porsche Carrera GT stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "carreragt",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024690",
+      "expected_orig": 500.0,
+      "new_value": 575.0,
+      "note": "Porsche Carrera GT stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "carreragt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000848c",
+      "expected_orig": 325.0,
+      "new_value": 360.0,
+      "note": "Porsche Carrera GT firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "carreragt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008490",
+      "expected_orig": 320.0,
+      "new_value": 355.0,
+      "note": "Porsche Carrera GT firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "gallardo",
+      "field": "STEERING",
+      "expected_offset": "0x00022738",
+      "expected_orig": 1.05,
+      "new_value": 1.09,
+      "note": "Lamborghini Gallardo crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "gallardo",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002273c",
+      "expected_orig": 0.425,
+      "new_value": 0.48,
+      "note": "Lamborghini Gallardo balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "gallardo",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024704",
+      "expected_orig": 400.0,
+      "new_value": 450.0,
+      "note": "Lamborghini Gallardo stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "gallardo",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024708",
+      "expected_orig": 650.0,
+      "new_value": 700.0,
+      "note": "Lamborghini Gallardo stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "gallardo",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000089fc",
+      "expected_orig": 330.0,
+      "new_value": 365.0,
+      "note": "Lamborghini Gallardo firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "gallardo",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008a00",
+      "expected_orig": 340.0,
+      "new_value": 375.0,
+      "note": "Lamborghini Gallardo firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "fordgt",
+      "field": "STEERING",
+      "expected_offset": "0x00023188",
+      "expected_orig": 1.1,
+      "new_value": 1.14,
+      "note": "Ford GT crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "fordgt",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002318c",
+      "expected_orig": 0.4,
+      "new_value": 0.47,
+      "note": "Ford GT balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "fordgt",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024880",
+      "expected_orig": 350.0,
+      "new_value": 420.0,
+      "note": "Ford GT stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "fordgt",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024884",
+      "expected_orig": 500.0,
+      "new_value": 575.0,
+      "note": "Ford GT stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "fordgt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009a4c",
+      "expected_orig": 300.0,
+      "new_value": 335.0,
+      "note": "Ford GT firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "fordgt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009a50",
+      "expected_orig": 200.0,
+      "new_value": 245.0,
+      "note": "Ford GT firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "corvette",
+      "field": "STEERING",
+      "expected_offset": "0x000225f8",
+      "expected_orig": 1.1,
+      "new_value": 1.14,
+      "note": "Chevrolet Corvette C6 crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "corvette",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024628",
+      "expected_orig": 340.0,
+      "new_value": 410.0,
+      "note": "Chevrolet Corvette C6 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "corvette",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x0002462c",
+      "expected_orig": 480.0,
+      "new_value": 550.0,
+      "note": "Chevrolet Corvette C6 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "corvette",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000882c",
+      "expected_orig": 200.0,
+      "new_value": 245.0,
+      "note": "Chevrolet Corvette C6 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "corvette",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008830",
+      "expected_orig": 210.0,
+      "new_value": 255.0,
+      "note": "Chevrolet Corvette C6 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "murcielago",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022618",
+      "expected_orig": 1.1,
+      "new_value": 1.15,
+      "note": "Lamborghini Murcielago improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "murcielago",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002261c",
+      "expected_orig": 1.1,
+      "new_value": 1.16,
+      "note": "Lamborghini Murcielago planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "murcielago",
+      "field": "STEERING",
+      "expected_offset": "0x00022648",
+      "expected_orig": 1.05,
+      "new_value": 1.09,
+      "note": "Lamborghini Murcielago crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "murcielago",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002264c",
+      "expected_orig": 0.35,
+      "new_value": 0.42,
+      "note": "Lamborghini Murcielago balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "murcielago",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024650",
+      "expected_orig": 400.0,
+      "new_value": 455.0,
+      "note": "Lamborghini Murcielago stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "murcielago",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024654",
+      "expected_orig": 650.0,
+      "new_value": 710.0,
+      "note": "Lamborghini Murcielago stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "murcielago",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008988",
+      "expected_orig": 500.0,
+      "new_value": 530.0,
+      "note": "Lamborghini Murcielago firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "murcielago",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x0000898c",
+      "expected_orig": 470.0,
+      "new_value": 500.0,
+      "note": "Lamborghini Murcielago firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "slr",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022fc8",
+      "expected_orig": 1.15,
+      "new_value": 1.2,
+      "note": "Mercedes-Benz SLR McLaren improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "slr",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022fcc",
+      "expected_orig": 1.14,
+      "new_value": 1.2,
+      "note": "Mercedes-Benz SLR McLaren planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "slr",
+      "field": "STEERING",
+      "expected_offset": "0x00022ff8",
+      "expected_orig": 1.04,
+      "new_value": 1.08,
+      "note": "Mercedes-Benz SLR McLaren crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "slr",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022ffc",
+      "expected_orig": 0.45,
+      "new_value": 0.5,
+      "note": "Mercedes-Benz SLR McLaren balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "slr",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024768",
+      "expected_orig": 475.0,
+      "new_value": 530.0,
+      "note": "Mercedes-Benz SLR McLaren stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "slr",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x0002476c",
+      "expected_orig": 575.0,
+      "new_value": 630.0,
+      "note": "Mercedes-Benz SLR McLaren stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "slr",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000987c",
+      "expected_orig": 300.0,
+      "new_value": 335.0,
+      "note": "Mercedes-Benz SLR McLaren firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "slr",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009880",
+      "expected_orig": 350.0,
+      "new_value": 380.0,
+      "note": "Mercedes-Benz SLR McLaren firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "viper",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000228e8",
+      "expected_orig": 1.15,
+      "new_value": 1.2,
+      "note": "Dodge Viper SRT-10 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "viper",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000228ec",
+      "expected_orig": 1.15,
+      "new_value": 1.22,
+      "note": "Dodge Viper SRT-10 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "viper",
+      "field": "STEERING",
+      "expected_offset": "0x00022918",
+      "expected_orig": 1.05,
+      "new_value": 1.1,
+      "note": "Dodge Viper SRT-10 crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "viper",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002291c",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Dodge Viper SRT-10 balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "viper",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024844",
+      "expected_orig": 368.799988,
+      "new_value": 430.0,
+      "note": "Dodge Viper SRT-10 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "viper",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024848",
+      "expected_orig": 600.0,
+      "new_value": 660.0,
+      "note": "Dodge Viper SRT-10 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "viper",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008d9c",
+      "expected_orig": 150.0,
+      "new_value": 195.0,
+      "note": "Dodge Viper SRT-10 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "viper",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008da0",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Dodge Viper SRT-10 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "911turbo",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022578",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Porsche 911 Turbo S improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "911turbo",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002257c",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Porsche 911 Turbo S planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "911turbo",
+      "field": "STEERING",
+      "expected_offset": "0x000225a8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Porsche 911 Turbo S crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "911turbo",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x0002459c",
+      "expected_orig": 300.0,
+      "new_value": 360.0,
+      "note": "Porsche 911 Turbo S stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "911turbo",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000245a0",
+      "expected_orig": 550.0,
+      "new_value": 615.0,
+      "note": "Porsche 911 Turbo S stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "911turbo",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000088a0",
+      "expected_orig": 300.0,
+      "new_value": 335.0,
+      "note": "Porsche 911 Turbo S firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "911turbo",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000088a4",
+      "expected_orig": 250.0,
+      "new_value": 285.0,
+      "note": "Porsche 911 Turbo S firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "db9",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000223e8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Aston Martin DB9 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "db9",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000223ec",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Aston Martin DB9 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "db9",
+      "field": "STEERING",
+      "expected_offset": "0x00022418",
+      "expected_orig": 1.05,
+      "new_value": 1.09,
+      "note": "Aston Martin DB9 crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "db9",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002241c",
+      "expected_orig": 0.45,
+      "new_value": 0.5,
+      "note": "Aston Martin DB9 balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "db9",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000246b4",
+      "expected_orig": 410.0,
+      "new_value": 470.0,
+      "note": "Aston Martin DB9 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "db9",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000246b8",
+      "expected_orig": 550.0,
+      "new_value": 605.0,
+      "note": "Aston Martin DB9 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "db9",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000087b8",
+      "expected_orig": 270.0,
+      "new_value": 305.0,
+      "note": "Aston Martin DB9 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "db9",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000087bc",
+      "expected_orig": 200.0,
+      "new_value": 240.0,
+      "note": "Aston Martin DB9 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "997s",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000227f8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Porsche 911 Carrera S improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "997s",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000227fc",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Porsche 911 Carrera S planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "997s",
+      "field": "STEERING",
+      "expected_offset": "0x00022828",
+      "expected_orig": 1.075,
+      "new_value": 1.11,
+      "note": "Porsche 911 Carrera S crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "997s",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x0002477c",
+      "expected_orig": 350.0,
+      "new_value": 415.0,
+      "note": "Porsche 911 Carrera S stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "997s",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024780",
+      "expected_orig": 553.0,
+      "new_value": 610.0,
+      "note": "Porsche 911 Carrera S stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "997s",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008c40",
+      "expected_orig": 300.0,
+      "new_value": 335.0,
+      "note": "Porsche 911 Carrera S firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "997s",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008c44",
+      "expected_orig": 275.0,
+      "new_value": 310.0,
+      "note": "Porsche 911 Carrera S firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "caymans",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022de8",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Porsche Cayman S improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "caymans",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022dec",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Porsche Cayman S planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "caymans",
+      "field": "STEERING",
+      "expected_offset": "0x00022e18",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Porsche Cayman S crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "caymans",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022e1c",
+      "expected_orig": 0.425,
+      "new_value": 0.48,
+      "note": "Porsche Cayman S balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "caymans",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024894",
+      "expected_orig": 351.0,
+      "new_value": 415.0,
+      "note": "Porsche Cayman S stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "caymans",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024898",
+      "expected_orig": 550.0,
+      "new_value": 605.0,
+      "note": "Porsche Cayman S stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "caymans",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009964",
+      "expected_orig": 300.0,
+      "new_value": 335.0,
+      "note": "Porsche Cayman S firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "caymans",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009968",
+      "expected_orig": 275.0,
+      "new_value": 310.0,
+      "note": "Porsche Cayman S firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "elise",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022ac8",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Lotus Elise 111R improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "elise",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022acc",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Lotus Elise 111R planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "elise",
+      "field": "STEERING",
+      "expected_offset": "0x00022af8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Lotus Elise 111R crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "elise",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022afc",
+      "expected_orig": 0.4,
+      "new_value": 0.47,
+      "note": "Lotus Elise 111R balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "elise",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x0002472c",
+      "expected_orig": 280.0,
+      "new_value": 340.0,
+      "note": "Lotus Elise 111R stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "elise",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024730",
+      "expected_orig": 350.0,
+      "new_value": 415.0,
+      "note": "Lotus Elise 111R stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "elise",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000086d0",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Lotus Elise 111R firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "elise",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000086d4",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Lotus Elise 111R firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "clk500",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00023018",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mercedes-Benz CLK 500 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "clk500",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002301c",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Mercedes-Benz CLK 500 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "clk500",
+      "field": "STEERING",
+      "expected_offset": "0x00023048",
+      "expected_orig": 1.05,
+      "new_value": 1.09,
+      "note": "Mercedes-Benz CLK 500 crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "clk500",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x0002304c",
+      "expected_orig": 0.5,
+      "new_value": 0.54,
+      "note": "Mercedes-Benz CLK 500 balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "clk500",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000247cc",
+      "expected_orig": 345.0,
+      "new_value": 405.0,
+      "note": "Mercedes-Benz CLK 500 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "clk500",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000247d0",
+      "expected_orig": 500.0,
+      "new_value": 560.0,
+      "note": "Mercedes-Benz CLK 500 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "clk500",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009468",
+      "expected_orig": 200.0,
+      "new_value": 240.0,
+      "note": "Mercedes-Benz CLK 500 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "clk500",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x0000946c",
+      "expected_orig": 200.0,
+      "new_value": 240.0,
+      "note": "Mercedes-Benz CLK 500 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "sl500",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000229d8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mercedes-Benz SL 500 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "sl500",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000229dc",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Mercedes-Benz SL 500 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "sl500",
+      "field": "STEERING",
+      "expected_offset": "0x00022a08",
+      "expected_orig": 1.05,
+      "new_value": 1.09,
+      "note": "Mercedes-Benz SL 500 crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "sl500",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022a0c",
+      "expected_orig": 0.4,
+      "new_value": 0.47,
+      "note": "Mercedes-Benz SL 500 balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "sl500",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000247a4",
+      "expected_orig": 345.0,
+      "new_value": 405.0,
+      "note": "Mercedes-Benz SL 500 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "sl500",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000247a8",
+      "expected_orig": 420.0,
+      "new_value": 485.0,
+      "note": "Mercedes-Benz SL 500 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "sl500",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008ef8",
+      "expected_orig": 250.0,
+      "new_value": 285.0,
+      "note": "Mercedes-Benz SL 500 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "sl500",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008efc",
+      "expected_orig": 250.0,
+      "new_value": 285.0,
+      "note": "Mercedes-Benz SL 500 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "mustanggt",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022758",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Ford Mustang GT improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "mustanggt",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002275c",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Ford Mustang GT planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "mustanggt",
+      "field": "STEERING",
+      "expected_offset": "0x00022788",
+      "expected_orig": 1.025,
+      "new_value": 1.08,
+      "note": "Ford Mustang GT crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "mustanggt",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024718",
+      "expected_orig": 360.0,
+      "new_value": 420.0,
+      "note": "Ford Mustang GT stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "mustanggt",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x0002471c",
+      "expected_orig": 500.0,
+      "new_value": 560.0,
+      "note": "Ford Mustang GT stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "mustanggt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008b58",
+      "expected_orig": 185.0,
+      "new_value": 225.0,
+      "note": "Ford Mustang GT firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "mustanggt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008b5c",
+      "expected_orig": 185.0,
+      "new_value": 220.0,
+      "note": "Ford Mustang GT firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "gto",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000231a8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Pontiac GTO improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "gto",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000231ac",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Pontiac GTO planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "gto",
+      "field": "STEERING",
+      "expected_offset": "0x000231d8",
+      "expected_orig": 1.12,
+      "new_value": 1.15,
+      "note": "Pontiac GTO crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "gto",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x000231dc",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Pontiac GTO balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "gto",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024600",
+      "expected_orig": 359.0,
+      "new_value": 425.0,
+      "note": "Pontiac GTO stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "gto",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024604",
+      "expected_orig": 475.0,
+      "new_value": 540.0,
+      "note": "Pontiac GTO stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "gto",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000099d8",
+      "expected_orig": 175.0,
+      "new_value": 215.0,
+      "note": "Pontiac GTO firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "gto",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000099dc",
+      "expected_orig": 175.0,
+      "new_value": 215.0,
+      "note": "Pontiac GTO firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "monaro",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022488",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Vauxhall Monaro VXR improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "monaro",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002248c",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Vauxhall Monaro VXR planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "monaro",
+      "field": "STEERING",
+      "expected_offset": "0x000224b8",
+      "expected_orig": 1.07,
+      "new_value": 1.11,
+      "note": "Vauxhall Monaro VXR crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "monaro",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024678",
+      "expected_orig": 359.0,
+      "new_value": 425.0,
+      "note": "Vauxhall Monaro VXR stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "monaro",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x0002467c",
+      "expected_orig": 475.0,
+      "new_value": 540.0,
+      "note": "Vauxhall Monaro VXR stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "monaro",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000085e8",
+      "expected_orig": 175.0,
+      "new_value": 215.0,
+      "note": "Vauxhall Monaro VXR firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "monaro",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000085ec",
+      "expected_orig": 175.0,
+      "new_value": 215.0,
+      "note": "Vauxhall Monaro VXR firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "cts",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022898",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Cadillac CTS improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "cts",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002289c",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Cadillac CTS planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "cts",
+      "field": "STEERING",
+      "expected_offset": "0x000228c8",
+      "expected_orig": 1.05,
+      "new_value": 1.1,
+      "note": "Cadillac CTS crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "cts",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x000228cc",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Cadillac CTS balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "cts",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024830",
+      "expected_orig": 400.0,
+      "new_value": 455.0,
+      "note": "Cadillac CTS stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "cts",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024834",
+      "expected_orig": 553.0,
+      "new_value": 610.0,
+      "note": "Cadillac CTS stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "cts",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008d28",
+      "expected_orig": 200.0,
+      "new_value": 240.0,
+      "note": "Cadillac CTS firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "cts",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008d2c",
+      "expected_orig": 200.0,
+      "new_value": 240.0,
+      "note": "Cadillac CTS firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "supra",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022a28",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Toyota Supra improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "supra",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022a2c",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Toyota Supra planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "supra",
+      "field": "STEERING",
+      "expected_offset": "0x00022a58",
+      "expected_orig": 1.05,
+      "new_value": 1.09,
+      "note": "Toyota Supra crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "supra",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022a5c",
+      "expected_orig": 0.48,
+      "new_value": 0.53,
+      "note": "Toyota Supra balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "supra",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000245b0",
+      "expected_orig": 350.0,
+      "new_value": 415.0,
+      "note": "Toyota Supra stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "supra",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000245b4",
+      "expected_orig": 480.0,
+      "new_value": 545.0,
+      "note": "Toyota Supra stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "supra",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000913c",
+      "expected_orig": 300.0,
+      "new_value": 330.0,
+      "note": "Toyota Supra firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "supra",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009140",
+      "expected_orig": 300.0,
+      "new_value": 330.0,
+      "note": "Toyota Supra firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "rx7",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022d48",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mazda RX-7 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "rx7",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022d4c",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Mazda RX-7 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "rx7",
+      "field": "STEERING",
+      "expected_offset": "0x00022d78",
+      "expected_orig": 1.08,
+      "new_value": 1.12,
+      "note": "Mazda RX-7 crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "rx7",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x0002481c",
+      "expected_orig": 330.200012,
+      "new_value": 390.0,
+      "note": "Mazda RX-7 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "rx7",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024820",
+      "expected_orig": 430.0,
+      "new_value": 495.0,
+      "note": "Mazda RX-7 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "rx7",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000093f4",
+      "expected_orig": 200.0,
+      "new_value": 240.0,
+      "note": "Mazda RX-7 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "rx7",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000093f8",
+      "expected_orig": 300.0,
+      "new_value": 330.0,
+      "note": "Mazda RX-7 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "rx8",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022cf8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mazda RX-8 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "rx8",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022cfc",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Mazda RX-8 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "rx8",
+      "field": "STEERING",
+      "expected_offset": "0x00022d28",
+      "expected_orig": 1.075,
+      "new_value": 1.11,
+      "note": "Mazda RX-8 crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "rx8",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024808",
+      "expected_orig": 380.0,
+      "new_value": 435.0,
+      "note": "Mazda RX-8 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "rx8",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x0002480c",
+      "expected_orig": 500.0,
+      "new_value": 560.0,
+      "note": "Mazda RX-8 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "rx8",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009380",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Mazda RX-8 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "rx8",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009384",
+      "expected_orig": 185.0,
+      "new_value": 225.0,
+      "note": "Mazda RX-8 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "lancerevo8",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022c08",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mitsubishi Lancer Evo VIII improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "lancerevo8",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022c0c",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mitsubishi Lancer Evo VIII planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "lancerevo8",
+      "field": "STEERING",
+      "expected_offset": "0x00022c38",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mitsubishi Lancer Evo VIII crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "lancerevo8",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024588",
+      "expected_orig": 400.0,
+      "new_value": 460.0,
+      "note": "Mitsubishi Lancer Evo VIII stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "lancerevo8",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x0002458c",
+      "expected_orig": 475.0,
+      "new_value": 530.0,
+      "note": "Mitsubishi Lancer Evo VIII stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "lancerevo8",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009298",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Mitsubishi Lancer Evo VIII firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "lancerevo8",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x0000929c",
+      "expected_orig": 270.0,
+      "new_value": 300.0,
+      "note": "Mitsubishi Lancer Evo VIII firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "imprezawrx",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022bb8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Subaru Impreza WRX STi improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "imprezawrx",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022bbc",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Subaru Impreza WRX STi planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "imprezawrx",
+      "field": "STEERING",
+      "expected_offset": "0x00022be8",
+      "expected_orig": 1.07,
+      "new_value": 1.1,
+      "note": "Subaru Impreza WRX STi crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "imprezawrx",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022bec",
+      "expected_orig": 0.4,
+      "new_value": 0.47,
+      "note": "Subaru Impreza WRX STi balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "imprezawrx",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x0002463c",
+      "expected_orig": 360.0,
+      "new_value": 420.0,
+      "note": "Subaru Impreza WRX STi stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "imprezawrx",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024640",
+      "expected_orig": 500.0,
+      "new_value": 560.0,
+      "note": "Subaru Impreza WRX STi stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "imprezawrx",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000091b0",
+      "expected_orig": 210.0,
+      "new_value": 245.0,
+      "note": "Subaru Impreza WRX STi firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "imprezawrx",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000091b4",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Subaru Impreza WRX STi firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "eclipsegt",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000230b8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mitsubishi Eclipse GT improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "eclipsegt",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000230bc",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mitsubishi Eclipse GT planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "eclipsegt",
+      "field": "STEERING",
+      "expected_offset": "0x000230e8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Mitsubishi Eclipse GT crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "eclipsegt",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x000230ec",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Mitsubishi Eclipse GT balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "eclipsegt",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000247f4",
+      "expected_orig": 300.0,
+      "new_value": 355.0,
+      "note": "Mitsubishi Eclipse GT stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "eclipsegt",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000247f8",
+      "expected_orig": 550.0,
+      "new_value": 605.0,
+      "note": "Mitsubishi Eclipse GT stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "eclipsegt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009808",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Mitsubishi Eclipse GT firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "eclipsegt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x0000980c",
+      "expected_orig": 150.0,
+      "new_value": 190.0,
+      "note": "Mitsubishi Eclipse GT firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "is300",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022b68",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Lexus IS 300 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "is300",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022b6c",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Lexus IS 300 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "is300",
+      "field": "STEERING",
+      "expected_offset": "0x00022b98",
+      "expected_orig": 1.025,
+      "new_value": 1.07,
+      "note": "Lexus IS 300 crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "is300",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022b9c",
+      "expected_orig": 0.45,
+      "new_value": 0.5,
+      "note": "Lexus IS 300 balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "is300",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000245d8",
+      "expected_orig": 300.0,
+      "new_value": 355.0,
+      "note": "Lexus IS 300 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "is300",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000245dc",
+      "expected_orig": 425.0,
+      "new_value": 485.0,
+      "note": "Lexus IS 300 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "is300",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x0000930c",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Lexus IS 300 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "is300",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009310",
+      "expected_orig": 250.0,
+      "new_value": 280.0,
+      "note": "Lexus IS 300 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "tt",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022a78",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Audi TT 3.2 quattro improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "tt",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022a7c",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Audi TT 3.2 quattro planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "tt",
+      "field": "STEERING",
+      "expected_offset": "0x00022aa8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Audi TT 3.2 quattro crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "tt",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022aac",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Audi TT 3.2 quattro balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "tt",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024574",
+      "expected_orig": 360.0,
+      "new_value": 420.0,
+      "note": "Audi TT 3.2 quattro stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "tt",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024578",
+      "expected_orig": 520.0,
+      "new_value": 580.0,
+      "note": "Audi TT 3.2 quattro stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "tt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009054",
+      "expected_orig": 270.0,
+      "new_value": 300.0,
+      "note": "Audi TT 3.2 quattro firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "tt",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009058",
+      "expected_orig": 260.0,
+      "new_value": 290.0,
+      "note": "Audi TT 3.2 quattro firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "a4",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022ed8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Audi A4 3.2 FSI quattro improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "a4",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022edc",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Audi A4 3.2 FSI quattro planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "a4",
+      "field": "STEERING",
+      "expected_offset": "0x00022f08",
+      "expected_orig": 1.0758,
+      "new_value": 1.11,
+      "note": "Audi A4 3.2 FSI quattro crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "a4",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000247b8",
+      "expected_orig": 310.0,
+      "new_value": 365.0,
+      "note": "Audi A4 3.2 FSI quattro stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "a4",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000247bc",
+      "expected_orig": 525.0,
+      "new_value": 580.0,
+      "note": "Audi A4 3.2 FSI quattro stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "a4",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x000098f0",
+      "expected_orig": 300.0,
+      "new_value": 330.0,
+      "note": "Audi A4 3.2 FSI quattro firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "a4",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x000098f4",
+      "expected_orig": 270.0,
+      "new_value": 305.0,
+      "note": "Audi A4 3.2 FSI quattro firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "a3",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022f78",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Audi A3 3.2 quattro improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "a3",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x00022f7c",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Audi A3 3.2 quattro planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "a3",
+      "field": "STEERING",
+      "expected_offset": "0x00022fa8",
+      "expected_orig": 1.075,
+      "new_value": 1.11,
+      "note": "Audi A3 3.2 quattro crisper steering response"
+    },
+    {
+      "class": "brakes",
+      "node": "a3",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000248d0",
+      "expected_orig": 370.0,
+      "new_value": 430.0,
+      "note": "Audi A3 3.2 quattro stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "a3",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000248d4",
+      "expected_orig": 475.0,
+      "new_value": 530.0,
+      "note": "Audi A3 3.2 quattro stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "a3",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009720",
+      "expected_orig": 220.0,
+      "new_value": 255.0,
+      "note": "Audi A3 3.2 quattro firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "a3",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009724",
+      "expected_orig": 230.0,
+      "new_value": 265.0,
+      "note": "Audi A3 3.2 quattro firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "gti",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x000227a8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Volkswagen Golf GTI improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "gti",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x000227ac",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Volkswagen Golf GTI planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "gti",
+      "field": "STEERING",
+      "expected_offset": "0x000227d8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Volkswagen Golf GTI crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "gti",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x000227dc",
+      "expected_orig": 0.35,
+      "new_value": 0.43,
+      "note": "Volkswagen Golf GTI balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "gti",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x00024790",
+      "expected_orig": 300.0,
+      "new_value": 355.0,
+      "note": "Volkswagen Golf GTI stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "gti",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x00024794",
+      "expected_orig": 400.0,
+      "new_value": 455.0,
+      "note": "Volkswagen Golf GTI stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "gti",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008bcc",
+      "expected_orig": 250.0,
+      "new_value": 285.0,
+      "note": "Volkswagen Golf GTI firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "gti",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008bd0",
+      "expected_orig": 200.0,
+      "new_value": 235.0,
+      "note": "Volkswagen Golf GTI firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "cobaltss",
+      "field": "STEERING",
+      "expected_offset": "0x00022dc8",
+      "expected_orig": 1.05,
+      "new_value": 1.09,
+      "note": "Chevrolet Cobalt SS crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "cobaltss",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x00022dcc",
+      "expected_orig": 0.4,
+      "new_value": 0.46,
+      "note": "Chevrolet Cobalt SS balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "cobaltss",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000248a8",
+      "expected_orig": 280.0,
+      "new_value": 330.0,
+      "note": "Chevrolet Cobalt SS stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "cobaltss",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000248ac",
+      "expected_orig": 400.0,
+      "new_value": 455.0,
+      "note": "Chevrolet Cobalt SS stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "cobaltss",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00009550",
+      "expected_orig": 200.0,
+      "new_value": 240.0,
+      "note": "Chevrolet Cobalt SS firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "cobaltss",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00009554",
+      "expected_orig": 180.0,
+      "new_value": 220.0,
+      "note": "Chevrolet Cobalt SS firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "clio",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022398",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Renault Clio V6 improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "clio",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002239c",
+      "expected_orig": 1.0,
+      "new_value": 1.07,
+      "note": "Renault Clio V6 planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "clio",
+      "field": "STEERING",
+      "expected_offset": "0x000223c8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Renault Clio V6 crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "clio",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x000223cc",
+      "expected_orig": 0.3,
+      "new_value": 0.39,
+      "note": "Renault Clio V6 balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "clio",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000246a0",
+      "expected_orig": 325.0,
+      "new_value": 385.0,
+      "note": "Renault Clio V6 stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "clio",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000246a4",
+      "expected_orig": 450.0,
+      "new_value": 510.0,
+      "note": "Renault Clio V6 stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "clio",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008574",
+      "expected_orig": 220.0,
+      "new_value": 255.0,
+      "note": "Renault Clio V6 firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "clio",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008578",
+      "expected_orig": 175.0,
+      "new_value": 215.0,
+      "note": "Renault Clio V6 firmer rear anti-roll bar"
+    },
+    {
+      "class": "tires",
+      "node": "punto",
+      "field": "GRIP_SCALE",
+      "member": "Front",
+      "expected_offset": "0x00022988",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Fiat Punto improved front turn-in grip"
+    },
+    {
+      "class": "tires",
+      "node": "punto",
+      "field": "GRIP_SCALE",
+      "member": "Rear",
+      "expected_offset": "0x0002298c",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Fiat Punto planted rear traction"
+    },
+    {
+      "class": "tires",
+      "node": "punto",
+      "field": "STEERING",
+      "expected_offset": "0x000229b8",
+      "expected_orig": 1.0,
+      "new_value": 1.06,
+      "note": "Fiat Punto crisper steering response"
+    },
+    {
+      "class": "tires",
+      "node": "punto",
+      "field": "YAW_SPEED",
+      "expected_offset": "0x000229bc",
+      "expected_orig": 0.3,
+      "new_value": 0.38,
+      "note": "Fiat Punto balanced yaw transition"
+    },
+    {
+      "class": "brakes",
+      "node": "punto",
+      "field": "BRAKES",
+      "member": "Front",
+      "expected_offset": "0x000247e0",
+      "expected_orig": 325.0,
+      "new_value": 375.0,
+      "note": "Fiat Punto stronger front braking bite"
+    },
+    {
+      "class": "brakes",
+      "node": "punto",
+      "field": "BRAKES",
+      "member": "Rear",
+      "expected_offset": "0x000247e4",
+      "expected_orig": 450.0,
+      "new_value": 505.0,
+      "note": "Fiat Punto stronger rear brake stability"
+    },
+    {
+      "class": "chassis",
+      "node": "punto",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Front",
+      "expected_offset": "0x00008e84",
+      "expected_orig": 150.0,
+      "new_value": 185.0,
+      "note": "Fiat Punto firmer front anti-roll bar"
+    },
+    {
+      "class": "chassis",
+      "node": "punto",
+      "field": "SWAYBAR_STIFFNESS",
+      "member": "Rear",
+      "expected_offset": "0x00008e88",
+      "expected_orig": 150.0,
+      "new_value": 185.0,
+      "note": "Fiat Punto firmer rear anti-roll bar"
+    }
+  ]
+}

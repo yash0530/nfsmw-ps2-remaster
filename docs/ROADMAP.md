@@ -138,6 +138,6 @@ Great remaster engineering starts with total honesty about hardware and emulator
 | :--- | :--- | :--- |
 | **Phase 1** | `v0.1` *(Done)* | Verified `SLUS-21351` forensics, clean-room repo & policy, baseline visual `.pnach` & v0.1 ISO |
 | **Phase 2** | `v0.2` *(Done)* | Full PS2 VLT patcher (`56/56` classes, `GLOBALMEMORYFILE` sync), `19` MIPS patches (`60Hz` EFX, High-LOD, 5-face reflections, 3× scenery), `94.2%` ZDIR + `JDLZ` + `ZZDATA3` append, CC0 PBR wet-road baker, 4K HUD kit, `721` TPK catalog, PCSX2 2.6.3 Metal + CI |
-| **Phase 3** | `v0.3` *(In Progress — Wave 2)* | `GLOBALB.LZC` `SunInfos`/`LightMaterials` editor, PS2 GS TPK pixel extraction + perceptual dump auto-matcher, `ABKC`/`Gnsu` audio & `GEOMETRY.BIN` mesh inspectors, full-roster handling & preset ISO profiles |
-| **Phase 4** | `v0.8` | `ps2sdk` compiled C plugin loader, CC0 audio & event authoring, expanded `ZZDATA3`/`mkps2iso` upgrades |
+| **Phase 3** | `v0.3` *(Done)* | `GLOBALB.LZC` `SunInfos`/`LightMaterials` daylight & golden-hour editor (dual-synced `GLOBALMEMORYFILE`), `916`-texture PS2 GS TPK pixel decoder + perceptual dump auto-matcher, `ABKC`/`Gnsu`/`SCHl` audio & `0x80134000` VU1 `.obj` geometry inspectors, 39-car `full_roster_handling` (`360` VLT edits), `6` curated presets & one-command `rockport_cli.py build` |
+| **Phase 4** | `v0.8` *(Next)* | `ps2sdk` compiled C plugin loader, CC0 audio & event authoring, full Rockport 4K texture replacement dump pack |
 | **Phase 5** | `v1.0` | `librashader` Metal `.slangp` multi-pass shaders, ARM64 JIT readiness, full community modding ecosystem |

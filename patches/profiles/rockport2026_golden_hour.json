@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "profile_id": "rockport2026_golden_hour",
+  "name": "NFSMW: Rockport 2026 — Golden Hour Remaster (Forza Sunset + Full 39-Car Roster)",
+  "description": "Golden-hour sunset edition for SLUS-21351: combines the 7 verified MIPS ELF visual/LOD/60fps patches and all 5 VLT recipes (360 edits across camera, 39-car roster handling, traffic, pursuits, visuallook) with Forza Horizon-inspired Golden Hour SunInfos + LightMaterials lighting (52 edits) and dual-synced GLOBALMEMORYFILE.BIN.",
+  "target": {
+    "game": "Need for Speed: Most Wanted - Black Edition (NTSC-U)",
+    "serial": "SLUS-21351",
+    "elf_name": "SLUS_213.51",
+    "elf_pcsx2_crc": "0518D274"
+  },
+  "output_filename": "NFSMW_BlackEdition_Rockport2026_GoldenHour.iso",
+  "elf_patches": {
+    "spec": "patches/elf_patches.json",
+    "include_ids": [
+      "remove_brown_filter",
+      "remove_motion_blur",
+      "widescreen_16_9_native",
+      "high_lod_cars",
+      "full_rate_car_reflections",
+      "extended_scenery_draw_distance",
+      "screen_efx_60fps_timing"
+    ],
+    "include_optional": false
+  },
+  "vlt_recipes": [
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/modern_camera.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/modern_handling_tuning.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/full_roster_handling.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/pursuit_and_traffic.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/modern_visual_look.json"
+    }
+  ],
+  "lighting_recipes": [
+    "patches/lighting/rockport2026_golden_hour.json"
+  ],
+  "zz_overrides": [],
+  "allow_zzdata3_append": true
+}

@@ -1,33 +1,41 @@
 # NFSMW: Rockport 2026 — Reproducible Build & macOS PCSX2 Workflow
 # Usage:
 #   make status
+#   make profiles
 #   make verify
-#   make build-v0.2 ISO="/path/to/Need for Speed - Most Wanted - Black Edition.iso"
-#   make setup-pcsx2
+#   make build PROFILE=rockport2026_v0.3 ISO="/path/to/Need for Speed - Most Wanted - Black Edition.iso"
 
 ISO ?= $(HOME)/Documents/PS2Games/Need for Speed - Most Wanted - Black Edition.iso
-PROFILE ?= patches/profiles/rockport2026_v0.2.json
+PROFILE ?= rockport2026_v0.3
 PYTHON ?= python3
 
-.PHONY: help status verify test lint audit inspect zdir vlt build-v0.2 setup-pcsx2 cc0-search hud-pack
+.PHONY: help status profiles verify test lint audit inspect zdir vlt lighting audio geometry tpk-extract build build-v0.2 build-v0.3 setup-pcsx2 cc0-search hud-pack
 
 help:
-	@echo "NFSMW: Rockport 2026 — Open-Source PS2 Remaster Toolchain (v0.2)"
+	@echo "NFSMW: Rockport 2026 — Open-Source PS2 Remaster Toolchain (v0.3)"
 	@echo ""
 	@echo "Targets:"
-	@echo "  make status      - Show ISO, modded build, PCSX2 profile, and tool readiness"
-	@echo "  make verify      - Run py_compile, hygiene audit, pnach lint, and all unit tests"
+	@echo "  make status      - Show ISO, modded builds, PCSX2 profile, and tool readiness"
+	@echo "  make profiles    - Validate and compare all preset build profiles"
+	@echo "  make verify      - Run py_compile, hygiene audit, pnach lint, and all tests"
 	@echo "  make test        - Run full unittest suite"
 	@echo "  make inspect     - Read-only inspection of source PS2 ISO & ZDIR.BIN"
 	@echo "  make zdir        - List resolved virtual files inside ZZDATA0..3.BIN"
 	@echo "  make vlt         - List decoded VLT classes inside GLOBAL\\ATTRIBUTES.BIN"
-	@echo "  make build-v0.2  - Non-destructively build v0.2 modded ISO from $(PROFILE)"
+	@echo "  make lighting    - Inspect SunInfos, LightMaterials & MemoryFile inside GLOBALB.LZC"
+	@echo "  make audio       - Summarize PS2 ABKC, Gnsu, and SCHl audio containers"
+	@echo "  make geometry    - Inspect BMW M3 GTR GEOMETRY.BIN meshes & LODs"
+	@echo "  make tpk-extract - Decode embedded PS2 TPK textures read-only into build/tpk_extracted"
+	@echo "  make build       - One-command build + PCSX2 4K Metal 60fps install for $(PROFILE)"
 	@echo "  make setup-pcsx2 - Install 4K Metal 60fps per-game PCSX2 settings (macOS)"
 	@echo "  make cc0-search  - Search Poly Haven CC0 asphalt/road textures"
 	@echo "  make hud-pack    - Render full 4K dual-theme procedural HUD kits"
 
 status:
 	$(PYTHON) tools/rockport_cli.py status
+
+profiles:
+	$(PYTHON) tools/rockport_cli.py profiles
 
 verify:
 	$(PYTHON) tools/rockport_cli.py verify
@@ -50,8 +58,26 @@ zdir:
 vlt:
 	$(PYTHON) tools/vlt_ps2.py classes "$(ISO)"
 
+lighting:
+	$(PYTHON) tools/lighting_ps2.py inspect "$(ISO)" --sun MIDDAY --material ROAD
+
+audio:
+	$(PYTHON) tools/audio_inspect.py summary "$(ISO)"
+
+geometry:
+	$(PYTHON) tools/geometry_inspect.py inspect "$(ISO)" "CARS\\BMWM3GTRE46\\GEOMETRY.BIN"
+
+tpk-extract:
+	$(PYTHON) tools/tpk_extract.py extract "$(ISO)" --all --out build/tpk_extracted
+
+build:
+	$(PYTHON) tools/rockport_cli.py build --profile "$(PROFILE)" --source "$(ISO)" --install-pcsx2 --renderer metal --upscale 6 --anisotropy 16 --ee-cycle-rate 2
+
 build-v0.2:
-	$(PYTHON) tools/build_modded_iso.py --source "$(ISO)" --profile "$(PROFILE)" --verify-source-sha256
+	$(PYTHON) tools/rockport_cli.py build --profile rockport2026_v0.2 --source "$(ISO)"
+
+build-v0.3:
+	$(PYTHON) tools/rockport_cli.py build --profile rockport2026_v0.3 --source "$(ISO)" --install-pcsx2 --renderer metal --upscale 6 --anisotropy 16 --ee-cycle-rate 2
 
 setup-pcsx2:
 	$(PYTHON) tools/setup_pcsx2_macos.py --crcs 0518D274 --renderer metal --upscale 6 --anisotropy 16 --ee-cycle-rate 2

@@ -1,0 +1,367 @@
+{
+  "schema_version": 1,
+  "id": "rockport2026_daylight",
+  "name": "Rockport 2026 Crisp Daylight Lighting",
+  "description": "Rebalances PS2 NFSMW's MIDDAY and PARKLAND SunInfos flare/direction and car/road LightMaterials inside GLOBAL\\GLOBALB.LZC for clear blue-white Rockport daylight: eliminates the orange-sepia tint on MIDDAY sun flares (which stock EA left identical to SUNSET), neutralizes muddy brownish diffuse crush on ROAD/WHEELBLUR, and sharpens daylight chrome, glass, and metallic car paint highlights. Verified against untouched SLUS-21351.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\GLOBALB.LZC",
+    "uncompressed_bytes": 871900,
+    "companion_memfile": "GLOBAL\\GLOBALMEMORYFILE.BIN"
+  },
+  "patches": [
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "Position",
+      "expected_offset": "0x000abf20",
+      "expected_orig": [5300.0, -3550.0, 3000.0],
+      "new_value": [5300.0, -3350.0, 3850.0],
+      "note": "Raise MIDDAY sun elevation (Z: 3000 -> 3850) for crisper high-noon geometry"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abf2c",
+      "expected_orig": [5300.0, -3550.0, 3000.0],
+      "new_value": [5300.0, -3350.0, 3850.0],
+      "note": "Match MIDDAY car shadow sun vector to raised midday sun direction"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf40",
+      "expected_orig": 1.0,
+      "new_value": 1.15,
+      "note": "Boost crisp daylight solar core intensity"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Size",
+      "expected_offset": "0x000abf44",
+      "expected_orig": 60.0,
+      "new_value": 54.0,
+      "note": "Tighten MIDDAY SUNTEX_CENTER disc for crisp clear-sky optics"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abf50",
+      "expected_orig": [255, 200, 100, 128],
+      "new_value": [255, 252, 244, 128],
+      "note": "Replace amber/yellow midday solar core with clear white-daylight disc (PS2 alpha 0x80 = 1.0)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf64",
+      "expected_orig": 0.5,
+      "new_value": 0.45,
+      "note": "Keep atmospheric bloom halo clean without washing out the sky"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Size",
+      "expected_offset": "0x000abf68",
+      "expected_orig": 320.0,
+      "new_value": 380.0,
+      "note": "Broaden sky scatter halo smoothly around the midday solar disc"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abf74",
+      "expected_orig": [130, 110, 25, 128],
+      "new_value": [175, 215, 255, 128],
+      "note": "Replace murky yellow-brown halo scatter with clean sky-blue atmospheric scatter"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf88",
+      "expected_orig": 0.7,
+      "new_value": 0.58,
+      "note": "Refine major sun ray glare for bright daylight readability"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abf98",
+      "expected_orig": [159, 122, 75, 128],
+      "new_value": [215, 232, 255, 128],
+      "note": "Replace sepia major rays with cool daylight-white shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abfac",
+      "expected_orig": 0.32,
+      "new_value": 0.28,
+      "note": "Keep secondary daylight shafts subtle and crisp"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abfbc",
+      "expected_orig": [166, 119, 72, 128],
+      "new_value": [205, 226, 255, 128],
+      "note": "Replace sepia secondary shafts with cool sky-white scatter"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PARKLAND",
+      "field": "Position",
+      "expected_offset": "0x000abae0",
+      "expected_orig": [4500.0, -300.0, 2400.0],
+      "new_value": [4800.0, -2600.0, 3600.0],
+      "note": "Align L2RA SunTrack-referenced PARKLAND vector with elevated daylight azimuth"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PARKLAND",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abaec",
+      "expected_orig": [4500.0, -300.0, 2400.0],
+      "new_value": [4800.0, -2600.0, 3600.0],
+      "note": "Keep PARKLAND car shadow direction synchronized with daylight sun vector"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x000047bc",
+      "expected_orig": [0.9, 0.57, 0.56],
+      "new_value": [0.96, 0.98, 1.02],
+      "note": "Remove baked reddish-sepia diffuse crush on ROAD material under daylight"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x000047cc",
+      "expected_orig": [0.9, 0.57, 0.56],
+      "new_value": [0.96, 0.98, 1.02],
+      "note": "Neutral cool-slate daylight diffuse response across incidence angles"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularPower",
+      "expected_offset": "0x000047e0",
+      "expected_orig": 1.523,
+      "new_value": 2.0,
+      "note": "Sharper clean sheen on sunlit asphalt"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WHEELBLUR",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000541c",
+      "expected_orig": [0.9, 0.57, 0.56],
+      "new_value": [0.95, 0.97, 1.0],
+      "note": "Neutralize baked sepia bias on spinning wheel blur diffuse"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WHEELBLUR",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000542c",
+      "expected_orig": [0.9, 0.57, 0.56],
+      "new_value": [0.95, 0.97, 1.0],
+      "note": "Keep wheel motion blur neutral under blue-white daylight"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x000005e8",
+      "expected_orig": [1.0, 0.9, 0.85],
+      "new_value": [1.0, 1.0, 1.0],
+      "note": "Remove warm yellow specular bias on carbon fiber weave"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "SpecularMaxRGB",
+      "expected_offset": "0x000005f8",
+      "expected_orig": [1.0, 0.9, 0.85],
+      "new_value": [1.0, 1.0, 1.0],
+      "note": "Crisp white clearcoat specular on carbon fiber"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000618",
+      "expected_orig": 0.1,
+      "new_value": 0.25,
+      "note": "Subtle glossy clearcoat sky reflection on carbon hoods/spoilers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000c14",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Enable crisp sun-glint highlights on chrome trim"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00000c24",
+      "expected_orig": 0.0,
+      "new_value": 0.25,
+      "note": "Add clean facing chrome specular response"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000c38",
+      "expected_orig": 2.0,
+      "new_value": 2.4,
+      "note": "Richer bright-sky mirror reflection on chrome"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004f98",
+      "expected_orig": 1.5,
+      "new_value": 2.1,
+      "note": "Brighter sky reflection on aftermarket chrome rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004fa8",
+      "expected_orig": 1.5,
+      "new_value": 1.9,
+      "note": "Maintain clean chrome rim reflection at all view angles"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00005658",
+      "expected_orig": [1.1, 1.0, 1.0],
+      "new_value": [1.0, 1.02, 1.05],
+      "note": "Cool daylight tint on glass specular edge"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005688",
+      "expected_orig": 0.5,
+      "new_value": 0.75,
+      "note": "Clearer sky reflection across windshield glass"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002ef8",
+      "expected_orig": 0.75,
+      "new_value": 0.85,
+      "note": "Lift shadow-side silver metallic paint brightness"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002f34",
+      "expected_orig": 0.3,
+      "new_value": 0.45,
+      "note": "Crisper metallic clearcoat glint under clear sun"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002f58",
+      "expected_orig": 0.2,
+      "new_value": 0.35,
+      "note": "Enhanced clear sky reflection on metallic silver bodies"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002b88",
+      "expected_orig": 0.6,
+      "new_value": 0.72,
+      "note": "Richer shadow readability on metallic blue paint (M3 GTR hero tone)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002be8",
+      "expected_orig": 0.2,
+      "new_value": 0.35,
+      "note": "Cleaner daylight clearcoat sky reflection on metallic blue"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003f78",
+      "expected_orig": 0.75,
+      "new_value": 0.85,
+      "note": "Clean luminous white paint shadows under clear sky"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x00003f7c",
+      "expected_orig": [1.0, 1.0, 0.99],
+      "new_value": [1.0, 1.0, 1.0],
+      "note": "Pure neutral white diffuse min tint"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x00003f8c",
+      "expected_orig": [1.0, 1.0, 0.99],
+      "new_value": [1.0, 1.0, 1.0],
+      "note": "Pure neutral white diffuse max tint"
+    }
+  ]
+}
