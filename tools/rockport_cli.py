@@ -160,9 +160,13 @@ def collect_tool_readiness(repo_root: Path) -> Dict[str, Any]:
         py_modules[mod] = importlib.util.find_spec(mod) is not None
 
     cli_bins = {}
-    for binary in ("dds_tool", "kram", "cuttlefish", "texconv", "compressonatorcli", "nvcompress", "magick", "xdelta3"):
+    for binary in ("dds_tool", "kram", "cuttlefish", "texconv", "compressonatorcli", "nvcompress", "magick", "xdelta3", "cargo", "swiftc"):
         found = shutil.which(binary)
         cli_bins[binary] = found is not None
+
+    rockport_dds_bin = repo_root / "build" / "dds_wave3" / "target" / "release" / "rockport_dds"
+    metal_pbr_bin = repo_root / "build" / "metal_wave3" / "RockportMetalPBR"
+    metal_rt_bin = repo_root / "build" / "metal_rt_wave3" / "RockportMetalRT"
 
     models_dir = repo_root / "models"
     model_files = []
@@ -176,7 +180,12 @@ def collect_tool_readiness(repo_root: Path) -> Dict[str, Any]:
         "python_version": sys.version.split()[0],
         "python_modules": py_modules,
         "dds_and_media_clis": cli_bins,
-        "dds_encoder_ready": any(cli_bins[k] for k in ("dds_tool", "kram", "cuttlefish", "texconv", "compressonatorcli", "nvcompress")),
+        "rockport_dds_built": rockport_dds_bin.is_file(),
+        "metal_pbr_built": metal_pbr_bin.is_file(),
+        "metal_rt_built": metal_rt_bin.is_file(),
+        "dds_encoder_ready": rockport_dds_bin.is_file() or cli_bins.get("cargo", False) or any(
+            cli_bins[k] for k in ("dds_tool", "kram", "cuttlefish", "texconv", "compressonatorcli", "nvcompress")
+        ),
         "ai_upscaler_ready": py_modules["torch"] and py_modules["spandrel"] and py_modules["PIL"],
         "models_found": model_files,
         "pcsx2_apps": pcsx2_apps,
@@ -356,8 +365,11 @@ def print_status_human(data: Dict[str, Any]) -> None:
     print(f"  Python {tools['python_version']} : {mods}")
     print(f"  CLI Tools     : {clis}")
     print(
-        f"  Readiness     : BC7 DDS Encoder={'READY' if tools['dds_encoder_ready'] else 'not installed'}, "
-        f"Local AI Upscaler={'READY' if tools['ai_upscaler_ready'] else 'not installed'}, "
+        f"  Readiness     : BC7 DDS Encoder={'READY' if tools['dds_encoder_ready'] else 'not installed'} "
+        f"(rockport_dds={'built' if tools.get('rockport_dds_built') else 'unbuilt'}), "
+        f"Metal PBR={'READY' if tools.get('metal_pbr_built') else 'unbuilt'}, "
+        f"Metal 4 RT={'READY' if tools.get('metal_rt_built') else 'unbuilt'}, "
+        f"AI Upscaler={'READY' if tools['ai_upscaler_ready'] else 'not installed'}, "
         f"Models={len(tools['models_found'])}"
     )
 
@@ -541,6 +553,69 @@ def run_verify(
             "details": [e.format_human() for e in pnach_errors],
         }
     )
+
+    # 3b. Validate build profiles, elf_caves.json & CC0 asset manifests (when present in repo_root)
+    profiles_dir = repo_root / "patches" / "profiles"
+    caves_path = repo_root / "patches" / "elf_caves.json"
+    elf_spec_path = repo_root / "patches" / "elf_patches.json"
+    manifest_paths = [
+        repo_root / "assets_cc0" / "audio_manifest.json",
+        repo_root / "assets_cc0" / "car_livery_rules.json",
+    ]
+    has_profiles = profiles_dir.is_dir() and any(profiles_dir.glob("*.json"))
+    has_any_manifests = has_profiles or caves_path.is_file() or any(mp.is_file() for mp in manifest_paths)
+
+    if has_any_manifests:
+        manifest_errors: List[str] = []
+        validated_profiles = 0
+        total_profiles = 0
+        if has_profiles:
+            profile_report = collect_profiles(repo_root=repo_root)
+            validated_profiles = profile_report["valid_count"]
+            total_profiles = profile_report["profile_count"]
+            if profile_report["status"] != "pass":
+                for e in profile_report["profiles"]:
+                    if not e["valid"]:
+                        manifest_errors.extend(f"{e['profile_id']}: {err}" for err in e["errors"])
+
+        if caves_path.is_file() and elf_spec_path.is_file():
+            try:
+                caves_data = json.loads(caves_path.read_text(encoding="utf-8"))
+                elf_data = json.loads(elf_spec_path.read_text(encoding="utf-8"))
+                elf_addrs = {
+                    int(w["vaddr"], 16)
+                    for p in elf_data.get("patches", [])
+                    for w in p.get("writes", [])
+                    if "vaddr" in w
+                }
+                for cave in caves_data.get("patches", []):
+                    for w in cave.get("writes", []):
+                        if "vaddr" in w and int(w["vaddr"], 16) in elf_addrs:
+                            manifest_errors.append(
+                                f"elf_caves.json ({cave.get('id')}) overlaps elf_patches.json at {w['vaddr']}"
+                            )
+            except Exception as exc:
+                manifest_errors.append(f"elf_caves.json error: {exc}")
+
+        for mp in manifest_paths:
+            if mp.is_file():
+                try:
+                    json.loads(mp.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    manifest_errors.append(f"Invalid JSON in {mp.relative_to(repo_root)}: {exc}")
+
+        results.append(
+            {
+                "check": "profiles_manifests",
+                "ok": not manifest_errors,
+                "summary": (
+                    f"{validated_profiles}/{total_profiles} profiles + caves/manifests valid"
+                    if not manifest_errors
+                    else f"{len(manifest_errors)} profile/manifest error(s)"
+                ),
+                "details": manifest_errors,
+            }
+        )
 
     # 4. unittest discover
     if not skip_tests:
@@ -1544,7 +1619,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # verify
-    p_ver = sub.add_parser("verify", help="Run py_compile, audit_repo_clean, lint_pnach, and unittest")
+    p_ver = sub.add_parser("verify", help="Run py_compile, audit_repo_clean, lint_pnach, profiles, and unittest")
     p_ver.add_argument("--repo-root", type=Path, default=REPO_ROOT)
     p_ver.add_argument("--skip-tests", action="store_true", help="Skip unittest step")
     p_ver.add_argument(
@@ -1553,6 +1628,90 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also audit untracked non-ignored files in audit_repo_clean",
     )
     p_ver.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    # metal-showcase (Native Apple Silicon Metal 2026 PBR renderer)
+    p_metal = sub.add_parser(
+        "metal-showcase",
+        help="Export extracted SLUS-21351 BMW M3 GTR scene & launch/render native Metal 2026 PBR showcase",
+    )
+    p_metal.add_argument(
+        "--iso",
+        type=Path,
+        default=Path(os.environ.get("ROCKPORT_SOURCE_ISO", str(DEFAULT_SOURCE_ISO))),
+        help="Path to untouched SLUS-21351 ISO (strictly read-only)",
+    )
+    p_metal.add_argument("--synthetic", action="store_true", help="Use synthetic GT coupe geometry (no ISO needed)")
+    p_metal.add_argument("--headless", action="store_true", help="Render offscreen PNG instead of interactive window")
+    p_metal.add_argument("--preset", choices=("golden_hour", "daylight", "night_rain"), default="golden_hour")
+    p_metal.add_argument("--out", type=Path, default=REPO_ROOT / "build" / "metal_wave3" / "showcase.png")
+    p_metal.add_argument("--width", type=int, default=1920)
+    p_metal.add_argument("--height", type=int, default=1080)
+
+    # metal-rt (Native M5 Pro Metal 4 Hardware Ray Tracing renderer)
+    p_rt = sub.add_parser(
+        "metal-rt",
+        help="Build & run native Apple Silicon Metal 4 Hardware Ray Tracing showcase (RTR, RTAO, RTGI, soft shadows)",
+    )
+    p_rt.add_argument(
+        "--iso",
+        type=Path,
+        default=Path(os.environ.get("ROCKPORT_SOURCE_ISO", str(DEFAULT_SOURCE_ISO))),
+        help="Path to untouched SLUS-21351 ISO if scene needs exporting",
+    )
+    p_rt.add_argument("--synthetic", action="store_true", help="Use synthetic GT coupe geometry (no ISO needed)")
+    p_rt.add_argument("--headless", action="store_true", help="Render offscreen PNG instead of interactive window")
+    p_rt.add_argument("--preset", choices=("golden_hour", "night_neon", "daylight"), default="golden_hour")
+    p_rt.add_argument("--spp", type=int, default=32, help="Samples per pixel for headless RT accumulation (default: 32)")
+    p_rt.add_argument("--out", type=Path, default=REPO_ROOT / "build" / "metal_rt_wave3" / "rt_showcase.png")
+    p_rt.add_argument("--compare-out", type=Path, default=None, help="Optional split RT-Off vs RT-On PNG path")
+    p_rt.add_argument("--width", type=int, default=1920)
+    p_rt.add_argument("--height", type=int, default=1080)
+
+    # build-dds (Native arm64 Rust BC7 DDS compiler & 4K pack)
+    p_dds = sub.add_parser(
+        "build-dds",
+        help="Compile native Rust rockport_dds encoder & build 2K/4K mipmapped BC7 DDS texture pack",
+    )
+    p_dds.add_argument("--size", type=int, choices=(512, 1024, 2048, 4096), default=2048)
+    p_dds.add_argument("--out-dir", type=Path, default=REPO_ROOT / "build" / "dds_wave3" / "pcsx2_dds_pack")
+    p_dds.add_argument("--json", action="store_true", help="Emit JSON summary")
+
+    # decomp-bridge (Export C++20/Metal bridge headers from VLT + lighting recipes)
+    p_br = sub.add_parser(
+        "decomp-bridge",
+        help="Export C++20 Rockport2026Config.hpp, Metal Rockport2026Lighting.h & bridge_manifest.json",
+    )
+    p_br.add_argument("--out-dir", type=Path, default=REPO_ROOT / "build" / "decomp_bridge_wave3")
+    p_br.add_argument("--no-symbols", action="store_true", help="Use built-in SLUS-21351 fallback symbol table")
+    p_br.add_argument("--json", action="store_true", help="Emit JSON summary")
+
+    # build-caves (Verify & emit MIPS R5900 code caves)
+    p_cv = sub.add_parser(
+        "build-caves",
+        help="Verify MIPS R5900 code caves in patches/elf_caves.json and optionally emit companion .pnach",
+    )
+    p_cv.add_argument("--verify-only", action="store_true", help="Verify caves without writing .pnach")
+    p_cv.add_argument(
+        "--out-pnach",
+        type=Path,
+        default=REPO_ROOT / "build" / "caves_wave3" / "SLUS-21351_0518D274_caves.pnach",
+    )
+
+    # live-verify (Run live PCSX2 v2.6.3 boot & screenshot check)
+    p_lv = sub.add_parser(
+        "live-verify",
+        help="Boot a built ISO live in PCSX2 v2.6.3 Metal, capture frame/log diagnostics, and cleanly shut down",
+    )
+    p_lv.add_argument(
+        "--iso",
+        type=Path,
+        default=REPO_ROOT / "build" / "NFSMW_BlackEdition_Rockport2026_v0.4.iso",
+    )
+    p_lv.add_argument("--out-dir", type=Path, default=REPO_ROOT / "build" / "pcsx2_verify_wave3")
+    p_lv.add_argument("--boot-wait", type=float, default=28.0)
+    p_lv.add_argument("--skip-screenshot", action="store_true")
+    p_lv.add_argument("--dry-run", action="store_true")
+    p_lv.add_argument("--json", action="store_true")
 
     return parser
 
@@ -1661,6 +1820,100 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     print(f"         {detail}", file=sys.stderr if not r["ok"] else sys.stdout)
             print("\nALL CHECKS PASSED." if all_ok else "\nVERIFICATION FAILED.")
         return 0 if all_ok else 1
+
+    if args.command == "metal-showcase":
+        out_dir = REPO_ROOT / "build" / "metal_wave3"
+        scene_dir = out_dir / ("scene_synth" if args.synthetic else "scene")
+        exp_cmd = [sys.executable, str(TOOLS_DIR / "export_pbr_scene.py"), "--out", str(scene_dir)]
+        if args.synthetic:
+            exp_cmd.append("--synthetic")
+        elif args.iso.is_file():
+            exp_cmd.extend(["--iso", str(args.iso)])
+        else:
+            exp_cmd.append("--synthetic")
+        rc = subprocess.run(exp_cmd, cwd=str(REPO_ROOT)).returncode
+        if rc != 0:
+            return rc
+        mk = subprocess.run(["make", "-C", str(REPO_ROOT / "native_metal"), f"OUT_DIR={out_dir}"], cwd=str(REPO_ROOT))
+        if mk.returncode != 0:
+            return mk.returncode
+        run_cmd_list = [str(out_dir / "RockportMetalPBR"), "--scene", str(scene_dir / "scene.json"), "--preset", args.preset]
+        if args.headless:
+            run_cmd_list.extend(["--headless", "--width", str(args.width), "--height", str(args.height), "--out", str(args.out)])
+        return subprocess.run(run_cmd_list, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "metal-rt":
+        out_dir = REPO_ROOT / "build" / "metal_rt_wave3"
+        scene_dir = REPO_ROOT / "build" / "metal_wave3" / ("scene_synth" if args.synthetic else "scene")
+        scene_json = scene_dir / "scene.json"
+        if not scene_json.is_file():
+            exp_cmd = [sys.executable, str(TOOLS_DIR / "export_pbr_scene.py"), "--out", str(scene_dir)]
+            if args.synthetic or not args.iso.is_file():
+                exp_cmd.append("--synthetic")
+            else:
+                exp_cmd.extend(["--iso", str(args.iso)])
+            rc = subprocess.run(exp_cmd, cwd=str(REPO_ROOT)).returncode
+            if rc != 0:
+                return rc
+        mk = subprocess.run(["make", "-C", str(REPO_ROOT / "native_metal_rt"), f"OUT_DIR={out_dir}"], cwd=str(REPO_ROOT))
+        if mk.returncode != 0:
+            return mk.returncode
+        run_cmd_list = [str(out_dir / "RockportMetalRT"), "--preset", args.preset]
+        if scene_json.is_file() and not args.synthetic:
+            run_cmd_list.extend(["--scene", str(scene_json)])
+        if args.synthetic:
+            run_cmd_list.append("--synthetic")
+        if args.headless:
+            run_cmd_list.extend([
+                "--headless", "--spp", str(args.spp),
+                "--width", str(args.width), "--height", str(args.height),
+                "--out", str(args.out),
+            ])
+            if args.compare_out is not None:
+                run_cmd_list.extend(["--compare-out", str(args.compare_out)])
+        return subprocess.run(run_cmd_list, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "build-dds":
+        rc1 = subprocess.run([sys.executable, str(TOOLS_DIR / "install_macos_texture_tools.py"), "--build-encoder", "--check"], cwd=str(REPO_ROOT)).returncode
+        if rc1 != 0:
+            return rc1
+        cmd = [sys.executable, str(TOOLS_DIR / "build_4k_texture_pack.py"), "--size", str(args.size), "--out-dir", str(args.out_dir)]
+        if args.json:
+            cmd.append("--json")
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "decomp-bridge":
+        cmd = [sys.executable, str(TOOLS_DIR / "decomp_bridge.py"), "--out-dir", str(args.out_dir)]
+        if args.no_symbols:
+            cmd.append("--no-symbols")
+        if args.json:
+            cmd.append("--json")
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "build-caves":
+        rc1 = subprocess.run([sys.executable, str(TOOLS_DIR / "mips_cave_builder.py"), "verify", str(REPO_ROOT / "patches" / "elf_caves.json")], cwd=str(REPO_ROOT)).returncode
+        if rc1 != 0 or args.verify_only:
+            return rc1
+        args.out_pnach.parent.mkdir(parents=True, exist_ok=True)
+        return subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "mips_cave_builder.py"), "emit-pnach", str(REPO_ROOT / "patches" / "elf_caves.json"), "--out", str(args.out_pnach)],
+            cwd=str(REPO_ROOT),
+        ).returncode
+
+    if args.command == "live-verify":
+        cmd = [
+            sys.executable, str(TOOLS_DIR / "pcsx2_live_verify.py"),
+            "--iso", str(args.iso),
+            "--out-dir", str(args.out_dir),
+            "--boot-wait", str(args.boot_wait),
+        ]
+        if args.skip_screenshot:
+            cmd.append("--skip-screenshot")
+        if args.dry_run:
+            cmd.append("--dry-run")
+        if args.json:
+            cmd.append("--json")
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
 
     return 2
 

@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0",
+  "project": "NFSMW: Rockport 2026",
+  "pcsx2_serial": "SLUS-21351",
+  "license_policy": "CC0-1.0",
+  "generator": "tools/audio_patcher.py synth-cc0",
+  "output_wav_dir": "build/audio_wave3/cc0_wav",
+  "notes": [
+    "100% original procedural CC0-1.0 audio cues synthesized directly in pure Python stdlib via `python3 tools/audio_patcher.py synth-cc0`.",
+    "All generated WAVs and patched .ABK/.GIN binaries stay inside gitignored build/audio_wave3/.",
+    "Zero external copyrighted or non-CC0 audio samples are referenced or bundled."
+  ],
+  "abkc_assets": [
+    {
+      "id": "ui_click",
+      "filename": "ui_click.wav",
+      "license": "CC0-1.0",
+      "source": "procedural_synth",
+      "sample_rate": 32000,
+      "channels": 1,
+      "duration_sec": 0.045,
+      "looped": false,
+      "codec": "PS2 SPU-ADPCM (VAG)",
+      "target_bank": "SOUND\\GLOBAL\\FE_COMMON_MB.ABK",
+      "target_slot": 1,
+      "description": "Modern GT7/FH6-inspired glass-carbon UI focus click transient."
+    },
+    {
+      "id": "ui_confirm",
+      "filename": "ui_confirm.wav",
+      "license": "CC0-1.0",
+      "source": "procedural_synth",
+      "sample_rate": 32000,
+      "channels": 1,
+      "duration_sec": 0.18,
+      "looped": false,
+      "codec": "PS2 SPU-ADPCM (VAG)",
+      "target_bank": "SOUND\\GLOBAL\\FE_COMMON_MB.ABK",
+      "target_slot": 2,
+      "description": "Crisp two-stage ascending racing menu confirm chime."
+    },
+    {
+      "id": "ui_back",
+      "filename": "ui_back.wav",
+      "license": "CC0-1.0",
+      "source": "procedural_synth",
+      "sample_rate": 32000,
+      "channels": 1,
+      "duration_sec": 0.14,
+      "looped": false,
+      "codec": "PS2 SPU-ADPCM (VAG)",
+      "target_bank": "SOUND\\GLOBAL\\FE_COMMON_MB.ABK",
+      "target_slot": 3,
+      "description": "Soft descending UI cancel/back sweep."
+    },
+    {
+      "id": "turbo_bov_flutter",
+      "filename": "turbo_bov_flutter.wav",
+      "license": "CC0-1.0",
+      "source": "procedural_synth",
+      "sample_rate": 24000,
+      "channels": 1,
+      "duration_sec": 0.52,
+      "looped": false,
+      "codec": "PS2 SPU-ADPCM (VAG)",
+      "target_bank": "SOUND\\TURBO\\TURBO_MED_2_MB.ABK",
+      "target_slot": 2,
+      "description": "Turbocharger compressor-surge blow-off valve flutter with resonant spool-down."
+    },
+    {
+      "id": "gearshift_transient",
+      "filename": "gearshift_transient.wav",
+      "license": "CC0-1.0",
+      "source": "procedural_synth",
+      "sample_rate": 24000,
+      "channels": 1,
+      "duration_sec": 0.16,
+      "looped": false,
+      "codec": "PS2 SPU-ADPCM (VAG)",
+      "target_bank": "SOUND\\SHIFTING\\GEAR_SML_BASE.ABK",
+      "target_slot": 1,
+      "description": "Sequential dog-ring gearshift mechanical snap and exhaust bark transient."
+    },
+    {
+      "id": "straight_cut_whine_loop",
+      "filename": "straight_cut_whine_loop.wav",
+      "license": "CC0-1.0",
+      "source": "procedural_synth",
+      "sample_rate": 32000,
+      "channels": 1,
+      "duration_sec": 0.56,
+      "looped": true,
+      "spu_block_aligned_samples": 17920,
+      "codec": "PS2 SPU-ADPCM (VAG)",
+      "target_bank": "SOUND\\ENGINE\\CAR_WHINE_00.ABK",
+      "target_slot": 1,
+      "description": "Seamless phase-locked straight-cut racing transmission harmonic cue (640 x 28 samples)."
+    }
+  ],
+  "gnsu_presets": [
+    {
+      "preset": "bmw_m3_gtr",
+      "car_name": "BMW M3 GTR (E46)",
+      "vlt_engineaudio": "tvr_cerb",
+      "target_gnsu": "SOUND\\ENGINE\\GIN_TVR_CERBERA.GIN",
+      "decel_gnsu": "SOUND\\ENGINE\\GIN_TVR_CERBERA_DCL.GIN",
+      "min_rpm": 1200.0,
+      "max_rpm": 8350.0,
+      "rate_scale": 1.045,
+      "curve_gamma": 0.92
+    },
+    {
+      "preset": "carrera_gt",
+      "car_name": "Porsche Carrera GT",
+      "vlt_engineaudio": "por_car_gt",
+      "target_gnsu": "SOUND\\ENGINE\\GIN_POR_CARRERA_GT.GIN",
+      "decel_gnsu": "SOUND\\ENGINE\\GIN_POR_CARRERA_GT_DCL.GIN",
+      "min_rpm": 1150.0,
+      "max_rpm": 8450.0,
+      "rate_scale": 1.035,
+      "curve_gamma": 0.90
+    },
+    {
+      "preset": "gallardo",
+      "car_name": "Lamborghini Gallardo",
+      "vlt_engineaudio": "lam_gallardo",
+      "target_gnsu": "SOUND\\ENGINE\\GIN_GALLARDO.GIN",
+      "decel_gnsu": "SOUND\\ENGINE\\GIN_GALLARDO_DCL.GIN",
+      "min_rpm": 1350.0,
+      "max_rpm": 8500.0,
+      "rate_scale": 1.030,
+      "curve_gamma": 0.93
+    },
+    {
+      "preset": "camaro_ss",
+      "car_name": "Chevrolet Camaro SS",
+      "vlt_engineaudio": "for_mus_b",
+      "target_gnsu": "SOUND\\ENGINE\\GIN_MUSTSAL_RAMP_V2_CD.GIN",
+      "decel_gnsu": "SOUND\\ENGINE\\GIN_MUSTANG_SALEEN_DCL.GIN",
+      "min_rpm": 950.0,
+      "max_rpm": 6400.0,
+      "rate_scale": 0.955,
+      "curve_gamma": 1.06
+    }
+  ]
+}

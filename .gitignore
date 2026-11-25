@@ -70,3 +70,15 @@ venv/
 *.swo
 .vscode/
 .idea/
+
+# Native Metal / Rust / C / Audio & 3D Preview Build Outputs
+target/
+.build/
+*.metallib
+*.air
+*.o
+*.a
+*.obj
+*.mtl
+*.wav
+*.flac

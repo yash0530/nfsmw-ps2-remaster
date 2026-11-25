@@ -1,0 +1,13 @@
+# Reproducible ps2dev/ps2sdk EE C Mod Build Environment for NFSMW: Rockport 2026
+#
+# Usage from repository root:
+#   docker build -f src/ps2_mod/Dockerfile.ps2sdk -t rockport-ps2sdk .
+#   docker run --rm -v "$PWD:/workspace" -w /workspace/src/ps2_mod rockport-ps2sdk make all disasm
+
+FROM ps2dev/ps2dev:latest
+
+RUN apk add --no-cache make python3
+
+WORKDIR /workspace/src/ps2_mod
+
+CMD ["make", "all", "verify-python"]

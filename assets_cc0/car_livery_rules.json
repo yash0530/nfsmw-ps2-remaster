@@ -1,0 +1,190 @@
+{
+  "schema_version": "1.0",
+  "project": "NFSMW: Rockport 2026",
+  "license_policy": "CC0-1.0 / original-procedural-motorsport-assets",
+  "default_theme": "motorsport2026",
+  "dds_defaults": {
+    "format": "bc7",
+    "dxgi_format": 98,
+    "mipmaps": "auto",
+    "default_resolution": 2048
+  },
+  "rules": [
+    {
+      "id": "car_brake_rotor_ceramic",
+      "priority": 100,
+      "category": "car_brakes",
+      "source_type": "procedural_4k",
+      "asset": "brake_rotor_4k.png",
+      "dds_asset": "brake_rotor_4k.dds",
+      "dds_format": "bc7",
+      "pbr_hints": {
+        "roughness": 0.28,
+        "metallic": 0.72,
+        "clearcoat": 0.15
+      },
+      "name_patterns": [
+        "*BRAKE*ROTOR*",
+        "*BRAKE*DISC*",
+        "*ROTOR*",
+        "*CALIPER*",
+        "*FASTBRAKES*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Cross-drilled carbon-ceramic motorsport brake rotor with slotted vents, 5-lug anodized hat, and caliper accent band."
+    },
+    {
+      "id": "car_tire_semislick",
+      "priority": 98,
+      "category": "car_tires",
+      "source_type": "procedural_4k",
+      "asset": "tire_tread_sidewall_4k.png",
+      "dds_asset": "tire_tread_sidewall_4k.dds",
+      "dds_format": "bc7",
+      "pbr_hints": {
+        "roughness": 0.78,
+        "metallic": 0.0,
+        "clearcoat": 0.05
+      },
+      "name_patterns": [
+        "*TIRE*",
+        "*TYRE*",
+        "*TREAD*",
+        "*SIDEWALL*",
+        "*RUBBER*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "Asymmetric motorsport semi-slick tire tread with evacuation grooves and original Rockport Motorsport 2026 sidewall stencil."
+    },
+    {
+      "id": "car_carbon_fiber_twill",
+      "priority": 96,
+      "category": "car_carbon",
+      "source_type": "procedural_4k",
+      "asset": "carbon_fiber_twill_4k.png",
+      "dds_asset": "carbon_fiber_twill_4k.dds",
+      "dds_format": "bc7",
+      "pbr_hints": {
+        "roughness": 0.22,
+        "metallic": 0.12,
+        "clearcoat": 0.9
+      },
+      "name_patterns": [
+        "*CARBON*",
+        "*CF_*",
+        "*SPLITTER*",
+        "*DIFFUSER*",
+        "*HOOD*CF*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "2x2 twill aerospace carbon fiber weave with diagonal specular sheen and clearcoat finish."
+    },
+    {
+      "id": "car_metallic_livery_base",
+      "priority": 95,
+      "category": "car_livery",
+      "source_type": "procedural_4k",
+      "asset": "m3_gtr_metallic_livery_4k.png",
+      "dds_asset": "m3_gtr_metallic_livery_4k.dds",
+      "dds_format": "bc7",
+      "pbr_hints": {
+        "roughness": 0.16,
+        "metallic": 0.85,
+        "clearcoat": 1.0
+      },
+      "name_patterns": [
+        "*DUMMY_SKIN*",
+        "*SKIN*",
+        "*LIVERY*",
+        "*VINYL*",
+        "*PAINT*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Original silver-and-royal-blue geometric motorsport livery base with fine metallic clearcoat flake micro-grain."
+    },
+    {
+      "id": "car_alloy_wheel_brushed",
+      "priority": 94,
+      "category": "car_wheels",
+      "source_type": "procedural_4k",
+      "asset": "alloy_wheel_brushed_4k.png",
+      "dds_asset": "alloy_wheel_brushed_4k.dds",
+      "dds_format": "bc7",
+      "pbr_hints": {
+        "roughness": 0.24,
+        "metallic": 0.94,
+        "clearcoat": 0.45
+      },
+      "name_patterns": [
+        "*_WHEEL*",
+        "*WHEEL_INNER*",
+        "*DUMMY_WHEEL*",
+        "*BBS_*",
+        "*ENKEI_*",
+        "*VOLK_*",
+        "*OZ_*",
+        "*5ZIGEN_*",
+        "*KONIG_*",
+        "*RACINGHART_*",
+        "*ADR_*",
+        "*ROJA_*",
+        "*LOWENHART_*"
+      ],
+      "preserve_aspect": true,
+      "pot_align": true,
+      "notes": "Radial lathe-brushed forged motorsport alloy wheel finish with machined rim lip highlight."
+    },
+    {
+      "id": "track_asphalt_detail",
+      "priority": 90,
+      "category": "track_surface",
+      "source_type": "procedural_4k",
+      "asset": "track_asphalt_detail_4k.png",
+      "dds_asset": "track_asphalt_detail_4k.dds",
+      "dds_format": "bc7",
+      "pbr_hints": {
+        "roughness": 0.68,
+        "metallic": 0.0,
+        "clearcoat": 0.1
+      },
+      "name_patterns": [
+        "*ASPHALT*",
+        "*ROAD*",
+        "*TRACK*",
+        "*SKID_ROAD*",
+        "*TARMAC*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "High-frequency multi-scale asphalt aggregate with subtle racing-line rubber wear."
+    },
+    {
+      "id": "track_concrete_pitwall",
+      "priority": 88,
+      "category": "track_barrier",
+      "source_type": "procedural_4k",
+      "asset": "concrete_pitwall_4k.png",
+      "dds_asset": "concrete_pitwall_4k.dds",
+      "dds_format": "bc7",
+      "pbr_hints": {
+        "roughness": 0.84,
+        "metallic": 0.0,
+        "clearcoat": 0.0
+      },
+      "name_patterns": [
+        "*CONCRETE*",
+        "*BARRIER*",
+        "*WALL*",
+        "*JERSEY*",
+        "*ROADBLOCK*"
+      ],
+      "preserve_aspect": false,
+      "pot_align": true,
+      "notes": "Poured pit-wall concrete with expansion seams, scuff streaks, and subtle red/white apex curb strip."
+    }
+  ]
+}

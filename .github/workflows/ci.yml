@@ -27,8 +27,16 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install pillow numpy
 
-      - name: Compile-check all Python tools
-        run: python3 -m py_compile tools/*.py
+      - name: Verify Rust BC7 DDS encoder (pure std, offline)
+        if: matrix.python-version == '3.12'
+        env:
+          CARGO_TARGET_DIR: build/dds_ci_target
+        run: |
+          rustc --version && cargo --version
+          cargo test --manifest-path tools/dds_encoder_rs/Cargo.toml
+
+      - name: Compile-check all Python tools & tests
+        run: python3 -m py_compile tools/*.py tests/*.py
 
       - name: Audit repository hygiene & legal guardrails
         run: python3 tools/audit_repo_clean.py
@@ -36,5 +44,13 @@ jobs:
       - name: Lint PCSX2 v2 .pnach patches
         run: python3 tools/lint_pnach.py
 
-      - name: Run unit test suite
+      - name: Verify profiles, MIPS caves, and decomp bridge
+        run: |
+          python3 tools/rockport_cli.py profiles
+          python3 tools/rockport_cli.py decomp-bridge --out-dir build/ci_bridge --json
+          python3 tools/rockport_cli.py build-caves --verify-only
+
+      - name: Run unit test suite (offline CI mode)
+        env:
+          NFSMW_ISO: /nonexistent
         run: python3 -m unittest discover -s tests -v

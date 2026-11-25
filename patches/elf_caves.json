@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "target": {
+    "game": "Need for Speed: Most Wanted - Black Edition (NTSC-U)",
+    "serial": "SLUS-21351",
+    "elf_name": "SLUS_213.51",
+    "elf_size": 4918740,
+    "elf_sha1": "60289f3f8b643822a302720f9649ddc4ba55034b",
+    "elf_pcsx2_crc": "0518D274",
+    "pt_load_vaddr": "0x00100000",
+    "pt_load_file_offset": "0x00001000"
+  },
+  "cave_regions": [
+    {
+      "id": "cave_region_a_schedule_pad",
+      "start_vaddr": "0x003037A4",
+      "end_vaddr": "0x00303820",
+      "byte_size": 124,
+      "orig_fill": "0x00000000",
+      "note": "Verified zero-filled inter-function padding immediately after Process__23Schedule_QuarterSimRateiUs (ends with unconditional tail-call j 0x00303660; andi $a2,$a2,0xffff) and before GetIOModule atexit helper at 0x00303820. Zero xrefs or branch targets."
+    },
+    {
+      "id": "cave_region_b_tsmempool_pad",
+      "start_vaddr": "0x003E4E84",
+      "end_vaddr": "0x003E4EA8",
+      "byte_size": 36,
+      "orig_fill": "0x00000000",
+      "note": "Verified zero-filled inter-function padding immediately after OverrideMalloc__12TSMemoryPoolPviPCcii (ends with jr $ra; addiu $sp,$sp,0x20) and before 0x003E4EA8. Zero xrefs or branch targets."
+    }
+  ],
+  "patches": [
+    {
+      "id": "rockport_frame_heartbeat",
+      "name": "Rockport 2026 Frame Heartbeat & Telemetry Counter Cave",
+      "description": "Trampolines MainLoopBreakpoint__Fv (0x003285B8, called once per MainLoop tick at 0x00313374) into verified zero-filled cave 0x003037A4..0x003037B4. Increments unused 4-byte EA debug global debuggy (0x0054B3BC, reset to 0) using caller-saved $t0/$t1 and returns cleanly via jr $ra.",
+      "category": "telemetry",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "cave_asm": {
+        "cave_base": "0x003037A4",
+        "hook_vaddr": "0x003285B8",
+        "instructions": [
+          "lui   $t0, 0x0055",
+          "lw    $t1, -0x4C44($t0)",
+          "addiu $t1, $t1, 1",
+          "jr    $ra",
+          "sw    $t1, -0x4C44($t0)"
+        ]
+      },
+      "writes": [
+        {
+          "vaddr": "0x003285B8",
+          "expected_orig": "0x03E00008",
+          "patched": "0x080C0DE9",
+          "note": "Hook MainLoopBreakpoint__Fv (0x003285B8): jr $ra -> j 0x003037A4 (delay slot 0x003285BC remains nop)"
+        },
+        {
+          "vaddr": "0x0054B3BC",
+          "expected_orig": "0x0000027A",
+          "patched": "0x00000000",
+          "note": "Reset verified 0-xref debug global `debuggy` (0x0054B3BC) to 0x00000000 as frame heartbeat counter"
+        },
+        {
+          "vaddr": "0x003037A4",
+          "expected_orig": "0x00000000",
+          "patched": "0x3C080055",
+          "note": "Cave[0]: lui $t0, 0x0055"
+        },
+        {
+          "vaddr": "0x003037A8",
+          "expected_orig": "0x00000000",
+          "patched": "0x8D09B3BC",
+          "note": "Cave[1]: lw $t1, -0x4c44($t0) -> read 0x0054B3BC"
+        },
+        {
+          "vaddr": "0x003037AC",
+          "expected_orig": "0x00000000",
+          "patched": "0x25290001",
+          "note": "Cave[2]: addiu $t1, $t1, 0x1"
+        },
+        {
+          "vaddr": "0x003037B0",
+          "expected_orig": "0x00000000",
+          "patched": "0x03E00008",
+          "note": "Cave[3]: jr $ra (return to MainLoop @ 0x0031337C)"
+        },
+        {
+          "vaddr": "0x003037B4",
+          "expected_orig": "0x00000000",
+          "patched": "0xAD09B3BC",
+          "note": "Cave[4] delay slot: sw $t1, -0x4c44($t0) -> store 0x0054B3BC"
+        }
+      ]
+    },
+    {
+      "id": "runtime_fov_multiplier_cave",
+      "name": "Dynamic 3D Camera FOV Multiplier Cave (+13.6% Wider FOV)",
+      "description": "Trampolines CalculateH__FUsP5eView epilogue (0x001FC464, keeping addiu $sp,$sp,0x40 in the delay slot) into cave 0x003037C0..0x003037D0. Scales returned perspective focal length $f0 by 0.88f (0x3F6147AE) across all 3D views while leaving 2D HUD and AspectRatio3dx untouched.",
+      "category": "camera",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "cave_asm": {
+        "cave_base": "0x003037C0",
+        "hook_vaddr": "0x001FC464",
+        "instructions": [
+          "lui   $at, 0x3F61",
+          "ori   $at, $at, 0x47AE",
+          "mtc1  $at, $f1",
+          "jr    $ra",
+          "mul.s $f0, $f0, $f1"
+        ]
+      },
+      "writes": [
+        {
+          "vaddr": "0x001FC464",
+          "expected_orig": "0x03E00008",
+          "patched": "0x080C0DF0",
+          "note": "Hook CalculateH__FUsP5eView epilogue (0x001FC464): jr $ra -> j 0x003037C0 (delay slot 0x001FC468 keeps addiu $sp,$sp,0x40)"
+        },
+        {
+          "vaddr": "0x003037C0",
+          "expected_orig": "0x00000000",
+          "patched": "0x3C013F61",
+          "note": "Cave[0]: lui $at, 0x3f61 (0.88f upper)"
+        },
+        {
+          "vaddr": "0x003037C4",
+          "expected_orig": "0x00000000",
+          "patched": "0x342147AE",
+          "note": "Cave[1]: ori $at, $at, 0x47ae (0.88f = 0x3F6147AE)"
+        },
+        {
+          "vaddr": "0x003037C8",
+          "expected_orig": "0x00000000",
+          "patched": "0x44810800",
+          "note": "Cave[2]: mtc1 $at, $f1"
+        },
+        {
+          "vaddr": "0x003037CC",
+          "expected_orig": "0x00000000",
+          "patched": "0x03E00008",
+          "note": "Cave[3]: jr $ra"
+        },
+        {
+          "vaddr": "0x003037D0",
+          "expected_orig": "0x00000000",
+          "patched": "0x46010002",
+          "note": "Cave[4] delay slot: mul.s $f0, $f0, $f1"
+        }
+      ]
+    },
+    {
+      "id": "sun_high_noon_override",
+      "name": "Runtime High-Afternoon Sun Direction Cave (SetCurrentSunInfo)",
+      "description": "Trampolines SetCurrentSunInfo__FUi epilogue (0x001FADB4, where $v1 == 0x00547480 WorldLightDirectionVector and delay slot 0x001FADB8 zeroes +0xc) into cave 0x003E4E84..0x003E4EA0. Sets a unit-normalized crisp high-afternoon solar vector (-0.353553f, -0.353553f, +0.8660254f) for sharper car & road shading.",
+      "category": "lighting",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "cave_asm": {
+        "cave_base": "0x003E4E84",
+        "hook_vaddr": "0x001FADB4",
+        "instructions": [
+          "lui   $t0, 0xBEB5",
+          "ori   $t0, $t0, 0x04F3",
+          "sw    $t0, 0x0($v1)",
+          "sw    $t0, 0x4($v1)",
+          "lui   $t0, 0x3F5D",
+          "ori   $t0, $t0, 0xB3D7",
+          "jr    $ra",
+          "sw    $t0, 0x8($v1)"
+        ]
+      },
+      "writes": [
+        {
+          "vaddr": "0x001FADB4",
+          "expected_orig": "0x03E00008",
+          "patched": "0x080F93A1",
+          "note": "Hook SetCurrentSunInfo__FUi epilogue (0x001FADB4): jr $ra -> j 0x003E4E84 (delay slot 0x001FADB8 keeps sw $zero,0xc($v1))"
+        },
+        {
+          "vaddr": "0x003E4E84",
+          "expected_orig": "0x00000000",
+          "patched": "0x3C08BEB5",
+          "note": "Cave[0]: lui $t0, 0xbeb5 (-0.353553f upper)"
+        },
+        {
+          "vaddr": "0x003E4E88",
+          "expected_orig": "0x00000000",
+          "patched": "0x350804F3",
+          "note": "Cave[1]: ori $t0, $t0, 0x4f3 (-0.353553f = 0xBEB504F3)"
+        },
+        {
+          "vaddr": "0x003E4E8C",
+          "expected_orig": "0x00000000",
+          "patched": "0xAC680000",
+          "note": "Cave[2]: sw $t0, 0x0($v1) -> WorldLightDirectionVector.x"
+        },
+        {
+          "vaddr": "0x003E4E90",
+          "expected_orig": "0x00000000",
+          "patched": "0xAC680004",
+          "note": "Cave[3]: sw $t0, 0x4($v1) -> WorldLightDirectionVector.y"
+        },
+        {
+          "vaddr": "0x003E4E94",
+          "expected_orig": "0x00000000",
+          "patched": "0x3C083F5D",
+          "note": "Cave[4]: lui $t0, 0x3f5d (+0.8660254f upper)"
+        },
+        {
+          "vaddr": "0x003E4E98",
+          "expected_orig": "0x00000000",
+          "patched": "0x3508B3D7",
+          "note": "Cave[5]: ori $t0, $t0, 0xb3d7 (+0.8660254f = 0x3F5DB3D7)"
+        },
+        {
+          "vaddr": "0x003E4E9C",
+          "expected_orig": "0x00000000",
+          "patched": "0x03E00008",
+          "note": "Cave[6]: jr $ra"
+        },
+        {
+          "vaddr": "0x003E4EA0",
+          "expected_orig": "0x00000000",
+          "patched": "0xAC680008",
+          "note": "Cave[7] delay slot: sw $t0, 0x8($v1) -> WorldLightDirectionVector.z"
+        }
+      ]
+    }
+  ]
+}
