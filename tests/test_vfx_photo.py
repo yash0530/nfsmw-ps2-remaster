@@ -125,10 +125,12 @@ class TestVFXPhotoSwiftAndMetalGPU(unittest.TestCase):
     """Strict Swift typecheck, compiled runtime math verification, and real Metal 4 GPU compile/dispatch."""
 
     def test_swift_typecheck_runtime_smoke_and_metal_hud_pso(self) -> None:
-        if platform.system() != "Darwin" or shutil.which("swiftc") is None:
+        if sys.platform != "darwin" or platform.system() != "Darwin" or shutil.which("swiftc") is None:
             self.skipTest("macOS swiftc toolchain unavailable")
 
         sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
+        sdk_ver = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-version"], text=True).strip()
+        sdk_major = int(sdk_ver.split(".")[0]) if sdk_ver and sdk_ver[0].isdigit() else 0
         base_flags = [
             "-target",
             "arm64-apple-macosx14.0",
@@ -403,10 +405,14 @@ do {
     check(approx(simd_length(pose.forward), 1.0, 1e-4) && abs(simd_dot(pose.forward, pose.right)) < 1e-4, "worldCameraPose orthonormal failed")
 }
 
-// 5. Real Metal MSL 4.0 Compile of RayTracing.metal + RTHud.metal & Live GPU Dispatch of hudOverlayKernel!
+// 5. Real Metal MSL Compile of RayTracing.metal + RTHud.metal & Live GPU Dispatch of hudOverlayKernel!
 guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
-    fputs("FAIL: No default Metal device available\n", stderr)
-    exit(1)
+    fputs("SKIP: No default Metal device available\n", stderr)
+    exit(3)
+}
+guard device.supportsRaytracing else {
+    fputs("SKIP: Metal hardware ray tracing unavailable on host GPU\n", stderr)
+    exit(3)
 }
 guard let emptyBuf = RTVFXSystem.makeEmptyBuffer(device: device) else {
     fputs("FAIL: makeEmptyBuffer failed\n", stderr)
@@ -422,14 +428,18 @@ let opts = MTLCompileOptions()
 opts.fastMathEnabled = true
 var compiledMSL = "3.1"
 var lib: MTLLibrary? = nil
-if #available(macOS 26.0, *) {
+""" + (
+                    """if #available(macOS 26.0, *) {
     opts.languageVersion = .version4_0
     if let l4 = try? device.makeLibrary(source: combinedSrc, options: opts) {
         lib = l4
         compiledMSL = "4.0"
     }
 }
-if lib == nil {
+"""
+                    if sdk_major >= 26
+                    else ""
+                ) + r"""if lib == nil {
     opts.languageVersion = .version3_1
     lib = try device.makeLibrary(source: combinedSrc, options: opts)
     compiledMSL = "3.1"
@@ -595,6 +605,8 @@ print("VFX_PHOTO_GPU_PASS device=\(device.name) msl=\(compiledMSL) vfDiff=\(vfDi
                 capture_output=True,
                 text=True,
             )
+            if run_res.returncode == 3:
+                self.skipTest(run_res.stderr.strip() or "Metal hardware ray tracing unavailable on host GPU")
             self.assertEqual(
                 run_res.returncode,
                 0,

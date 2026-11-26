@@ -7,6 +7,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 import zlib
@@ -25,9 +26,19 @@ RESEARCH_DOC = REPO_ROOT / "docs" / "research" / "METAL4_HARDWARE_RAYTRACING.md"
 
 
 def _has_apple_metal_rt_toolchain() -> bool:
-    if os.uname().sysname != "Darwin":
+    if sys.platform != "darwin":
         return False
-    return shutil.which("swiftc") is not None and shutil.which("make") is not None
+    if shutil.which("swiftc") is None or shutil.which("make") is None:
+        return False
+    try:
+        sdk = subprocess.check_output(
+            ["xcrun", "--sdk", "macosx", "--show-sdk-version"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        return int(sdk.split(".")[0]) >= 26
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
 
 
 class TestMetalRayTracingStructure(unittest.TestCase):

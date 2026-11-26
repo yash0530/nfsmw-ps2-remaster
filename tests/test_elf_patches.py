@@ -221,7 +221,7 @@ class TestElfPatchJsonSchema(unittest.TestCase):
         spec = self._validate_patch_file(PATCHES_PATH)
         self.assertEqual(spec["target"].get("elf_sha1"), EXPECTED_ELF_SHA1)
         patches = spec["patches"]
-        self.assertEqual(len(patches), 21)
+        self.assertEqual(len(patches), 20)
 
         default_ids = [p["id"] for p in patches if p["enabled_by_default"]]
         self.assertEqual(
@@ -237,7 +237,7 @@ class TestElfPatchJsonSchema(unittest.TestCase):
         )
 
         total_writes = sum(len(p["writes"]) for p in patches)
-        self.assertEqual(total_writes, 43)
+        self.assertEqual(total_writes, 42)
 
 
 class TestElfDisasmOffline(unittest.TestCase):
@@ -386,8 +386,10 @@ class TestPnachConsistency(unittest.TestCase):
         self.assertIn("[Widescreen 16:9]", text)
         self.assertIn("gsaspectratio=16:9", text)
         self.assertIn("patch=1,EE,00AAFE54,word,00000001", text)
-        # Ensure stale standard-edition SLUS-21267 flag address is never present
+        # Ensure stale standard-edition SLUS-21267 flag address and unlicensed third-party blocks are absent
         self.assertNotIn("00AAFDD4", text)
+        self.assertNotIn("PeterDelta", text)
+        self.assertNotIn("005500F0", text)
 
     def test_pnach_default_auto_enable_matches_six_safe_defaults(self) -> None:
         defaults = setup_pcsx2_macos.extract_default_pnach_sections(PNACH_PATH)
@@ -468,7 +470,7 @@ class TestLiveRetailElfVerification(unittest.TestCase):
                         f"{patch['id']} @ 0x{vaddr:08X}: patched instruction 0x{pat:08X} failed decode",
                     )
                 checked += 1
-        self.assertEqual(checked, 43)
+        self.assertEqual(checked, 42)
 
     def test_apply_elf_patches_defaults_and_each_individual_patch(self) -> None:
         assert self._elf is not None

@@ -128,6 +128,7 @@ def _write_test_png(path: Path, rgb: tuple[int, int, int], with_edges: bool = Tr
 
 
 class TestKeyDriverCompilationAndCLI(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS AppKit/AVFoundation")
     def test_key_driver_compiles_help_and_dry_run(self) -> None:
         bin_path = race_flywheel.ensure_key_driver_binary()
         self.assertTrue(bin_path.is_file())
@@ -627,6 +628,7 @@ class TestMetricsMontageAndFlow(unittest.TestCase):
             self.assertFalse((snaps_dir / "snap_corrupt.png").exists())
             self.assertEqual(list((iter_dir / "frames").glob("*.png")), [])
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS AppKit/AVFoundation")
     def test_mocked_run_race_pine_autopilot_with_video_end_to_end(self) -> None:
         import video_qa_pipeline
 

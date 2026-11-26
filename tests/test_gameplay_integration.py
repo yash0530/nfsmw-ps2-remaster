@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,9 +32,19 @@ FULL_RKPT = REPO_ROOT / "build" / "rockport_world" / "rockport_full.rkpt"
 
 
 def _has_apple_metal_rt_toolchain() -> bool:
-    if os.uname().sysname != "Darwin":
+    if sys.platform != "darwin":
         return False
-    return shutil.which("swiftc") is not None and shutil.which("make") is not None
+    if shutil.which("swiftc") is None or shutil.which("make") is None:
+        return False
+    try:
+        sdk = subprocess.check_output(
+            ["xcrun", "--sdk", "macosx", "--show-sdk-version"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        return int(sdk.split(".")[0]) >= 26
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
 
 
 class TestGameplayIntegrationContract(unittest.TestCase):
@@ -208,6 +219,8 @@ class TestGameplayIntegrationRuntime(unittest.TestCase):
                 text=True,
                 check=False,
             )
+            if res.returncode == 2 and ("not supported" in res.stderr.lower() or "no metal" in res.stderr.lower()):
+                self.skipTest("Metal hardware ray tracing unsupported on this host GPU")
             self.assertEqual(res.returncode, 0, f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}")
             self.assertIn("supportsRaytracing=true", res.stdout)
             self.assertIn("aiInsts=0", res.stdout)
@@ -252,6 +265,8 @@ class TestGameplayIntegrationRuntime(unittest.TestCase):
                 text=True,
                 check=False,
             )
+            if res.returncode == 2 and ("not supported" in res.stderr.lower() or "no metal" in res.stderr.lower()):
+                self.skipTest("Metal hardware ray tracing unsupported on this host GPU")
             self.assertEqual(res.returncode, 0, f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}")
             out = res.stdout
 

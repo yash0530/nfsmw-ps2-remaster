@@ -234,7 +234,7 @@ class TestMusicPackOffline(unittest.TestCase):
 
     def test_swift_audio_engine_typecheck_and_smoke(self) -> None:
         """Verify RTAudioEngine.swift compiles cleanly with zero warnings & passes runtime smoke test."""
-        if platform.system() != "Darwin" or shutil.which("swiftc") is None:
+        if sys.platform != "darwin" or platform.system() != "Darwin" or shutil.which("swiftc") is None:
             self.skipTest("macOS swiftc toolchain unavailable")
 
         sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
@@ -530,7 +530,7 @@ class TestMusicPackLiveISO(unittest.TestCase):
         self.assertEqual(licensed_seen, EXPECTED_LICENSED_BY_STREAM)
 
         # Verify actual macOS AAC M4A decodability via built-in `afinfo` on sample tracks (incl. permutation trio)
-        if platform.system() == "Darwin" and shutil.which("afinfo") is not None:
+        if sys.platform == "darwin" and platform.system() == "Darwin" and shutil.which("afinfo") is not None:
             for sidx in (1, 10, 11, 12, 16, 31, 44):
                 m4a = pack_dir / "tracks" / f"track_{sidx:02d}.m4a"
                 res = subprocess.run(["afinfo", str(m4a)], capture_output=True, text=True)

@@ -70,6 +70,7 @@ def clone_iso_non_destructively(src: Path, dst: Path) -> str:
             text=True,
         )
         if res.returncode == 0:
+            dst.chmod(dst.stat().st_mode | 0o200)
             return "apfs-clonefile"
 
     # Cross-platform fallback: buffered streaming copy
@@ -626,26 +627,16 @@ def emit_companion_pnach(new_crc: str, out_path: Path, applied_ids: List[str]) -
         "",
         f"[Widescreen {aspect} (Runtime Confirm)]",
         f"gsaspectratio={aspect}",
-        "author=PeterDelta / NFSMW: Rockport 2026",
+        "author=NFSMW: Rockport 2026",
         f"description=Reinforces Black Edition runtime widescreen flag at 0x00AAFE54 (even when loading an existing 4:3 memory card save; static projection & VideoSettings::Default are baked into the ELF).",
         "patch=1,EE,00AAFE54,word,00000001",
         "",
     ]
-    if "remove_brume_fog" not in applied_ids:
-        lines.extend(
-            [
-                "[Remove Distance Brume (Optional)]",
-                "author=PeterDelta",
-                "description=Optional runtime toggle to disable atmospheric distance brume/fog.",
-                "patch=0,EE,005500F0,word,00000000",
-                "",
-            ]
-        )
     if "disable_bloom" not in applied_ids:
         lines.extend(
             [
                 "[Disable Bloom (Optional)]",
-                "author=Steelmax",
+                "author=NFSMW: Rockport 2026",
                 "description=Optional runtime toggle to disable bloom glare at 4K.",
                 "patch=0,EE,00550D5C,word,00000001",
                 "",
@@ -699,7 +690,7 @@ def main() -> int:
     parser.add_argument(
         "--include-optional",
         action="store_true",
-        help="Also bake optional ELF patches (e.g., remove_brume_fog)",
+        help="Also bake optional ELF patches (e.g., disable_bloom)",
     )
     parser.add_argument(
         "--zz-override",

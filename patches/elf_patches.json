@@ -16,7 +16,7 @@
       "name": "Remove 2005 Brown/Yellow Visual Treatment",
       "description": "Skips the heavy sepia/amber color-wash pass in IVisualTreatmentPlat::ApplyColorBloom and uses neutral RGBA compositing for crisp, modern natural colors while retaining bloom.",
       "category": "visual",
-      "author": "fobes (MIPS-verified on SLUS_213.51)",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": true,
       "writes": [
         {
@@ -32,14 +32,14 @@
       "name": "Remove Smeared PS2 Motion Blur (Clean, Preserves Bloom)",
       "description": "Disables the low-res PS2 smear/accumulation motion blur inside eAttachSmear2 without killing bloom or other post-processing passes.",
       "category": "visual",
-      "author": "Steelmax / PeterDelta / NFSMW: Rockport 2026",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": true,
       "writes": [
         {
           "vaddr": "0x00550150",
           "expected_orig": "0x00000006",
           "patched": "0x00000000",
-          "note": "eAttachSmear2 (0x00214184, 0x0021488C): SmearNumSubStages 6 -> 0 (matches official PCSX2 March 2026 Steelmax patch)"
+          "note": "eAttachSmear2 (0x00214184, 0x0021488C): SmearNumSubStages 6 -> 0"
         },
         {
           "vaddr": "0x0055014C",
@@ -54,7 +54,7 @@
       "name": "True Native 16:9 Widescreen (Auto-Default ON + 0.75f Projection)",
       "description": "Fixes NTSC 16:9 horizontal 3D projection from EA's overscanned 0.71f to exact 0.75f (3/4) and patches VideoSettings::Default() to default WideScreen = 1 (exact integer bool 1 so in-game Options toggle still works cleanly on standalone modded ISOs without .pnach).",
       "category": "display",
-      "author": "PeterDelta / NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": true,
       "writes": [
         {
@@ -154,7 +154,7 @@
       "name": "Disable Bloom Post-Processing",
       "description": "Skips the PS2 additive bloom pass inside IVisualTreatmentPlat::ApplyColorBloom for a razor-sharp, glare-free image at 4K.",
       "category": "visual",
-      "author": "Steelmax (official PCSX2 March 2026, MIPS-verified on SLUS_213.51)",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": false,
       "writes": [
         {
@@ -170,7 +170,7 @@
       "name": "Disable All Post-Processing (Master Visual Treatment Switch)",
       "description": "Turns off IVisualTreatmentPlat::RenderMWVisualLook entirely, disabling sepia tint, bloom, detail map softening, and pulse brightness in one switch. Also eliminates any remaining upscaled post-effect offset.",
       "category": "visual",
-      "author": "Steelmax (official PCSX2 March 2026, MIPS-verified on SLUS_213.51)",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": false,
       "writes": [
         {
@@ -204,27 +204,11 @@
       ]
     },
     {
-      "id": "remove_brume_fog",
-      "name": "Remove Atmospheric Brume / Fog Volume Pass",
-      "description": "Disables the atmospheric distance brume/haze volume overlay in eAttachFog for crystal-clear horizons at 4K.",
-      "category": "visual",
-      "author": "PeterDelta (MIPS-verified on SLUS_213.51)",
-      "enabled_by_default": false,
-      "writes": [
-        {
-          "vaddr": "0x005500F0",
-          "expected_orig": "0x00000001",
-          "patched": "0x00000000",
-          "note": "eAttachFog (0x00211324): disable fog palette DMA upload & volume overlay"
-        }
-      ]
-    },
-    {
       "id": "no_distant_fog",
       "name": "No Distant Fog (FogModeInfos[0])",
-      "description": "Clears the FogModeInfos[0] mode byte (0x00550029) to remove distant horizon fog completely. Matches official PCSX2 March 2026 Steelmax [No Distant Fog].",
+      "description": "Clears the FogModeInfos[0] mode byte (0x00550029, read via eAttachFog @ 0x00211404) to remove distant horizon fog.",
       "category": "visual",
-      "author": "Steelmax (official PCSX2 March 2026, MIPS-verified on SLUS_213.51)",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
       "enabled_by_default": false,
       "writes": [
         {

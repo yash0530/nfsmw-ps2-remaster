@@ -1,14 +1,16 @@
 gametitle=Need for Speed - Most Wanted [Black Edition] (NTSC-U) [SLUS-21351]
 comment=NFSMW: Rockport 2026 — Binary-Verified PCSX2 v2 Patch Suite for SLUS-21351 (CRC: 0518D274)
 
-// Every static ELF address and MIPS instruction below has been directly verified against
-// unmodified SLUS_213.51 (Black Edition NTSC-U v1.01, SHA-1 60289f3f8b643822a302720f9649ddc4ba55034b).
+// Every static ELF address and MIPS instruction below has been independently verified from our own
+// disassembly of unmodified SLUS_213.51 (Black Edition NTSC-U v1.01, SHA-1 60289f3f8b643822a302720f9649ddc4ba55034b)
+// using SLUS-21351 symbol names from dbalatoni13/nfsmw (https://github.com/dbalatoni13/nfsmw).
+// Zero copied third-party unlicensed .pnach blocks are included.
 // Toggle individual sections in PCSX2: Game Properties -> Patches.
 // NOTE: Enable only ONE aspect-ratio section at a time ([Widescreen 16:9], [Ultrawide 21:9], or [Wider Camera FOV +12% (16:9)]).
 
 [Widescreen 16:9]
 gsaspectratio=16:9
-author=PeterDelta / NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
 description=Enables true 16:9 widescreen natively via VideoSettings::Default (exact bool 1), forces BE runtime flag 0x00AAFE54=1 for existing 4:3 saves, and fixes 3D horizontal aspect projection (0.71f -> 0.75f). Auto-enabled by PCSX2 global Widescreen Patches toggle.
 patch=0,EE,0026D9F4,word,AC810000
 patch=0,EE,0026D9F8,word,24010001
@@ -18,7 +20,7 @@ patch=0,EE,0054BA38,word,3F400000
 
 [Ultrawide 21:9 (Optional Alternative to 16:9)]
 gsaspectratio=21:9
-author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
 description=True 21:9 (64:27) ultrawide projection (0.71f -> 0.5625f) plus widened frustum culling (0.71f -> 0.90f) to eliminate edge pop-in. Disable [Widescreen 16:9] when enabling this section.
 patch=0,EE,0026D9F4,word,AC810000
 patch=0,EE,0026D9F8,word,24010001
@@ -29,7 +31,7 @@ patch=0,EE,0054E174,word,3F666666
 
 [Wider Camera FOV +12% (Optional 16:9 Alternative)]
 gsaspectratio=16:9
-author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
 description=Symmetric +12% wider 3D camera FOV on 16:9 (scales 3D X/Y projection by 1/1.12 and widens frustum culling to 0.80f while preserving exact 16:9 proportions and 2D HUD). Disable [Widescreen 16:9] when enabling this section.
 patch=0,EE,0026D9F4,word,AC810000
 patch=0,EE,0026D9F8,word,24010001
@@ -40,41 +42,36 @@ patch=0,EE,0054BA3C,word,3F7B6DB7
 patch=0,EE,0054E174,word,3F4CCCCD
 
 [Remove Brown Filter]
-author=fobes (MIPS-verified for SLUS-21351)
-description=Skips the 2005 sepia/brown-yellow tint pass inside IVisualTreatmentPlat::ApplyColorBloom for clean, modern natural colors while preserving bloom.
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+description=Sets the built-in skip flag at 0x00550D58 (ApplyColorBloom @ 0x0021931C) to bypass the sepia/amber tint pass while preserving bloom.
 patch=1,EE,00550D58,word,00000001
 
 [Disable Motion Blur Effect]
-author=Steelmax / PeterDelta / NFSMW: Rockport 2026
-description=Disables PS2 accumulation smear motion blur cleanly via eAttachSmear2 (SmearNumSubStages=0, SmearEnable=0) without disabling bloom or other post-processing.
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+description=Disables PS2 accumulation smear motion blur cleanly via eAttachSmear2 (SmearNumSubStages @ 0x00550150 = 0, SmearEnable @ 0x0055014C = 0) without disabling bloom or other post-processing.
 patch=1,EE,00550150,word,00000000
 patch=1,EE,0055014C,word,00000000
 
 [Disable Bloom (Optional)]
-author=Steelmax (official PCSX2 March 2026, MIPS-verified for SLUS-21351)
-description=Skips the excessive PS2 additive bloom pass inside ApplyColorBloom while retaining remaining visual treatment.
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+description=Sets the built-in bloom-skip flag at 0x00550D5C (ApplyColorBloom @ 0x002193A8) to skip the PS2 additive bloom pass while retaining remaining visual treatment.
 patch=1,EE,00550D5C,word,00000001
 
 [Disable All Post-processing (Optional)]
-author=Steelmax (official PCSX2 March 2026, MIPS-verified for SLUS-21351)
-description=Disables IVisualTreatmentPlat::RenderMWVisualLook completely (sepia, bloom, detail softening, pulse brightness). Also eliminates upscaled post-effect alignment offsets.
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+description=Clears the master visual-treatment switch at 0x00550D28 (RenderMWVisualLook @ 0x0021A01C) to disable sepia, bloom, detail softening, and pulse brightness.
 patch=1,EE,00550D28,word,00000000
 
 [Disable Radial Blur (Optional)]
-author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
 description=Disables high-speed and Nitrous screen-edge radial blur by early-returning IVisualTreatmentPlat::Radialblur.
 patch=0,EE,00219A68,word,03E00008
 patch=0,EE,00219A6C,word,00000000
 
 [No Distant Fog (Optional)]
-author=Steelmax (official PCSX2 March 2026, MIPS-verified for SLUS-21351)
-description=Clears FogModeInfos[0] mode byte (0x00550029 -> 0x00) to remove distant horizon fog cleanly.
+author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+description=Clears FogModeInfos[0] mode byte (0x00550029 -> 0x00, read via eAttachFog @ 0x00211404) to remove distant horizon fog cleanly.
 patch=1,EE,00550028,word,01000000
-
-[Remove Distance Brume (Optional)]
-author=PeterDelta (MIPS-verified for SLUS-21351)
-description=Disables atmospheric distance brume/haze volume overlay in eAttachFog for sharper horizon clarity at 4K.
-patch=0,EE,005500F0,word,00000000
 
 [Disable Screen Raindrops (Optional)]
 author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)

@@ -54,3 +54,33 @@ jobs:
         env:
           NFSMW_ISO: /nonexistent
         run: python3 -m unittest discover -s tests -v
+
+  verify-macos:
+    name: Verify macOS (Swift + Offline Suite + Rust BC7)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lightweight test dependencies (Pillow & NumPy)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pillow numpy
+
+      - name: Verify Rust BC7 DDS encoder (pure std, offline)
+        env:
+          CARGO_TARGET_DIR: build/dds_ci_target
+        run: |
+          rustc --version && cargo --version
+          cargo test --manifest-path tools/dds_encoder_rs/Cargo.toml
+
+      - name: Run unit test suite (offline macOS CI mode)
+        env:
+          NFSMW_ISO: /nonexistent
+        run: python3 -m unittest discover -s tests -v

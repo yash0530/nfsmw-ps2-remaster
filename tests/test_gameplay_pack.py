@@ -131,7 +131,7 @@ class TestGameplayPackSynthetic(unittest.TestCase):
 
     def test_swift_physics_and_audio_typecheck(self) -> None:
         """Verify RTPhysics.swift and RTAudioEngine.swift typecheck cleanly on macOS."""
-        if platform.system() != "Darwin" or shutil.which("swiftc") is None:
+        if sys.platform != "darwin" or platform.system() != "Darwin" or shutil.which("swiftc") is None:
             self.skipTest("macOS swiftc toolchain unavailable")
         sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
         cmd = [

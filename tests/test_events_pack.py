@@ -238,7 +238,7 @@ class TestEventsPackOffline(unittest.TestCase):
 
     def test_swift_event_manager_typecheck_and_runtime_smoke(self) -> None:
         """Typecheck + run compiled Swift smoke test (Sprint, Speedtrap, Boss Duel, Map, 1024x1024 bake < 25 ms)."""
-        if platform.system() != "Darwin" or shutil.which("swiftc") is None:
+        if sys.platform != "darwin" or platform.system() != "Darwin" or shutil.which("swiftc") is None:
             self.skipTest("macOS swiftc toolchain unavailable")
 
         sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
@@ -513,8 +513,8 @@ do {
 
 // 6. O(1) Pre-Baked 1024x1024 Metal World Map Texture Baker (< 25 ms for 6,538 segments!)
 guard let device = MTLCreateSystemDefaultDevice() else {
-    fputs("FAIL: MTLCreateSystemDefaultDevice() returned nil\\n", stderr)
-    exit(1)
+    fputs("SKIP: MTLCreateSystemDefaultDevice() returned nil\\n", stderr)
+    exit(3)
 }
 
 func verifyTextureHasRoadsAndHighways(_ tex: MTLTexture, label: String) {
@@ -633,6 +633,8 @@ print("SWIFT_EVENTS_SMOKE_PASS")
             if rkpt_arg:
                 run_cmd.append(rkpt_arg)
             r_res = subprocess.run(run_cmd, capture_output=True, text=True)
+            if r_res.returncode == 3:
+                self.skipTest(r_res.stderr.strip() or "No Metal GPU device available on this host")
             self.assertEqual(
                 r_res.returncode,
                 0,

@@ -108,6 +108,7 @@ def _create_mock_pcsx2_env(root: Path) -> tuple[Path, Path, Path]:
 
 
 class TestVideoToolsSwiftAndPipeline(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS AppKit/AVFoundation")
     def test_video_tools_compiles_synth_probe_transcode_and_extract_qa(self) -> None:
         bin_path = video_qa_pipeline.ensure_video_tools_binary()
         self.assertTrue(bin_path.is_file())
@@ -256,6 +257,7 @@ class TestVideoToolsSwiftAndPipeline(unittest.TestCase):
             self.assertGreaterEqual(qa["timeline"][1]["highlight_clip_pct"], 5.0)
             self.assertLess(qa["timeline"][1]["highlight_clip_pct"], 12.0)
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS AppKit/AVFoundation")
     def test_key_driver_supports_f12_and_v_hotkeys(self) -> None:
         bin_path = race_flywheel.ensure_key_driver_binary()
         res = subprocess.run(
@@ -326,6 +328,7 @@ class TestRaceFlywheelVideoWiring(unittest.TestCase):
             self.assertIn("VideoCaptureBitrate = 8000", sb_ini)
             self.assertIn("ToggleVideoCapture = Keyboard/F12", sb_ini)
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS AppKit/AVFoundation")
     def test_mocked_run_race_with_record_video_end_to_end(self) -> None:
         video_tools_bin = video_qa_pipeline.ensure_video_tools_binary()
         with tempfile.TemporaryDirectory() as tmp:

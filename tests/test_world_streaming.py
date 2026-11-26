@@ -195,7 +195,7 @@ do {
 
 
 def _can_compile_swift_metal() -> bool:
-    return platform.system() == "Darwin" and shutil.which("swiftc") is not None
+    return sys.platform == "darwin" and platform.system() == "Darwin" and shutil.which("swiftc") is not None
 
 
 def _compile_harness(tmp_dir: Path) -> Path:
@@ -333,7 +333,10 @@ class TestWorldStreamingMetal(unittest.TestCase):
                 spawn_yaw_rad=0.0,
                 ps2_origin=(0.0, 0.0, 0.0),
             )
-            proc = subprocess.run([str(self._harness_bin), str(v2_path), str(v1_path)], capture_output=True, text=True, check=True)
+            proc = subprocess.run([str(self._harness_bin), str(v2_path), str(v1_path)], capture_output=True, text=True, check=False)
+            if proc.returncode == 3:
+                self.skipTest(proc.stderr.strip() or "Metal hardware ray tracing unavailable")
+            self.assertEqual(proc.returncode, 0, f"Harness failed:\nstdout={proc.stdout}\nstderr={proc.stderr}")
             data = json.loads(proc.stdout)
             self.assertEqual(data["version"], 2)
             self.assertEqual(data["bc7TextureCount"], 1)
@@ -358,7 +361,10 @@ class TestWorldStreamingMetal(unittest.TestCase):
         cmd = [str(self._harness_bin), str(full_rkpt)]
         if rw_rkpt.is_file():
             cmd.append(str(rw_rkpt))
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode == 3:
+            self.skipTest(proc.stderr.strip() or "Metal hardware ray tracing unavailable")
+        self.assertEqual(proc.returncode, 0, f"Harness failed:\nstdout={proc.stdout}\nstderr={proc.stderr}")
         data = json.loads(proc.stdout)
 
         # Hard Hour 2 Gates

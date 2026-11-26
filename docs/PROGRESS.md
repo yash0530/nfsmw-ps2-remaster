@@ -1,17 +1,11 @@
-| Version | Feature | Status | Score / FPS | Commit |
+> Open-source, non-destructive PS2/PCSX2 modding tools for real `SLUS-21351` inside PCSX2 (zero copyrighted EA game assets distributed). `SLUS-21351` symbol names credited to [`dbalatoni13/nfsmw`](https://github.com/dbalatoni13/nfsmw). External Metal RT prototype (`v0.6`–`v1.4`) dropped from `main` and archived on `archive/standalone-metal-rt-v1.4`.
+
+| Version | Milestone | Status | QA / Notes | Commit |
 | :--- | :--- | :--- | :--- | :--- |
-| `v0.5` | PS2/PCSX2 Remaster (frozen) | Done | 8.9/10 | `b1bff22` |
-| `v0.6` | Metal 4 RT City (Rosewood/Downtown) | Done | 8.7/10 · 57 FPS | `5fccacb` |
-| `v0.7` | Full-Map v2, 120 FPS FI, Physics & Audio | Done | 9.1/10 · 127 FPS | `v0.7.0` |
-| `v0.8` | Full-Island Streaming, 24h Sky, 40 Cars, HUD | Done | 9.2/10 · 128 FPS | `v0.8.0` |
-| `v0.9` | Live Traffic, Cops, Pursuits & Audio Loop | Done | 9.3/10 · 115 FPS | `v0.9.0` |
-| `v1.0` | Visual QA (9.0+), Prune & Play Guide | Done | 9.3/10 · 115 FPS | `v1.0.0` |
-| `v1.1` | EA TRAX Soundtrack & Tunnel Reverb | Done | 9.3/10 · 145 FPS | `v1.1.0` |
-| `v1.2` | Sprints, Speedtraps, Boss Duels & World Map | Done | 9.5/10 · 143 FPS | `v1.2.0` |
-| `v1.3` | Photo Mode, Drift VFX, Cockpits & RIS Lamps | Done | 9.4/10 (9.8 4K) · 114 FPS | `v1.3.0` |
-| `v1.4` | PVS 2km Vistas, Foliage, Waves & Top-15 QA | Done | 9.5/10 · 124 FPS | `v1.4.0` |
-| `v2.1` | Real PS2 Full-City 4x/8x Faithful Texture Pack | In Progress | — | — |
-| `v2.2` | Real PS2 4K HUD/Icons & 84-Car Smooth VU1 | Queued | — | — |
-| `v2.3` | Real PS2 2024 Lighting, Shaders & HD FMVs | Queued | — | — |
-| `v2.4` | Live PCSX2 PINE -> Metal 4 RT RTX-Remix Bridge | Queued | — | — |
-| `v2.5` | Real PCSX2 Video QA (9.3+), Save Transfer & Guide | Queued | — | — |
+| `v0.5` | PS2/PCSX2 Baseline (84-car VU1, lighting, 170 BC7 tex) | Done | PCSX2 v2.6.3 baseline | `b1bff22` |
+| `v0.6`–`v1.4` | Standalone Metal RT Prototype (dropped from `main`) | Archived | Archived (`archive/standalone-metal-rt-v1.4`) | `v1.4.0` |
+| `stabilize` | Green Ubuntu + macOS CI, `.pnach` Audit & ISO Round-Trip | In Progress | CI + Rust BC7 + SHA-256 ISO proof | — |
+| `v2.1` | PCSX2 4K/32-bit Profile, 60 FPS Proof & Baseline Video | Queued | User QA | — |
+| `v2.2` | District-by-District Faithful HD Textures (In-Game Dumps) | Queued | User QA | — |
+| `v2.3` | 4K HUD/Loading Icons & Opt-In Per-Car VU1 Geometry | Queued | User QA | — |
+| `v2.4` | Measured VLT Handling/Pursuit Polish & Save Proof | Queued | User QA | — |
