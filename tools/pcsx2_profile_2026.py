@@ -47,7 +47,7 @@ MULTI_KEY_SECTIONS = {"Patches"}
 RENDERERS: Dict[str, int] = {"metal": 17, "vulkan": 14, "auto": -1}
 
 V21_DEFAULT_PATCHES: List[str] = [
-    "Widescreen 16:9", "Remove Brown Filter", "Disable Motion Blur Effect",
+    "Widescreen 16:9", "Remove Brown Filter (Rockport 2026)", "Disable Motion Blur Effect",
     "Force High-LOD Cars and Wheels", "Full-Rate Car Reflections (All 5 Faces Every Frame)",
     "Extended Scenery Draw Distance and High-LOD World", "Warm Late-Autumn Lighting & Fog (Optional)",
     "60 FPS Companion: Fix ScreenEFX 30Hz Timestep (Experimental)",

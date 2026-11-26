@@ -41,7 +41,7 @@ patch=0,EE,0054BA38,word,3F2B6DB7
 patch=0,EE,0054BA3C,word,3F7B6DB7
 patch=0,EE,0054E174,word,3F4CCCCD
 
-[Remove Brown Filter]
+[Remove Brown Filter (Rockport 2026)]
 author=fobes (independently MIPS-verified on SLUS_213.51 by Rockport 2026)
 description=Sets the built-in skip flag at 0x00550D58 (ApplyColorBloom @ 0x0021931C) to bypass the sepia/amber tint pass while preserving bloom.
 patch=1,EE,00550D58,word,00000001

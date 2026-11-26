@@ -397,7 +397,7 @@ class TestPnachConsistency(unittest.TestCase):
             defaults,
             [
                 "Widescreen 16:9",
-                "Remove Brown Filter",
+                "Remove Brown Filter (Rockport 2026)",
                 "Disable Motion Blur Effect",
                 "Force High-LOD Cars and Wheels",
                 "Full-Rate Car Reflections (All 5 Faces Every Frame)",
