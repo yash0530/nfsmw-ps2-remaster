@@ -525,6 +525,28 @@
           "note": "g_MaxRoadDampness 1.00f -> 0.52f"
         }
       ]
+    },
+    {
+      "id": "crisp_3d_depth_lighting_v26",
+      "name": "Crisp 3D Sun-Shadow Contrast & Grounded Damp Road Reflections (v2.6)",
+      "description": "Raises PrimaryLightDiffuseIntensity (6.50 -> 7.80) while cooling and moderating FillLightDiffuseColour/Intensity ([0.87,0.90,1.00]@2.10 -> [0.78,0.84,0.96]@1.75) for a 4.46:1 sunlit-vs-shaded 3D separation, clears mid-fog (340/380), and unlocks dry-weather planar road reflections capped at g_MaxRoadDampness=0.48f so asphalt reflects cars and skyline realistically without washing out dry sidewalks.",
+      "category": "visual",
+      "author": "NFSMW: Rockport 2026 (MIPS/ELF-verified for SLUS-21351)",
+      "enabled_by_default": false,
+      "mutually_exclusive_with": ["always_wet_road_reflections", "warm_autumn_lighting_v21"],
+      "writes": [
+        {"vaddr": "0x00547490", "expected_orig": "0x40D00000", "patched": "0x40F9999A", "note": "PrimaryLightDiffuseIntensity 6.50f -> 7.80f (+20% crisp 3D sun key)"},
+        {"vaddr": "0x005474A0", "expected_orig": "0x3F5EB852", "patched": "0x3F47AE14", "note": "FillLightDiffuseColour.r 0.87f -> 0.78f (cool sky-shadow fill)"},
+        {"vaddr": "0x005474A4", "expected_orig": "0x3F666666", "patched": "0x3F570A3D", "note": "FillLightDiffuseColour.g 0.90f -> 0.84f"},
+        {"vaddr": "0x005474A8", "expected_orig": "0x3F800000", "patched": "0x3F75C28F", "note": "FillLightDiffuseColour.b 1.00f -> 0.96f"},
+        {"vaddr": "0x005474B0", "expected_orig": "0x40066666", "patched": "0x3FE00000", "note": "FillLightDiffuseIntensity 2.10f -> 1.75f (4.46:1 key/fill 3D depth)"},
+        {"vaddr": "0x00593E94", "expected_orig": "0x43540000", "patched": "0x43AA0000", "note": "BaseWeatherFogStart 212.0f -> 340.0f"},
+        {"vaddr": "0x00593ED0", "expected_orig": "0x43650000", "patched": "0x43BE0000", "note": "HorizWeatherFogStart 229.0f -> 380.0f"},
+        {"vaddr": "0x00407560", "expected_orig": "0x45010003", "patched": "0x00000000", "note": "UpdateAndRender__4Rain: bc1t -> nop (allow planar damp road reflections in clear weather)"},
+        {"vaddr": "0x005A2C80", "expected_orig": "0x3F800000", "patched": "0x3EF5C28F", "note": "g_MaxRoadDampness 1.00f -> 0.48f (grounded damp asphalt, clean dry sidewalks)"},
+        {"vaddr": "0x004075A0", "expected_orig": "0x3C013BA3", "patched": "0x3C013D4C", "note": "mRoadDampness lerp rate 0.005f -> 0.05f (upper 16 bits)"},
+        {"vaddr": "0x004075A4", "expected_orig": "0x3421D70A", "patched": "0x3421CCCD", "note": "mRoadDampness lerp rate 0.005f -> 0.05f (lower 16 bits)"}
+      ]
     }
   ]
 }
