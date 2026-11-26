@@ -10,3 +10,9 @@
 | `v1.2` | Sprints, Speedtraps, Boss Duels & World Map | Done | 9.5/10 · 143 FPS | `v1.2.0` |
 | `v1.3` | Photo Mode, Drift VFX, Cockpits & RIS Lamps | Done | 9.4/10 (9.8 4K) · 114 FPS | `v1.3.0` |
 | `v1.4` | PVS 2km Vistas, Foliage, Waves & Top-15 QA | Done | 9.5/10 · 124 FPS | `v1.4.0` |
+| `v1.5` | Career Save, Blacklist Ladder & 3D Garage | In Progress | — | — |
+| `v1.6` | Cop Radio, Chopper Spotlight, Rhinos & Breakers | Queued | — | — |
+| `v1.7` | 6-Car Circuits/Drags/Knockouts & Car Damage | Queued | — | — |
+| `v1.8` | 1440p/4K Live RT, ReSTIR Shadows, God-Rays & Spray | Queued | — | — |
+| `v1.9` | 4x PBR World Normals/Roughness & 3D Sky Clouds | Queued | — | — |
+| `v2.0` | Title/Pause UI, 30s MP4 Replay & .app Bundle | Queued | — | — |
