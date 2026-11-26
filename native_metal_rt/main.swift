@@ -6,7 +6,7 @@ import MetalKit
 final class RTShowcaseMTKView: MTKView {
     weak var rendererRef: RTRenderer?
     var onScreenshotRequested: (() -> Void)?
-    var onCarChanged: ((RTCarProfile) -> Void)?
+    var onCarChanged: ((String) -> Void)?
     private var lastDrag: NSPoint = .zero
 
     override var acceptsFirstResponder: Bool { true }
@@ -51,15 +51,26 @@ final class RTShowcaseMTKView: MTKView {
             r.applyCameraMode(r.cameraMode.next())
         case "1":
             r.timeCycleEnabled = false
+            r.explicitTimeOfDay = nil
             r.activePresetKey = "golden_hour"
         case "2":
             r.timeCycleEnabled = false
+            r.explicitTimeOfDay = nil
             r.activePresetKey = "night_neon"
         case "3":
             r.timeCycleEnabled = false
+            r.explicitTimeOfDay = nil
             r.activePresetKey = "daylight"
         case "4":
+            r.explicitTimeOfDay = nil
             r.timeCycleEnabled.toggle()
+        case "b":
+            r.rainIntensity = (r.rainIntensity > 0.2) ? 0.0 : 0.88
+        case "v":
+            if let lm = r.cycleLandmark() {
+                print("Teleported to landmark: \(lm.name)")
+                onCarChanged?(r.scene.carDisplayName)
+            }
         case "k":
             r.frameGenEnabled.toggle()
         case "t":
@@ -71,12 +82,13 @@ final class RTShowcaseMTKView: MTKView {
         case "h":
             r.hudEnabled.toggle()
         case "g":
-            let nextCar = r.scene.carProfile.next()
+            let delta = event.modifierFlags.contains(.shift) ? -1 : 1
+            let nextEntry = RTCarCatalog.next(after: r.scene.canonicalCarName, delta: delta)
             do {
-                try r.switchCar(to: nextCar)
-                onCarChanged?(nextCar)
+                let swapped = try r.switchCar(toKey: nextEntry.canonicalName)
+                onCarChanged?(swapped.carDisplayName)
             } catch {
-                print("Failed to switch car to \(nextCar.rawValue): \(error)")
+                print("Failed to switch car to \(nextEntry.canonicalName): \(error)")
             }
         case "r":
             r.speedKmh = 0.0
@@ -142,8 +154,8 @@ final class RTAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        let worldTag = renderer.world != nil ? " [Rockport City]" : ""
-        window.title = "NFSMW: Rockport 2026 — \(renderer.scene.carProfile.displayName)\(worldTag) — Metal RT (\(renderer.device.name))"
+        let worldTag = renderer.world != nil ? " [\(renderer.activeLandmarkName)]" : ""
+        window.title = "NFSMW: Rockport 2026 — \(renderer.scene.carDisplayName)\(worldTag) — Metal RT (\(renderer.device.name))"
         window.delegate = self
 
         mtkView = RTShowcaseMTKView(frame: rect, device: renderer.device)
@@ -152,14 +164,14 @@ final class RTAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mtkView.preferredFramesPerSecond = 120
         mtkView.delegate = renderer
         mtkView.rendererRef = renderer
-        mtkView.onCarChanged = { [weak self] profile in
+        mtkView.onCarChanged = { [weak self] displayName in
             guard let self else { return }
-            let wTag = self.renderer.world != nil ? " [Rockport City]" : ""
-            self.window.title = "NFSMW: Rockport 2026 — \(profile.displayName)\(wTag) — Metal RT (\(self.renderer.device.name))"
+            let wTag = self.renderer.world != nil ? " [\(self.renderer.activeLandmarkName)]" : ""
+            self.window.title = "NFSMW: Rockport 2026 — \(displayName)\(wTag) — Metal RT (\(self.renderer.device.name))"
         }
         mtkView.onScreenshotRequested = { [weak self] in
             guard let self else { return }
-            let outURL = URL(fileURLWithPath: "build/metal_rt_v06/interactive_rt_\(self.renderer.scene.carProfile.rawValue)_\(self.renderer.activePresetKey).png")
+            let outURL = URL(fileURLWithPath: "build/metal_rt_v06/interactive_rt_\(self.renderer.scene.canonicalCarName)_\(self.renderer.activePresetKey).png")
             do {
                 try self.renderer.renderHeadless(width: 1920, height: 1080, spp: 64, splitCompare: false, outURL: outURL)
                 print("Saved 64-SPP RT PNG -> \(outURL.path)")
@@ -197,6 +209,9 @@ struct RTCLIOptions {
     var height = 1080
     var spp = 64
     var preset = "golden_hour"
+    var landmark: String? = nil
+    var timeOfDayHours: Float? = nil
+    var rainIntensity: Float? = nil
     var livery = true
     var rtEnabled = true
     var denoiseMode: RTDenoiseMode? = nil
@@ -280,6 +295,12 @@ func parseRTArgs() -> RTCLIOptions {
             if let v = nextVal(), let n = Int(v) { opts.spp = max(1, n) }
         case "--preset":
             if let v = nextVal() { opts.preset = v }
+        case "--landmark":
+            if let v = nextVal() { opts.landmark = v }
+        case "--time-of-day":
+            if let v = nextVal(), let f = Float(v) { opts.timeOfDayHours = f }
+        case "--rain":
+            if let v = nextVal(), let f = Float(v) { opts.rainIntensity = max(0.0, min(1.0, f)) }
         case "--speed-kmh":
             if let v = nextVal(), let f = Float(v) { opts.speedKmh = f }
         case "--steer-deg":
@@ -350,6 +371,13 @@ do {
     let renderer = try RTRenderer(device: device, commandQueue: queue, scene: scene, world: worldPkg, metalFileURL: metalURL)
     renderer.forceSyntheticMode = opts.synthetic
     renderer.activePresetKey = opts.preset
+    if let tod = opts.timeOfDayHours {
+        renderer.explicitTimeOfDay = tod
+        renderer.timeOfDayHours = tod
+    }
+    if let rInt = opts.rainIntensity {
+        renderer.rainIntensity = rInt
+    }
     renderer.liveryEnabled = opts.livery
     renderer.rtEnabled = opts.rtEnabled
     if let dm = opts.denoiseMode {
@@ -360,6 +388,16 @@ do {
     }
     renderer.frameGenEnabled = opts.frameGen
     renderer.hudEnabled = opts.hud ?? false
+
+    if let lmQuery = opts.landmark {
+        if let lm = renderer.teleportToLandmark(lmQuery) {
+            print(String(format: "Landmark teleport -> %@ (%.1f, %.1f, %.1f) yaw=%.1f deg | activeWorldInsts=%d",
+                         lm.name, lm.spawnPos.x, lm.spawnPos.y, lm.spawnPos.z,
+                         lm.spawnYawRad * 180.0 / .pi, renderer.activeWorldInstanceCount))
+        } else {
+            fputs("Warning: landmark '\(lmQuery)' not found in loaded world\n", stderr)
+        }
+    }
 
     if let cfgPath = opts.configPath {
         let cfg = try RTSceneBuilder.loadLookdevConfig(from: cfgPath)
@@ -387,10 +425,12 @@ do {
         let outURL = URL(fileURLWithPath: opts.outPath)
         if opts.hud == nil { renderer.hudEnabled = true }
         let (avgMs, fps) = try renderer.runDriveBenchmark(frames: benchFrames, width: opts.width, height: opts.height, outURL: outURL)
-        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | blas=%d | tris=%d | denoise=%@ | frameGen=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
-                     device.name, renderer.compiledMSLVersion, scene.carProfile.rawValue,
+        let vramMB = Double(renderer.worldStreamer?.estimatedWorldVRAMBytes ?? worldPkg?.estimatedVRAMBytes ?? 0) / (1024.0 * 1024.0)
+        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | landmark=%@ | blas=%d | activeInsts=%d | vram=%.1fMB | tris=%d | denoise=%@ | frameGen=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
+                     device.name, renderer.compiledMSLVersion, scene.carAlias,
                      worldPkg?.url.lastPathComponent ?? "procedural",
-                     totalBlas, totalTris, renderer.effectiveDenoiseLabel,
+                     renderer.activeLandmarkName,
+                     totalBlas, renderer.activeWorldInstanceCount, vramMB, totalTris, renderer.effectiveDenoiseLabel,
                      renderer.effectiveFrameGenActive ? "on" : "off",
                      benchFrames, avgMs, fps, outURL.path))
     } else if opts.headless {
@@ -414,9 +454,10 @@ do {
             forceTemporalDenoise: forceTemporal
         )
         let dt = CFAbsoluteTimeGetCurrent() - t0
-        print(String(format: "Metal RT GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | source=%@ | world=%@ | blas=%d | tris=%d | denoise=%@ | hud=%@ | %dx%d @ %d spp -> %@ (%.2fs)",
-                     device.name, renderer.compiledMSLVersion, scene.carProfile.rawValue, scene.sourceLabel,
+        print(String(format: "Metal RT GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | source=%@ | world=%@ | landmark=%@ | blas=%d | tris=%d | denoise=%@ | hud=%@ | %dx%d @ %d spp -> %@ (%.2fs)",
+                     device.name, renderer.compiledMSLVersion, scene.carAlias, scene.sourceLabel,
                      worldPkg?.url.lastPathComponent ?? "procedural",
+                     renderer.activeLandmarkName,
                      totalBlas, totalTris, denoiseTag,
                      renderer.hudEnabled ? "on" : "off",
                      opts.width, opts.height, opts.spp, outURL.path, dt))

@@ -2,7 +2,7 @@ import Foundation
 import Metal
 import simd
 
-// MARK: - Locked .rkpt v1 Binary Contract (Little-Endian, Metal Y-up Right-Handed Meters)
+// MARK: - Locked .rkpt v1 & v2 Binary Contract (Little-Endian, Metal Y-up Right-Handed Meters)
 
 enum RTTLASMask {
     static let car: UInt32          = 0x01
@@ -12,6 +12,12 @@ enum RTTLASMask {
     static let glass: UInt32        = 0x10
     static let shadowAll: UInt32    = 0x0F // car | worldOpaque | road | wall (skips glass)
     static let primaryAll: UInt32   = 0xFF
+}
+
+enum RkptHeaderFlags {
+    static let hasV2Ext: UInt32     = 1 << 0
+    static let bc7Textures: UInt32  = 1 << 1
+    static let hasPanorama: UInt32  = 1 << 2
 }
 
 struct RkptHeader {
@@ -40,7 +46,33 @@ struct RkptHeader {
     let ps2Origin: SIMD3<Float>
     let reserved: UInt32
 
+    var hasV2Ext: Bool    { version >= 2 && (flags & RkptHeaderFlags.hasV2Ext) != 0 }
+    var hasBC7: Bool      { (flags & RkptHeaderFlags.bc7Textures) != 0 }
+    var hasPanorama: Bool { (flags & RkptHeaderFlags.hasPanorama) != 0 }
+
     static let byteSize = 160
+}
+
+// 96-byte v2 extension header immediately following 160-byte RkptHeader when version >= 2 && hasV2Ext
+struct RkptV2ExtHeader {
+    let roadNodeCount: UInt32
+    let roadSegmentCount: UInt32
+    let worldLightCount: UInt32
+    let landmarkCount: UInt32
+    let spatialSectionCount: UInt32
+    let panoramaSectionCount: UInt32
+    let reserved0: UInt32
+    let reserved1: UInt32
+    let roadNodesOffset: UInt64
+    let roadSegmentsOffset: UInt64
+    let worldLightsOffset: UInt64
+    let landmarksOffset: UInt64
+    let reservedOff0: UInt64
+    let reservedOff1: UInt64
+    let reservedOff2: UInt64
+    let reservedOff3: UInt64
+
+    static let byteSize = 96
 }
 
 struct RkptSection {
@@ -52,7 +84,9 @@ struct RkptSection {
     let radius: Float
     let aabbMin: SIMD3<Float>
     let aabbMax: SIMD3<Float>
-    let reserved: UInt32
+    let reserved: UInt32 // bit0 = SEC_FLAG_PANORAMA
+
+    var isPanorama: Bool { (reserved & 1) != 0 }
 
     static let byteSize = 64
 }
@@ -105,10 +139,16 @@ struct RkptTextureRecord {
     let tpkNameHash: UInt32
     let width: UInt32
     let height: UInt32
-    let pixelFormat: UInt32 // 0 = RGBA8_UNORM_SRGB
+    let pixelFormat: UInt32 // 0 = RGBA8_UNORM_SRGB, 1 = BC7_RGBA_UNORM_SRGB
     let dataOffset: UInt64  // relative to header.texDataOffset
     let dataSize: UInt32
-    let flags: UInt32       // bit0=HAS_CUTOUT_ALPHA, bit1=PS2_0X80_NORMALIZED, bit2=ENHANCED_2X
+    let flags: UInt32       // bits0..7=flags, bits8..15=mipCount
+
+    var isBC7: Bool { pixelFormat == 1 }
+    var mipCount: Int {
+        let m = Int((flags >> 8) & 0xFF)
+        return max(1, m)
+    }
 
     static let byteSize = 32
 }
@@ -130,9 +170,68 @@ struct RkptVertexGPU {
     static let byteSize = 36
 }
 
+// 32-byte road network node decoded from EA L2RA.BUN 0x0003B800 (CARP/RNnd)
+struct RkptRoadNode {
+    let pos: SIMD3<Float>
+    let nodeIndex: UInt16
+    let flags: UInt16
+    let degree: UInt8
+    let adjSegments: (UInt16, UInt16, UInt16, UInt16, UInt16, UInt16, UInt16)
+
+    var adjacentSegmentIndices: [Int] {
+        let raw = [adjSegments.0, adjSegments.1, adjSegments.2, adjSegments.3, adjSegments.4, adjSegments.5, adjSegments.6]
+        let lim = min(Int(degree), 7)
+        var out: [Int] = []
+        out.reserveCapacity(lim)
+        for i in 0..<lim where raw[i] != 0xFFFF {
+            out.append(Int(raw[i]))
+        }
+        return out
+    }
+
+    static let byteSize = 32
+}
+
+// 16-byte road network segment decoded from EA L2RA.BUN 0x0003B800 (CARP/RNsg)
+struct RkptRoadSegment {
+    let node0: UInt16
+    let node1: UInt16
+    let laneFlags: UInt8
+    let dirFlags: UInt8
+    let roadId: UInt16
+    let lengthMeters: Float
+    let halfWidthMeters: Float
+
+    var isHighway: Bool { laneFlags >= 16 }
+
+    static let byteSize = 16
+}
+
+// 32-byte GPU-ready world light matching Metal RTWorldLight / RTWorldLightGPU byte-for-byte
+struct RTWorldLight {
+    var posRadius: SIMD4<Float> // xyz = Metal Y-up luminaire bulb pos, w = effective radius (m)
+    var colorCone: SIMD4<Float> // rgb = pre-scaled linear radiance, w = coneMinCos (>0 downward lamp, <= -0.9 omni)
+
+    var isDownwardStreetlamp: Bool { colorCone.w > 0.0 }
+
+    static let byteSize = 32
+}
+
+// 64-byte verified road spawn landmark
+struct RkptLandmark {
+    let name: String
+    let spawnPos: SIMD3<Float>
+    let spawnYawRad: Float
+    let regionId: UInt32
+    let flags: UInt32
+
+    static let byteSize = 64
+}
+
 struct RTWorldPackage {
     let url: URL
     let header: RkptHeader
+    let extHeader: RkptV2ExtHeader?
     let sections: [RkptSection]
     let meshes: [RkptMesh]
     let instances: [RkptInstance]
@@ -140,13 +239,23 @@ struct RTWorldPackage {
     let vertexBuffer: MTLBuffer
     let indexBuffer: MTLBuffer
     let materialBuffer: MTLBuffer
+    let blasHeap: MTLHeap?
     let blasList: [MTLAccelerationStructure]
     let meshToBlasIndex: [Int]
     let textureHeap: MTLHeap?
     let textures: [MTLTexture]
     let bindlessTexIDBuffer: MTLBuffer
-    let residencySet: AnyObject? // MTLResidencySet on macOS 15+
+    let residencySet: AnyObject?     // MTLResidencySet on macOS 15+ (textures + BLASes)
+    let blasResidencySet: AnyObject? // Alias/dedicated residency set when BLASes are GPU-resident
+    let hasResidentBLASes: Bool
     let totalTriangles: Int
+    let roadNodes: [RkptRoadNode]
+    let roadSegments: [RkptRoadSegment]
+    let worldLights: [RTWorldLight]
+    let landmarks: [RkptLandmark]
+    let spatialSectionCount: Int
+    let panoramaSectionCount: Int
+    let estimatedVRAMBytes: Int
 
     var spawnPos: SIMD3<Float> { header.spawnPos }
     var spawnYawRad: Float { header.spawnYawRad }
@@ -155,6 +264,16 @@ struct RTWorldPackage {
 private struct BinaryCursor {
     let base: UnsafeRawPointer
     let count: Int
+
+    func readUInt8(_ offset: Int) -> UInt8 {
+        return base.load(fromByteOffset: offset, as: UInt8.self)
+    }
+
+    func readUInt16(_ offset: Int) -> UInt16 {
+        var v: UInt16 = 0
+        memcpy(&v, base.advanced(by: offset), 2)
+        return UInt16(littleEndian: v)
+    }
 
     func readUInt32(_ offset: Int) -> UInt32 {
         var v: UInt32 = 0
@@ -176,6 +295,10 @@ private struct BinaryCursor {
         return SIMD3<Float>(readFloat(offset), readFloat(offset + 4), readFloat(offset + 8))
     }
 
+    func readVec4(_ offset: Int) -> SIMD4<Float> {
+        return SIMD4<Float>(readFloat(offset), readFloat(offset + 4), readFloat(offset + 8), readFloat(offset + 12))
+    }
+
     func readASCII(_ offset: Int, length: Int) -> String {
         let ptr = base.advanced(by: offset).assumingMemoryBound(to: UInt8.self)
         var bytes: [UInt8] = []
@@ -195,6 +318,20 @@ enum RTWorldLoader {
                      "RkptMaterialGPU stride must be 32 bytes")
         precondition(MemoryLayout<RkptVertexGPU>.stride == RkptVertexGPU.byteSize,
                      "RkptVertexGPU stride must be 36 bytes")
+        precondition(MemoryLayout<RTWorldLight>.stride == RTWorldLight.byteSize,
+                     "RTWorldLight stride must be 32 bytes")
+    }
+
+    static func expectedBC7MipBytes(width: Int, height: Int, mipCount: Int) -> Int {
+        var cw = max(1, width)
+        var ch = max(1, height)
+        var total = 0
+        for _ in 0..<max(1, mipCount) {
+            total += ((cw + 3) / 4) * ((ch + 3) / 4) * 16
+            cw = max(1, cw >> 1)
+            ch = max(1, ch >> 1)
+        }
+        return total
     }
 
     static func load(url: URL, device: MTLDevice, commandQueue: MTLCommandQueue) throws -> RTWorldPackage {
@@ -222,9 +359,9 @@ enum RTWorldLoader {
                 ])
             }
             let version = cur.readUInt32(4)
-            guard version == 1 else {
+            guard version == 1 || version == 2 else {
                 throw NSError(domain: "RTWorldLoader", code: 4, userInfo: [
-                    NSLocalizedDescriptionKey: "Unsupported RKPT version \(version) (expected 1)"
+                    NSLocalizedDescriptionKey: "Unsupported RKPT version \(version) (expected 1 or 2)"
                 ])
             }
 
@@ -256,6 +393,7 @@ enum RTWorldLoader {
             )
 
             func validateRange(_ off: UInt64, _ byteCount: Int, _ label: String) throws {
+                if byteCount == 0 { return }
                 let end = Int(off) + byteCount
                 if Int(off) < 0 || byteCount < 0 || end > data.count {
                     throw NSError(domain: "RTWorldLoader", code: 5, userInfo: [
@@ -264,14 +402,40 @@ enum RTWorldLoader {
                 }
             }
 
+            // Optional 96-byte v2 Extension Header (read ONLY when version >= 2 && (flags & 1) != 0)
+            var extHeader: RkptV2ExtHeader? = nil
+            if header.hasV2Ext {
+                try validateRange(UInt64(RkptHeader.byteSize), RkptV2ExtHeader.byteSize, "v2ExtHeader")
+                let e = RkptHeader.byteSize
+                extHeader = RkptV2ExtHeader(
+                    roadNodeCount: cur.readUInt32(e + 0),
+                    roadSegmentCount: cur.readUInt32(e + 4),
+                    worldLightCount: cur.readUInt32(e + 8),
+                    landmarkCount: cur.readUInt32(e + 12),
+                    spatialSectionCount: cur.readUInt32(e + 16),
+                    panoramaSectionCount: cur.readUInt32(e + 20),
+                    reserved0: cur.readUInt32(e + 24),
+                    reserved1: cur.readUInt32(e + 28),
+                    roadNodesOffset: cur.readUInt64(e + 32),
+                    roadSegmentsOffset: cur.readUInt64(e + 40),
+                    worldLightsOffset: cur.readUInt64(e + 48),
+                    landmarksOffset: cur.readUInt64(e + 56),
+                    reservedOff0: cur.readUInt64(e + 64),
+                    reservedOff1: cur.readUInt64(e + 72),
+                    reservedOff2: cur.readUInt64(e + 80),
+                    reservedOff3: cur.readUInt64(e + 88)
+                )
+            }
+
             // 1. Parse Sections (64 bytes each)
             let secBytes = Int(header.sectionCount) * RkptSection.byteSize
             try validateRange(header.sectionsOffset, secBytes, "sections")
             var sections: [RkptSection] = []
             sections.reserveCapacity(Int(header.sectionCount))
+            var panCount = 0
             for i in 0..<Int(header.sectionCount) {
                 let o = Int(header.sectionsOffset) + i * RkptSection.byteSize
-                sections.append(RkptSection(
+                let sec = RkptSection(
                     name: cur.readASCII(o, length: 8),
                     sectionNumber: cur.readUInt32(o + 8),
                     instanceStart: cur.readUInt32(o + 12),
@@ -281,8 +445,12 @@ enum RTWorldLoader {
                     aabbMin: cur.readVec3(o + 36),
                     aabbMax: cur.readVec3(o + 48),
                     reserved: cur.readUInt32(o + 60)
-                ))
+                )
+                if sec.isPanorama { panCount += 1 }
+                sections.append(sec)
             }
+            let spatialCount = extHeader.map { Int($0.spatialSectionCount) } ?? (sections.count - panCount)
+            let panoramaCount = extHeader.map { Int($0.panoramaSectionCount) } ?? panCount
 
             // 2. Parse Meshes (48 bytes each)
             let meshBytes = Int(header.meshCount) * RkptMesh.byteSize
@@ -385,7 +553,7 @@ enum RTWorldLoader {
                 ))
             }
 
-            // 6. Upload Packed Vertices (36 bytes each), Indices (4 bytes each), Materials (32 bytes each)
+            // 6. Upload Packed Vertices (36B), Indices (4B), Materials (32B)
             let vBytes = Int(header.totalVertexCount) * RkptVertexGPU.byteSize
             let iBytes = Int(header.totalIndexCount) * MemoryLayout<UInt32>.stride
             try validateRange(header.verticesOffset, vBytes, "vertices")
@@ -409,8 +577,8 @@ enum RTWorldLoader {
                 memcpy(indexBuffer.contents(), base.advanced(by: Int(header.indicesOffset)), iBytes)
             }
 
-            // 7. Pack All World Textures into a Single Private Mipmapped MTLHeap + Bindless MTLResourceID Table
-            let (texHeap, textures, bindlessBuf, residencySet) = try buildBindlessTextureHeap(
+            // 7. Pack All World Textures (RGBA8 v1 or BC7+mips v2) into Single Private MTLHeap + Bindless IDs
+            let (texHeap, textures, bindlessBuf, texAllocBytes) = try buildBindlessTextureHeap(
                 device: device,
                 commandQueue: commandQueue,
                 records: texRecords,
@@ -419,14 +587,114 @@ enum RTWorldLoader {
                 texDataOffset: header.texDataOffset
             )
 
-            // 8. Build Deduplicated Per-Mesh Hardware RT BLASes
-            let (blasList, meshToBlasIndex) = try buildWorldBLASes(
+            // 8. Build Deduplicated Per-Mesh Hardware RT BLASes in a Single Private MTLHeap
+            let (blasHeap, blasList, meshToBlasIndex, blasAllocBytes) = try buildWorldBLASes(
                 device: device,
                 commandQueue: commandQueue,
                 meshes: meshes,
                 vertexBuffer: vertexBuffer,
                 indexBuffer: indexBuffer
             )
+
+            // 9. Register Texture Heap + BLAS Heap/List into Unified MTLResidencySet (Zero per-frame useResources tax!)
+            var residencyObj: AnyObject? = nil
+            var hasResidentBLASes = false
+            if #available(macOS 15.0, *) {
+                let extraTex = textures.filter { $0.heap == nil }
+                let extraBLAS = blasList.filter { $0.heap == nil }
+                let rDesc = MTLResidencySetDescriptor()
+                rDesc.label = "RockportWorldResidencySet"
+                rDesc.initialCapacity = 4 + extraTex.count + extraBLAS.count
+                if let rSet = try? device.makeResidencySet(descriptor: rDesc) {
+                    if let th = texHeap { rSet.addAllocation(th) }
+                    for t in extraTex { rSet.addAllocation(t) }
+                    if let bh = blasHeap { rSet.addAllocation(bh) }
+                    for b in extraBLAS { rSet.addAllocation(b) }
+                    rSet.commit()
+                    commandQueue.addResidencySet(rSet)
+                    residencyObj = rSet
+                    hasResidentBLASes = true
+                }
+            }
+
+            // 10. Parse Optional .rkpt v2 Trailing Tables (RoadNodes, RoadSegments, WorldLights, Landmarks)
+            var roadNodes: [RkptRoadNode] = []
+            var roadSegments: [RkptRoadSegment] = []
+            var worldLights: [RTWorldLight] = []
+            var landmarks: [RkptLandmark] = []
+
+            if let ext = extHeader {
+                if ext.roadNodeCount > 0 && ext.roadNodesOffset != 0 {
+                    let rnBytes = Int(ext.roadNodeCount) * RkptRoadNode.byteSize
+                    try validateRange(ext.roadNodesOffset, rnBytes, "roadNodes")
+                    roadNodes.reserveCapacity(Int(ext.roadNodeCount))
+                    for i in 0..<Int(ext.roadNodeCount) {
+                        let o = Int(ext.roadNodesOffset) + i * RkptRoadNode.byteSize
+                        roadNodes.append(RkptRoadNode(
+                            pos: cur.readVec3(o),
+                            nodeIndex: cur.readUInt16(o + 12),
+                            flags: cur.readUInt16(o + 14),
+                            degree: cur.readUInt8(o + 16),
+                            adjSegments: (
+                                cur.readUInt16(o + 18),
+                                cur.readUInt16(o + 20),
+                                cur.readUInt16(o + 22),
+                                cur.readUInt16(o + 24),
+                                cur.readUInt16(o + 26),
+                                cur.readUInt16(o + 28),
+                                cur.readUInt16(o + 30)
+                            )
+                        ))
+                    }
+                }
+
+                if ext.roadSegmentCount > 0 && ext.roadSegmentsOffset != 0 {
+                    let rsBytes = Int(ext.roadSegmentCount) * RkptRoadSegment.byteSize
+                    try validateRange(ext.roadSegmentsOffset, rsBytes, "roadSegments")
+                    roadSegments.reserveCapacity(Int(ext.roadSegmentCount))
+                    for i in 0..<Int(ext.roadSegmentCount) {
+                        let o = Int(ext.roadSegmentsOffset) + i * RkptRoadSegment.byteSize
+                        roadSegments.append(RkptRoadSegment(
+                            node0: cur.readUInt16(o),
+                            node1: cur.readUInt16(o + 2),
+                            laneFlags: cur.readUInt8(o + 4),
+                            dirFlags: cur.readUInt8(o + 5),
+                            roadId: cur.readUInt16(o + 6),
+                            lengthMeters: cur.readFloat(o + 8),
+                            halfWidthMeters: cur.readFloat(o + 12)
+                        ))
+                    }
+                }
+
+                if ext.worldLightCount > 0 && ext.worldLightsOffset != 0 {
+                    let wlBytes = Int(ext.worldLightCount) * RTWorldLight.byteSize
+                    try validateRange(ext.worldLightsOffset, wlBytes, "worldLights")
+                    worldLights.reserveCapacity(Int(ext.worldLightCount))
+                    for i in 0..<Int(ext.worldLightCount) {
+                        let o = Int(ext.worldLightsOffset) + i * RTWorldLight.byteSize
+                        worldLights.append(RTWorldLight(
+                            posRadius: cur.readVec4(o),
+                            colorCone: cur.readVec4(o + 16)
+                        ))
+                    }
+                }
+
+                if ext.landmarkCount > 0 && ext.landmarksOffset != 0 {
+                    let lmBytes = Int(ext.landmarkCount) * RkptLandmark.byteSize
+                    try validateRange(ext.landmarksOffset, lmBytes, "landmarks")
+                    landmarks.reserveCapacity(Int(ext.landmarkCount))
+                    for i in 0..<Int(ext.landmarkCount) {
+                        let o = Int(ext.landmarksOffset) + i * RkptLandmark.byteSize
+                        landmarks.append(RkptLandmark(
+                            name: cur.readASCII(o, length: 32),
+                            spawnPos: cur.readVec3(o + 32),
+                            spawnYawRad: cur.readFloat(o + 44),
+                            regionId: cur.readUInt32(o + 48),
+                            flags: cur.readUInt32(o + 52)
+                        ))
+                    }
+                }
+            }
 
             var totalWorldTris = 0
             for inst in instances {
@@ -436,9 +704,13 @@ enum RTWorldLoader {
                 }
             }
 
+            let estVRAM = vertexBuffer.length + indexBuffer.length + materialBuffer.length
+                + bindlessBuf.length + texAllocBytes + blasAllocBytes
+
             return RTWorldPackage(
                 url: url,
                 header: header,
+                extHeader: extHeader,
                 sections: sections,
                 meshes: meshes,
                 instances: instances,
@@ -446,13 +718,23 @@ enum RTWorldLoader {
                 vertexBuffer: vertexBuffer,
                 indexBuffer: indexBuffer,
                 materialBuffer: materialBuffer,
+                blasHeap: blasHeap,
                 blasList: blasList,
                 meshToBlasIndex: meshToBlasIndex,
                 textureHeap: texHeap,
                 textures: textures,
                 bindlessTexIDBuffer: bindlessBuf,
-                residencySet: residencySet,
-                totalTriangles: totalWorldTris
+                residencySet: residencyObj,
+                blasResidencySet: residencyObj,
+                hasResidentBLASes: hasResidentBLASes,
+                totalTriangles: totalWorldTris,
+                roadNodes: roadNodes,
+                roadSegments: roadSegments,
+                worldLights: worldLights,
+                landmarks: landmarks,
+                spatialSectionCount: spatialCount,
+                panoramaSectionCount: panoramaCount,
+                estimatedVRAMBytes: estVRAM
             )
         }
     }
@@ -464,8 +746,7 @@ enum RTWorldLoader {
         base: UnsafeRawPointer,
         fileSize: Int,
         texDataOffset: UInt64
-    ) throws -> (MTLHeap?, [MTLTexture], MTLBuffer, AnyObject?) {
-        // Always include at least 1 valid fallback texture so the bindless table is non-empty.
+    ) throws -> (MTLHeap?, [MTLTexture], MTLBuffer, Int) {
         if records.isEmpty {
             let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: 1, height: 1, mipmapped: false)
             td.usage = [.shaderRead]
@@ -475,10 +756,9 @@ enum RTWorldLoader {
             fallback.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &white, bytesPerRow: 4)
             var rid = fallback.gpuResourceID
             let buf = device.makeBuffer(bytes: &rid, length: MemoryLayout<MTLResourceID>.stride, options: .storageModeShared)!
-            return (nil, [fallback], buf, nil)
+            return (nil, [fallback], buf, 64)
         }
 
-        // Compute total private heap size with alignment padding
         var descriptors: [MTLTextureDescriptor] = []
         descriptors.reserveCapacity(records.count)
         var totalHeapBytes = 0
@@ -487,24 +767,37 @@ enum RTWorldLoader {
         for rec in records {
             let w = max(1, Int(rec.width))
             let h = max(1, Int(rec.height))
-            let canMip = (w > 1 || h > 1)
-            let td = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .rgba8Unorm_srgb,
-                width: w,
-                height: h,
-                mipmapped: canMip
-            )
+            let td: MTLTextureDescriptor
+            if rec.isBC7 {
+                let mips = rec.mipCount
+                td = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .bc7_rgbaUnorm_srgb,
+                    width: w,
+                    height: h,
+                    mipmapped: mips > 1
+                )
+                td.mipmapLevelCount = min(mips, td.mipmapLevelCount)
+                maxStageBytes = max(maxStageBytes, max(Int(rec.dataSize), expectedBC7MipBytes(width: w, height: h, mipCount: td.mipmapLevelCount)))
+            } else {
+                let canMip = (w > 1 || h > 1)
+                td = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .rgba8Unorm_srgb,
+                    width: w,
+                    height: h,
+                    mipmapped: canMip
+                )
+                maxStageBytes = max(maxStageBytes, w * h * 4)
+            }
             td.usage = [.shaderRead]
             td.storageMode = .private
             let sa = device.heapTextureSizeAndAlign(descriptor: td)
             let aligned = ((sa.size + sa.align - 1) / sa.align) * sa.align
             totalHeapBytes += aligned
-            maxStageBytes = max(maxStageBytes, w * h * 4)
             descriptors.append(td)
         }
 
         let heapDesc = MTLHeapDescriptor()
-        heapDesc.size = max(totalHeapBytes + 4 * 1024 * 1024, 1024 * 1024)
+        heapDesc.size = max(totalHeapBytes + 8 * 1024 * 1024, 1024 * 1024)
         heapDesc.storageMode = .private
         heapDesc.type = .automatic
         guard let heap = device.makeHeap(descriptor: heapDesc) else {
@@ -513,8 +806,8 @@ enum RTWorldLoader {
             ])
         }
 
-        // Upload textures in batched blit command buffers (keeping staging memory bounded <= 32 MB)
-        let batchCapBytes = max(maxStageBytes, 16 * 1024 * 1024)
+        // Bounded staging buffer (<= 32 MB) for batched blit copies
+        let batchCapBytes = max(maxStageBytes + 4096, 24 * 1024 * 1024)
         guard let stagingBuf = device.makeBuffer(length: batchCapBytes, options: .storageModeShared),
               let idBuf = device.makeBuffer(length: records.count * MemoryLayout<MTLResourceID>.stride, options: .storageModeShared) else {
             throw NSError(domain: "RTWorldLoader", code: 11, userInfo: [
@@ -525,6 +818,7 @@ enum RTWorldLoader {
 
         var textures: [MTLTexture] = []
         textures.reserveCapacity(records.count)
+        var extraAllocBytes = 0
 
         var stageOffset = 0
         var activeCB = commandQueue.makeCommandBuffer()
@@ -548,47 +842,84 @@ enum RTWorldLoader {
             if let heapTex = heap.makeTexture(descriptor: td) {
                 tex = heapTex
             } else {
-                // Rare overflow guard: fall back to device-allocated private texture
                 guard let devTex = device.makeTexture(descriptor: td) else {
                     throw NSError(domain: "RTWorldLoader", code: 12, userInfo: [
                         NSLocalizedDescriptionKey: "Failed to allocate RKPT texture #\(i) (\(rec.width)x\(rec.height))"
                     ])
                 }
                 tex = devTex
+                extraAllocBytes += device.heapTextureSizeAndAlign(descriptor: td).size
             }
 
             let w = max(1, Int(rec.width))
             let h = max(1, Int(rec.height))
-            let expectedBytes = w * h * 4
-            let alignedBytes = (expectedBytes + 255) & ~255
-            if stageOffset + alignedBytes > batchCapBytes {
-                try flushBlitBatch()
-            }
+            let srcBase = Int(texDataOffset) + Int(rec.dataOffset)
 
-            let srcOff = Int(texDataOffset) + Int(rec.dataOffset)
-            let dstPtr = stagingBuf.contents().advanced(by: stageOffset)
-            if srcOff >= 0 && srcOff + expectedBytes <= fileSize {
-                memcpy(dstPtr, base.advanced(by: srcOff), expectedBytes)
+            if rec.isBC7 {
+                // Upload every pre-baked BC7 mip level tightly packed in .rkpt v2 (Metal forbids generateMipmaps on BC7)
+                let levels = tex.mipmapLevelCount
+                var mipSrcRel = 0
+                for lvl in 0..<levels {
+                    let mw = max(1, w >> lvl)
+                    let mh = max(1, h >> lvl)
+                    let bx = (mw + 3) / 4
+                    let by = (mh + 3) / 4
+                    let bpr = bx * 16
+                    let mipBytes = bpr * by
+                    let alignedBytes = (mipBytes + 255) & ~255
+                    if stageOffset + alignedBytes > batchCapBytes {
+                        try flushBlitBatch()
+                    }
+                    let dstPtr = stagingBuf.contents().advanced(by: stageOffset)
+                    let srcOff = srcBase + mipSrcRel
+                    if srcOff >= 0 && srcOff + mipBytes <= fileSize {
+                        memcpy(dstPtr, base.advanced(by: srcOff), mipBytes)
+                    } else {
+                        memset(dstPtr, 0, mipBytes)
+                    }
+                    activeBlit?.copy(
+                        from: stagingBuf,
+                        sourceOffset: stageOffset,
+                        sourceBytesPerRow: bpr,
+                        sourceBytesPerImage: mipBytes,
+                        sourceSize: MTLSize(width: mw, height: mh, depth: 1),
+                        to: tex,
+                        destinationSlice: 0,
+                        destinationLevel: lvl,
+                        destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+                    )
+                    stageOffset += alignedBytes
+                    mipSrcRel += mipBytes
+                }
             } else {
-                memset(dstPtr, 160, expectedBytes)
+                let expectedBytes = w * h * 4
+                let alignedBytes = (expectedBytes + 255) & ~255
+                if stageOffset + alignedBytes > batchCapBytes {
+                    try flushBlitBatch()
+                }
+                let dstPtr = stagingBuf.contents().advanced(by: stageOffset)
+                if srcBase >= 0 && srcBase + expectedBytes <= fileSize {
+                    memcpy(dstPtr, base.advanced(by: srcBase), expectedBytes)
+                } else {
+                    memset(dstPtr, 160, expectedBytes)
+                }
+                activeBlit?.copy(
+                    from: stagingBuf,
+                    sourceOffset: stageOffset,
+                    sourceBytesPerRow: w * 4,
+                    sourceBytesPerImage: expectedBytes,
+                    sourceSize: MTLSize(width: w, height: h, depth: 1),
+                    to: tex,
+                    destinationSlice: 0,
+                    destinationLevel: 0,
+                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+                )
+                if tex.mipmapLevelCount > 1 {
+                    activeBlit?.generateMipmaps(for: tex)
+                }
+                stageOffset += alignedBytes
             }
 
-            activeBlit?.copy(
-                from: stagingBuf,
-                sourceOffset: stageOffset,
-                sourceBytesPerRow: w * 4,
-                sourceBytesPerImage: expectedBytes,
-                sourceSize: MTLSize(width: w, height: h, depth: 1),
-                to: tex,
-                destinationSlice: 0,
-                destinationLevel: 0,
-                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-            )
-            if tex.mipmapLevelCount > 1 {
-                activeBlit?.generateMipmaps(for: tex)
-            }
-
-            stageOffset += alignedBytes
             idPtr[i] = tex.gpuResourceID
             textures.append(tex)
         }
@@ -600,23 +931,7 @@ enum RTWorldLoader {
             if let err = cb.error { throw err }
         }
 
-        var residencyObj: AnyObject? = nil
-        if #available(macOS 15.0, *) {
-            let rDesc = MTLResidencySetDescriptor()
-            rDesc.label = "RockportBindlessWorldHeap"
-            rDesc.initialCapacity = 4
-            if let rSet = try? device.makeResidencySet(descriptor: rDesc) {
-                rSet.addAllocation(heap)
-                for t in textures where t.heap == nil {
-                    rSet.addAllocation(t)
-                }
-                rSet.commit()
-                commandQueue.addResidencySet(rSet)
-                residencyObj = rSet
-            }
-        }
-
-        return (heap, textures, idBuf, residencyObj)
+        return (heap, textures, idBuf, heap.size + extraAllocBytes)
     }
 
     private static func buildWorldBLASes(
@@ -625,66 +940,133 @@ enum RTWorldLoader {
         meshes: [RkptMesh],
         vertexBuffer: MTLBuffer,
         indexBuffer: MTLBuffer
-    ) throws -> ([MTLAccelerationStructure], [Int]) {
-        var blasList: [MTLAccelerationStructure] = []
-        blasList.reserveCapacity(meshes.count)
+    ) throws -> (MTLHeap?, [MTLAccelerationStructure], [Int], Int) {
         var meshToBlas = [Int](repeating: -1, count: meshes.count)
-
-        // Build in batches of 128 BLASes per command buffer to keep scratch memory lean
-        let batchSize = 128
-        var startIdx = 0
-        while startIdx < meshes.count {
-            let endIdx = min(meshes.count, startIdx + batchSize)
-            guard let cmdBuf = commandQueue.makeCommandBuffer(),
-                  let accelEnc = cmdBuf.makeAccelerationStructureCommandEncoder() else {
-                throw NSError(domain: "RTWorldLoader", code: 20, userInfo: [
-                    NSLocalizedDescriptionKey: "Failed to create BLAS encoder for RKPT world"
-                ])
-            }
-            var scratchRetention: [MTLBuffer] = []
-            scratchRetention.reserveCapacity(endIdx - startIdx)
-
-            for mIdx in startIdx..<endIdx {
-                let m = meshes[mIdx]
-                let triCount = Int(m.indexCount) / 3
-                if triCount <= 0 || m.vertexCount == 0 { continue }
-
-                let geomDesc = MTLAccelerationStructureTriangleGeometryDescriptor()
-                geomDesc.vertexBuffer = vertexBuffer
-                geomDesc.vertexBufferOffset = Int(m.vertexOffset) * RkptVertexGPU.byteSize
-                geomDesc.vertexStride = RkptVertexGPU.byteSize
-                geomDesc.vertexFormat = .float3
-                geomDesc.indexBuffer = indexBuffer
-                geomDesc.indexBufferOffset = Int(m.indexOffset) * MemoryLayout<UInt32>.stride
-                geomDesc.indexType = .uint32
-                geomDesc.triangleCount = triCount
-                // Opaque meshes bypass inline any-hit completely; alpha-cutout trees/fences invoke intersection_query!
-                geomDesc.opaque = !m.hasAlphaCutout
-
-                let blasDesc = MTLPrimitiveAccelerationStructureDescriptor()
-                blasDesc.geometryDescriptors = [geomDesc]
-
-                let sizes = device.accelerationStructureSizes(descriptor: blasDesc)
-                guard let blas = device.makeAccelerationStructure(size: sizes.accelerationStructureSize),
-                      let scratch = device.makeBuffer(length: max(sizes.buildScratchBufferSize, 256), options: .storageModePrivate) else {
-                    throw NSError(domain: "RTWorldLoader", code: 21, userInfo: [
-                        NSLocalizedDescriptionKey: "Failed to allocate RKPT BLAS for mesh #\(mIdx)"
-                    ])
-                }
-                accelEnc.build(accelerationStructure: blas, descriptor: blasDesc, scratchBuffer: scratch, scratchBufferOffset: 0)
-                scratchRetention.append(scratch)
-                meshToBlas[mIdx] = blasList.count
-                blasList.append(blas)
-            }
-
-            accelEnc.endEncoding()
-            cmdBuf.commit()
-            cmdBuf.waitUntilCompleted()
-            if let err = cmdBuf.error { throw err }
-            startIdx = endIdx
+        if meshes.isEmpty {
+            return (nil, [], meshToBlas, 0)
         }
 
-        return (blasList, meshToBlas)
+        // Precompute descriptors & sizes for all valid meshes so we can allocate ONE private BLAS MTLHeap
+        // and ONE shared private scratch buffer (10x faster startup + 1 residency allocation for 10,216 BLASes!)
+        struct PendingBLAS {
+            let meshIndex: Int
+            let descriptor: MTLPrimitiveAccelerationStructureDescriptor
+            let asSize: Int
+            let scratchSize: Int
+        }
+
+        var pending: [PendingBLAS] = []
+        pending.reserveCapacity(meshes.count)
+        var totalHeapBytes = 0
+        var maxSingleScratch = 256
+
+        for (mIdx, m) in meshes.enumerated() {
+            let triCount = Int(m.indexCount) / 3
+            if triCount <= 0 || m.vertexCount == 0 { continue }
+
+            let geomDesc = MTLAccelerationStructureTriangleGeometryDescriptor()
+            geomDesc.vertexBuffer = vertexBuffer
+            geomDesc.vertexBufferOffset = Int(m.vertexOffset) * RkptVertexGPU.byteSize
+            geomDesc.vertexStride = RkptVertexGPU.byteSize
+            geomDesc.vertexFormat = .float3
+            geomDesc.indexBuffer = indexBuffer
+            geomDesc.indexBufferOffset = Int(m.indexOffset) * MemoryLayout<UInt32>.stride
+            geomDesc.indexType = .uint32
+            geomDesc.triangleCount = triCount
+            geomDesc.opaque = !m.hasAlphaCutout
+
+            let blasDesc = MTLPrimitiveAccelerationStructureDescriptor()
+            blasDesc.geometryDescriptors = [geomDesc]
+
+            let sizes = device.accelerationStructureSizes(descriptor: blasDesc)
+            let sa = device.heapAccelerationStructureSizeAndAlign(size: sizes.accelerationStructureSize)
+            let aligned = ((sa.size + sa.align - 1) / sa.align) * sa.align
+            totalHeapBytes += aligned
+            let scr = max(sizes.buildScratchBufferSize, 256)
+            maxSingleScratch = max(maxSingleScratch, scr)
+            pending.append(PendingBLAS(meshIndex: mIdx, descriptor: blasDesc, asSize: sizes.accelerationStructureSize, scratchSize: scr))
+        }
+
+        if pending.isEmpty {
+            return (nil, [], meshToBlas, 0)
+        }
+
+        let heapDesc = MTLHeapDescriptor()
+        heapDesc.size = max(totalHeapBytes + 4 * 1024 * 1024, 1024 * 1024)
+        heapDesc.storageMode = .private
+        heapDesc.type = .automatic
+        let blasHeap = device.makeHeap(descriptor: heapDesc)
+
+        // Reuse ONE 24 MB private scratch buffer across batched acceleration structure command buffers
+        let scratchCap = max(maxSingleScratch + 512, 24 * 1024 * 1024)
+        guard let scratchBuf = device.makeBuffer(length: scratchCap, options: .storageModePrivate) else {
+            throw NSError(domain: "RTWorldLoader", code: 20, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to allocate RKPT BLAS scratch buffer (\(scratchCap) bytes)"
+            ])
+        }
+
+        var blasList: [MTLAccelerationStructure] = []
+        blasList.reserveCapacity(pending.count)
+        var extraAllocBytes = 0
+
+        var activeCB = commandQueue.makeCommandBuffer()
+        var activeEnc = activeCB?.makeAccelerationStructureCommandEncoder()
+        var scratchOffset = 0
+        var batchCount = 0
+
+        func flushBLASBatch() throws {
+            activeEnc?.endEncoding()
+            if let cb = activeCB {
+                cb.commit()
+                cb.waitUntilCompleted()
+                if let err = cb.error { throw err }
+            }
+            scratchOffset = 0
+            batchCount = 0
+            activeCB = commandQueue.makeCommandBuffer()
+            activeEnc = activeCB?.makeAccelerationStructureCommandEncoder()
+        }
+
+        for item in pending {
+            let alignedScr = (item.scratchSize + 255) & ~255
+            if scratchOffset + alignedScr > scratchCap || batchCount >= 1024 {
+                try flushBLASBatch()
+            }
+
+            let blas: MTLAccelerationStructure
+            if let heapBlas = blasHeap?.makeAccelerationStructure(size: item.asSize) {
+                blas = heapBlas
+            } else {
+                guard let devBlas = device.makeAccelerationStructure(size: item.asSize) else {
+                    throw NSError(domain: "RTWorldLoader", code: 21, userInfo: [
+                        NSLocalizedDescriptionKey: "Failed to allocate RKPT BLAS for mesh #\(item.meshIndex)"
+                    ])
+                }
+                blas = devBlas
+                extraAllocBytes += item.asSize
+            }
+
+            activeEnc?.build(
+                accelerationStructure: blas,
+                descriptor: item.descriptor,
+                scratchBuffer: scratchBuf,
+                scratchBufferOffset: scratchOffset
+            )
+            scratchOffset += alignedScr
+            batchCount += 1
+            meshToBlas[item.meshIndex] = blasList.count
+            blasList.append(blas)
+        }
+
+        activeEnc?.endEncoding()
+        if let cb = activeCB {
+            cb.commit()
+            cb.waitUntilCompleted()
+            if let err = cb.error { throw err }
+        }
+
+        let totalBlasBytes = (blasHeap?.size ?? 0) + extraAllocBytes
+        return (blasHeap, blasList, meshToBlas, totalBlasBytes)
     }
 
     static func makeDummyWorldBuffers(device: MTLDevice) -> (MTLBuffer, MTLBuffer, MTLBuffer, MTLBuffer, MTLTexture) {

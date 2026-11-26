@@ -940,7 +940,9 @@ def generate_botanical_cypress_frond_rgba(size: int = 512) -> np.ndarray:
     rgba[:, :, 1] = np.clip(np.rint(g), 0.0, 255.0).astype(np.uint8)
     rgba[:, :, 2] = np.clip(np.rint(b), 0.0, 255.0).astype(np.uint8)
     rgba[:, :, 3] = np.clip(np.rint(alpha), 0.0, 255.0).astype(np.uint8)
-    return rgba
+    # Dilate adjacent dark evergreen RGB into transparent border pixels so bilinear filtering
+    # & BC7 4x4 block compression never bleed bright outer-edge tints across cutout fringes.
+    return dilate_alpha_edge_rgb(rgba, iterations=8, alpha_thresh=32)
 
 
 def _append_single_botanical_cypress(
@@ -1222,6 +1224,57 @@ def normalize_ps2_alpha_rgba(rgba: np.ndarray, psm: int) -> Tuple[np.ndarray, bo
     return out, True
 
 
+def dilate_alpha_edge_rgb(
+    rgba: np.ndarray,
+    iterations: int = 8,
+    alpha_thresh: int = 32,
+) -> np.ndarray:
+    """Color-dilate opaque RGB outward into transparent pixels (alpha < alpha_thresh).
+
+    Prevents Lanczos upscaling, GPU bilinear sampling, mipmap downsampling, and BC7 4x4 block
+    compression from bleeding white/gray/black junk RGB stored in transparent PS2 texels across
+    foliage and fence alpha-cutout silhouettes.
+    """
+    alpha = rgba[:, :, 3]
+    if int(alpha.min()) >= alpha_thresh or int(alpha.max()) < alpha_thresh:
+        return rgba
+
+    out = rgba.copy()
+    rgb = out[:, :, :3].astype(np.float32)
+    valid = alpha >= alpha_thresh
+
+    for _ in range(iterations):
+        if bool(valid.all()):
+            break
+        v_pad = np.pad(valid, ((1, 1), (1, 1)), mode="edge")
+        r_pad = np.pad(rgb, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        acc = np.zeros_like(rgb)
+        cnt = np.zeros(valid.shape, dtype=np.float32)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0:
+                    continue
+                w_nb = 1.0 if (dy == 0 or dx == 0) else 0.7071
+                m = v_pad[1 + dy : 1 + dy + valid.shape[0], 1 + dx : 1 + dx + valid.shape[1]]
+                mf = m.astype(np.float32) * w_nb
+                acc += r_pad[1 + dy : 1 + dy + valid.shape[0], 1 + dx : 1 + dx + valid.shape[1], :] * mf[:, :, None]
+                cnt += mf
+        fill_mask = (~valid) & (cnt > 0.0)
+        if not bool(fill_mask.any()):
+            break
+        rgb[fill_mask] = acc[fill_mask] / cnt[fill_mask, None]
+        valid[fill_mask] = True
+
+    if not bool(valid.all()):
+        # Deep transparent background outside dilation band gets slightly darkened opaque mean RGB
+        orig_valid = alpha >= alpha_thresh
+        mean_rgb = rgba[:, :, :3][orig_valid].mean(axis=0).astype(np.float32) * 0.85
+        rgb[~valid] = mean_rgb
+
+    out[:, :, :3] = np.clip(np.rint(rgb), 0.0, 255.0).astype(np.uint8)
+    return out
+
+
 def _is_foliage_texture_name(tex_name: str) -> bool:
     tn = tex_name.upper().replace("STREET", "")
     if "TRUNK" in tn or "ROCK" in tn:
@@ -1280,7 +1333,10 @@ def enhance_world_texture_2x(
 
     new_size = (new_w, new_h)
 
-    rgb_img = Image.fromarray(rgba[:, :, :3])
+    # Dilate opaque RGB into transparent background BEFORE Lanczos + UnsharpMask so cutout edges never halo!
+    src_rgba = dilate_alpha_edge_rgb(rgba, iterations=6, alpha_thresh=32) if has_cutout_alpha else rgba
+
+    rgb_img = Image.fromarray(src_rgba[:, :, :3])
     rgb_up = rgb_img.resize(new_size, resample=_RESAMPLE_LANCZOS)
 
     if foliage_mode:
@@ -1320,6 +1376,8 @@ def enhance_world_texture_2x(
     out = np.empty((new_h, new_w, 4), dtype=np.uint8)
     out[:, :, :3] = rgb_arr
     out[:, :, 3] = alpha_arr
+    if has_cutout_alpha:
+        out = dilate_alpha_edge_rgb(out, iterations=6, alpha_thresh=32)
     return out, True
 
 
@@ -1421,6 +1479,8 @@ def decode_tpk_textures_matching(
                         tex_name=meta["name"],
                     )
                     narrow_up = enhanced and (orig_max > 256)
+                if has_cutout and not enhanced:
+                    rgba = dilate_alpha_edge_rgb(rgba, iterations=6, alpha_thresh=32)
                 flags = (
                     (TEX_FLAG_HAS_CUTOUT_ALPHA if has_cutout else 0)
                     | (TEX_FLAG_PS2_0X80_NORMALIZED if norm_0x80 else 0)
@@ -1512,6 +1572,8 @@ def decode_tpk_textures_matching(
                     tex_name=meta["name"],
                 )
                 narrow_up = enhanced and (orig_max > 256)
+            if has_cutout and not enhanced:
+                rgba = dilate_alpha_edge_rgb(rgba, iterations=6, alpha_thresh=32)
             flags = (
                 (TEX_FLAG_HAS_CUTOUT_ALPHA if has_cutout else 0)
                 | (TEX_FLAG_PS2_0X80_NORMALIZED if norm_0x80 else 0)

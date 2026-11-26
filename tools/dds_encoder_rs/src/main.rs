@@ -593,8 +593,41 @@ fn downsample_2x2(src: &ImageRgba, srgb: bool, lut: &[f32; 256]) -> ImageRgba {
             let idx01 = (y1 * sw + x0) * 4;
             let idx11 = (y1 * sw + x1) * 4;
 
+            let a00 = src.pixels[idx00 + 3] as u32;
+            let a10 = src.pixels[idx10 + 3] as u32;
+            let a01 = src.pixels[idx01 + 3] as u32;
+            let a11 = src.pixels[idx11 + 3] as u32;
+            let a_sum = a00 + a10 + a01 + a11;
+
             let out_idx = (y * (dst_w as usize) + x) * 4;
-            if srgb {
+            let mixed_alpha = a_sum > 0 && (a00 < 255 || a10 < 255 || a01 < 255 || a11 < 255);
+            if mixed_alpha {
+                // Alpha-weighted RGB averaging prevents alpha==0 background RGB from bleeding into cutout edges
+                if srgb {
+                    let w00 = a00 as f32;
+                    let w10 = a10 as f32;
+                    let w01 = a01 as f32;
+                    let w11 = a11 as f32;
+                    let inv_w = 1.0 / (a_sum as f32);
+                    for c in 0..3 {
+                        let avg = (lut[src.pixels[idx00 + c] as usize] * w00
+                            + lut[src.pixels[idx10 + c] as usize] * w10
+                            + lut[src.pixels[idx01 + c] as usize] * w01
+                            + lut[src.pixels[idx11 + c] as usize] * w11)
+                            * inv_w;
+                        dst[out_idx + c] = linear_to_srgb_u8(avg);
+                    }
+                } else {
+                    let half = a_sum / 2;
+                    for c in 0..3 {
+                        let sum = src.pixels[idx00 + c] as u32 * a00
+                            + src.pixels[idx10 + c] as u32 * a10
+                            + src.pixels[idx01 + c] as u32 * a01
+                            + src.pixels[idx11 + c] as u32 * a11;
+                        dst[out_idx + c] = ((sum + half) / a_sum).min(255) as u8;
+                    }
+                }
+            } else if srgb {
                 for c in 0..3 {
                     let avg = 0.25
                         * (lut[src.pixels[idx00 + c] as usize]
@@ -612,10 +645,6 @@ fn downsample_2x2(src: &ImageRgba, srgb: bool, lut: &[f32; 256]) -> ImageRgba {
                     dst[out_idx + c] = ((sum + 2) >> 2) as u8;
                 }
             }
-            let a_sum = src.pixels[idx00 + 3] as u32
-                + src.pixels[idx10 + 3] as u32
-                + src.pixels[idx01 + 3] as u32
-                + src.pixels[idx11 + 3] as u32;
             dst[out_idx + 3] = ((a_sum + 2) >> 2) as u8;
         }
     }
@@ -624,6 +653,75 @@ fn downsample_2x2(src: &ImageRgba, srgb: bool, lut: &[f32; 256]) -> ImageRgba {
         width: dst_w,
         height: dst_h,
         pixels: dst,
+    }
+}
+
+fn cutout_alpha_coverage_target(img: &ImageRgba) -> Option<f32> {
+    let total = (img.width as usize) * (img.height as usize);
+    if total < 16 {
+        return None;
+    }
+    let mut transparent = 0usize;
+    let mut opaque = 0usize;
+    let mut passing = 0usize;
+    for chunk in img.pixels.chunks_exact(4) {
+        let a = chunk[3];
+        if a < 16 {
+            transparent += 1;
+        }
+        if a >= 200 {
+            opaque += 1;
+        }
+        if a >= 128 {
+            passing += 1;
+        }
+    }
+    let t_frac = transparent as f32 / total as f32;
+    let o_frac = opaque as f32 / total as f32;
+    if t_frac >= 0.01 && o_frac >= 0.01 {
+        Some(passing as f32 / total as f32)
+    } else {
+        None
+    }
+}
+
+fn preserve_cutout_alpha_coverage(img: &mut ImageRgba, target_cov: f32) {
+    if img.width < 4 || img.height < 4 {
+        return;
+    }
+    let total = (img.width as usize) * (img.height as usize);
+    let eval_cov = |scale: f32| -> f32 {
+        let mut pass = 0usize;
+        for chunk in img.pixels.chunks_exact(4) {
+            let scaled = (chunk[3] as f32 * scale).min(255.0);
+            if scaled >= 128.0 {
+                pass += 1;
+            }
+        }
+        pass as f32 / total as f32
+    };
+    let cur = eval_cov(1.0);
+    if (cur - target_cov).abs() <= 0.015 {
+        return;
+    }
+    let (mut lo, mut hi) = if cur < target_cov {
+        (1.0f32, 2.2f32)
+    } else {
+        (0.55f32, 1.0f32)
+    };
+    for _ in 0..8 {
+        let mid = 0.5 * (lo + hi);
+        if eval_cov(mid) < target_cov {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let best_scale = 0.5 * (lo + hi);
+    for chunk in img.pixels.chunks_exact_mut(4) {
+        if chunk[3] > 0 && chunk[3] < 255 {
+            chunk[3] = ((chunk[3] as f32 * best_scale) + 0.5).clamp(0.0, 255.0) as u8;
+        }
     }
 }
 
@@ -639,9 +737,17 @@ fn generate_mip_chain_with_lut(
     } else {
         1
     };
+    let cutout_target = if mipmaps {
+        cutout_alpha_coverage_target(&base)
+    } else {
+        None
+    };
     chain.push(base);
     while (chain.len() as u32) < count {
-        let next = downsample_2x2(chain.last().unwrap(), srgb, lut);
+        let mut next = downsample_2x2(chain.last().unwrap(), srgb, lut);
+        if let Some(target_cov) = cutout_target {
+            preserve_cutout_alpha_coverage(&mut next, target_cov);
+        }
         chain.push(next);
     }
     chain
@@ -769,6 +875,41 @@ fn encode_bc7_mode6_block(pixels: &[[u8; 4]; 16]) -> [u8; 16] {
             return bw.data;
         }
     }
+
+    // For mixed-alpha cutout blocks (containing both alpha==0 and alpha>0 pixels), neutralize
+    // alpha==0 pixels' RGB to the alpha-weighted visible RGB mean so BC7 Mode 6 never bleeds
+    // transparent background junk color into opaque foliage/fence silhouette edges.
+    let mut vis_w_sum = 0u32;
+    let mut vis_rgb_sum = [0u32; 3];
+    let mut has_zero_alpha = false;
+    for p in pixels.iter() {
+        let a = p[3] as u32;
+        if a == 0 {
+            has_zero_alpha = true;
+        } else {
+            vis_w_sum += a;
+            vis_rgb_sum[0] += p[0] as u32 * a;
+            vis_rgb_sum[1] += p[1] as u32 * a;
+            vis_rgb_sum[2] += p[2] as u32 * a;
+        }
+    }
+    let mut sanitized = *pixels;
+    if has_zero_alpha && vis_w_sum > 0 {
+        let half = vis_w_sum / 2;
+        let fill = [
+            ((vis_rgb_sum[0] + half) / vis_w_sum).min(255) as u8,
+            ((vis_rgb_sum[1] + half) / vis_w_sum).min(255) as u8,
+            ((vis_rgb_sum[2] + half) / vis_w_sum).min(255) as u8,
+        ];
+        for p in &mut sanitized {
+            if p[3] == 0 {
+                p[0] = fill[0];
+                p[1] = fill[1];
+                p[2] = fill[2];
+            }
+        }
+    }
+    let pixels = &sanitized;
 
     let mut pf = [[0.0f32; 4]; 16];
     let mut mean = [0.0f32; 4];
@@ -1916,6 +2057,51 @@ mod tests {
         let dec = decode_bc7_mode6_block(&blk);
         for px in dec {
             assert_eq!(px, [171, 85, 213, 255]);
+        }
+    }
+
+    #[test]
+    fn test_alpha_weighted_mip_and_bc7_prevent_white_halo_bleed() {
+        // 8x8 cutout foliage block: left half dark green opaque [28, 72, 24, 255],
+        // right half transparent PURE WHITE [255, 255, 255, 0].
+        let w = 8u32;
+        let h = 8u32;
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let off = ((y * w + x) * 4) as usize;
+                if x < 3 {
+                    pixels[off..off + 4].copy_from_slice(&[28, 72, 24, 255]);
+                } else {
+                    pixels[off..off + 4].copy_from_slice(&[255, 255, 255, 0]);
+                }
+            }
+        }
+        let img = ImageRgba { width: w, height: h, pixels };
+        let chain = generate_mip_chain(img, true, true);
+        assert_eq!(chain.len(), 4);
+        // Mip 1 (4x4): column x=1 mixes opaque col x=2 and transparent white col x=3 -> MUST stay green, NOT pale gray!
+        let mip1 = &chain[1];
+        let edge_off = (1 * 4 + 1) * 4;
+        assert!(mip1.pixels[edge_off + 3] >= 120, "Cutout edge alpha should stay strong");
+        assert!(
+            mip1.pixels[edge_off] <= 34 && mip1.pixels[edge_off + 1] >= 64 && mip1.pixels[edge_off + 2] <= 30,
+            "Alpha-weighted mip leaked white background RGB: {:?}",
+            &mip1.pixels[edge_off..edge_off + 4]
+        );
+        // BC7 Mode 6 block with mixed opaque green & transparent white must also decode green without gray halo
+        let mut mixed_blk = [[255u8, 255, 255, 0]; 16];
+        for i in 0..8 {
+            mixed_blk[i] = [28, 72, 24, 255];
+        }
+        let enc = encode_bc7_mode6_block(&mixed_blk);
+        let dec = decode_bc7_mode6_block(&enc);
+        for i in 0..8 {
+            assert!(
+                dec[i][0] <= 34 && dec[i][1] >= 66 && dec[i][2] <= 30 && dec[i][3] >= 248,
+                "BC7 mixed cutout block leaked white into opaque pixel {i}: {:?}",
+                dec[i]
+            );
         }
     }
 }

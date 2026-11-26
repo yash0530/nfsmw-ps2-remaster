@@ -12,7 +12,12 @@ METALLIB = $(OUT_DIR)/RockportMetalRT.metallib
 
 SWIFT_SRCS = \
 	RTWorldLoader.swift \
+	RTWorldStreamer.swift \
 	RTSceneBuilder.swift \
+	RTHudTypes.swift \
+	RTPhysics.swift \
+	RTAudioEngine.swift \
+	RTGameWorld.swift \
 	RTRenderer.swift \
 	main.swift
 
@@ -23,7 +28,9 @@ FRAMEWORKS = \
 	-framework AppKit \
 	-framework CoreGraphics \
 	-framework ImageIO \
-	-framework UniformTypeIdentifiers
+	-framework UniformTypeIdentifiers \
+	-framework AudioToolbox \
+	-framework CoreAudio
 
 .PHONY: all clean metallib
 

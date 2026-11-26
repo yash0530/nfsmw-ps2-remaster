@@ -113,6 +113,144 @@ struct RTBLASMesh {
     let sharedBlasIndex: Int?
 }
 
+struct RTCarWheelBounds {
+    var frontAxleZ: Float
+    var rearAxleZ: Float
+    var wheelRadiusF: Float
+    var wheelRadiusR: Float
+    var halfTrackF: Float
+    var halfTrackR: Float
+
+    static let defaultM3 = RTCarWheelBounds(
+        frontAxleZ: 1.595, rearAxleZ: -1.1295,
+        wheelRadiusF: 0.33, wheelRadiusR: 0.33,
+        halfTrackF: 0.80, halfTrackR: 0.80
+    )
+}
+
+struct RTCarCatalogEntry {
+    let canonicalName: String
+    let alias: String
+    let displayName: String
+    let carID: UInt32
+    let supportsLivery: Bool
+}
+
+enum RTCarCatalog {
+    static let allCars: [RTCarCatalogEntry] = [
+        RTCarCatalogEntry(canonicalName: "BMWM3GTRE46", alias: "m3_gtr", displayName: "BMW M3 GTR E46", carID: 0, supportsLivery: true),
+        RTCarCatalogEntry(canonicalName: "CARRERAGT", alias: "carrera_gt", displayName: "Porsche Carrera GT", carID: 1, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "GALLARDO", alias: "gallardo", displayName: "Lamborghini Gallardo", carID: 2, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "CORVETTEC6R", alias: "corvette_c6r", displayName: "Chevrolet Corvette C6.R", carID: 3, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "FORDGT", alias: "ford_gt", displayName: "Ford GT", carID: 4, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "MURCIELAGO", alias: "murcielago", displayName: "Lamborghini Murcielago", carID: 5, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "RX7", alias: "rx7", displayName: "Mazda RX-7 (FD3S)", carID: 6, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "SLR", alias: "slr", displayName: "Mercedes-Benz SLR McLaren", carID: 7, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "VIPER", alias: "viper", displayName: "Dodge Viper SRT-10", carID: 8, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "DB9", alias: "db9", displayName: "Aston Martin DB9", carID: 9, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "CORVETTE", alias: "corvette", displayName: "Chevrolet Corvette C6", carID: 10, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "911GT2", alias: "911_gt2", displayName: "Porsche 911 GT2", carID: 11, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "911TURBO", alias: "911_turbo", displayName: "Porsche 911 Turbo S", carID: 12, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "997S", alias: "997s", displayName: "Porsche 911 Carrera S", carID: 13, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "CAYMANS", alias: "cayman_s", displayName: "Porsche Cayman S", carID: 14, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "MUSTANGGT", alias: "mustang_gt", displayName: "Ford Mustang GT", carID: 15, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "LANCEREVO8", alias: "evo8", displayName: "Mitsubishi Lancer Evo VIII", carID: 16, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "IMPREZAWRX", alias: "wrx_sti", displayName: "Subaru Impreza WRX STi", carID: 17, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "SUPRA", alias: "supra", displayName: "Toyota Supra", carID: 18, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "CLK500", alias: "clk500", displayName: "Mercedes-Benz CLK 500", carID: 19, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "SL500", alias: "sl500", displayName: "Mercedes-Benz SL 500", carID: 20, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "SL65", alias: "sl65", displayName: "Mercedes-Benz SL65 AMG", carID: 21, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "CAMARO", alias: "camaro", displayName: "Chevrolet Camaro SS", carID: 22, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "GTO", alias: "gto", displayName: "Pontiac GTO", carID: 23, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "MONARO", alias: "monaro", displayName: "Vauxhall Monaro VXR", carID: 24, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "ELISE", alias: "elise", displayName: "Lotus Elise 111R", carID: 25, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "RX8", alias: "rx8", displayName: "Mazda RX-8", carID: 26, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "RX8SPEEDT", alias: "rx8_speedt", displayName: "Mazda RX-8 Mazdaspeed", carID: 27, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "ECLIPSEGT", alias: "eclipse_gt", displayName: "Mitsubishi Eclipse GT", carID: 28, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "IS300", alias: "is300", displayName: "Lexus IS 300", carID: 29, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "CTS", alias: "cts", displayName: "Cadillac CTS", carID: 30, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "A3", alias: "a3", displayName: "Audi A3 3.2 Quattro", carID: 31, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "A4", alias: "a4", displayName: "Audi A4 3.2 FSI Quattro", carID: 32, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "TT", alias: "tt", displayName: "Audi TT 3.2 Quattro", carID: 33, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "GTI", alias: "gti", displayName: "VW Golf GTI", carID: 34, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "COBALTSS", alias: "cobalt_ss", displayName: "Chevrolet Cobalt SS", carID: 35, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "CLIO", alias: "clio", displayName: "Renault Clio V6", carID: 36, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "PUNTO", alias: "punto", displayName: "Fiat Grande Punto", carID: 37, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "BMWM3", alias: "bmw_m3", displayName: "BMW M3 GTR Street", carID: 38, supportsLivery: false),
+        RTCarCatalogEntry(canonicalName: "BMWM3GTR", alias: "bmw_m3_gtr_race", displayName: "BMW M3 GTR Race", carID: 39, supportsLivery: false),
+    ]
+
+    static func resolve(_ raw: String) -> RTCarCatalogEntry {
+        let norm = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+        let compact = norm.replacingOccurrences(of: "_", with: "")
+        if norm == "m3" || norm == "bmw" { return allCars[0] }
+        if norm == "cgt" || norm == "porsche" { return allCars[1] }
+        if norm == "lambo" || norm == "lamborghini" { return allCars[2] }
+        if norm == "c6r" { return allCars[3] }
+        if norm == "gt" { return allCars[4] }
+        if norm == "murci" { return allCars[5] }
+        if norm == "evo" { return allCars[16] }
+        if norm == "wrx" { return allCars[17] }
+        for entry in allCars {
+            if entry.canonicalName.lowercased() == norm || entry.canonicalName.lowercased() == compact || entry.alias == norm {
+                return entry
+            }
+        }
+        return allCars[0]
+    }
+
+    static func index(of canonicalName: String) -> Int {
+        return allCars.firstIndex(where: { $0.canonicalName.caseInsensitiveCompare(canonicalName) == .orderedSame }) ?? 0
+    }
+
+    static func next(after canonicalName: String, delta: Int = 1) -> RTCarCatalogEntry {
+        let idx = index(of: canonicalName)
+        let n = allCars.count
+        return allCars[((idx + delta) % n + n) % n]
+    }
+
+    static func ensureCachedScenePath(for entry: RTCarCatalogEntry) -> String? {
+        let fm = FileManager.default
+        let cacheScene = "build/car_cache/\(entry.canonicalName)/scene.json"
+        // Prefer 58k-tri flagship hq_m3_gtr for M3 GTR and 512px-tex hq_gallardo for Gallardo;
+        // prefer smooth-welded car_cache for Carrera GT & all other 40 garage cars!
+        if entry.canonicalName == "BMWM3GTRE46" && fm.fileExists(atPath: "build/flywheel/hq_m3_gtr/scene.json") {
+            return "build/flywheel/hq_m3_gtr/scene.json"
+        }
+        if entry.canonicalName == "GALLARDO" && fm.fileExists(atPath: "build/flywheel/hq_gallardo/scene.json") {
+            return "build/flywheel/hq_gallardo/scene.json"
+        }
+        if fm.fileExists(atPath: cacheScene) {
+            return cacheScene
+        }
+        if entry.canonicalName == "CARRERAGT" && fm.fileExists(atPath: "build/flywheel/hq_carrera_gt/scene.json") {
+            return "build/flywheel/hq_carrera_gt/scene.json"
+        }
+        // On-demand ~0.3s ISO extraction via tools/extract_rt_car.py!
+        let extractor = "tools/extract_rt_car.py"
+        if fm.fileExists(atPath: extractor) {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            proc.arguments = ["python3", extractor, "--car", entry.canonicalName]
+            proc.standardOutput = Pipe()
+            proc.standardError = Pipe()
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+                if proc.terminationStatus == 0 && fm.fileExists(atPath: cacheScene) {
+                    return cacheScene
+                }
+            } catch {
+                // Fall through to legacy paths
+            }
+        }
+        return nil
+    }
+}
+
 enum RTCarProfile: String, CaseIterable {
     case m3_gtr = "m3_gtr"
     case carrera_gt = "carrera_gt"
@@ -167,8 +305,12 @@ enum RTCarProfile: String, CaseIterable {
 struct RTScenePackage {
     let sourceLabel: String
     let carProfile: RTCarProfile
+    let canonicalCarName: String
+    let carAlias: String
+    let carDisplayName: String
     let carID: UInt32
     let carSupportsLivery: Bool
+    let wheelBounds: RTCarWheelBounds
     let meshes: [RTBLASMesh]
     let vertexBuffer: MTLBuffer
     let indexBuffer: MTLBuffer
@@ -330,6 +472,119 @@ enum RTSceneBuilder {
                 cloudCoverage: 0.42
             )
         ]
+    }
+
+    /// Continuous 24-hour dynamic sky/sun/moon/fog/weather evaluator for live day-night cycling (key `4` & `--time-of-day`).
+    static func lightingPreset(forTimeOfDayHours rawHours: Float, rainIntensity rawRain: Float) -> RTLightingPreset {
+        let h = ((rawHours.truncatingRemainder(dividingBy: 24.0)) + 24.0).truncatingRemainder(dividingBy: 24.0)
+        let rain = max(0.0, min(1.0, rawRain))
+
+        // Solar elevation angle: sunrise ~6:00, solar noon ~13:00, sunset ~19:00
+        let solarPhase = (h - 6.0) / 13.0 * Float.pi
+        let sunSin = sin(solarPhase)
+        let isDay = (h >= 5.2 && h <= 19.6)
+        let sunElev = isDay ? max(0.04, sunSin * 0.78) : max(0.18, sin(((h < 5.2 ? h + 24.0 : h) - 19.6) / 9.6 * Float.pi) * 0.52)
+        let sunAz = (h / 24.0) * 2.0 * Float.pi - 0.85
+        let sunDir = simd_normalize(SIMD3<Float>(cos(sunAz) * cos(sunElev), sunElev, sin(sunAz) * cos(sunElev)))
+
+        // Smooth blends: night (0..5.2, 20.2..24), dawn (5.2..8.2), midday (8.2..15.8), golden hour (15.8..18.8), dusk (18.8..20.2)
+        func smoothstep(_ e0: Float, _ e1: Float, _ x: Float) -> Float {
+            let t = max(0.0, min(1.0, (x - e0) / max(e1 - e0, 1e-4)))
+            return t * t * (3.0 - 2.0 * t)
+        }
+        let dawnW = smoothstep(5.0, 6.6, h) * (1.0 - smoothstep(7.2, 9.2, h))
+        let dayW  = smoothstep(7.5, 10.0, h) * (1.0 - smoothstep(15.2, 17.2, h))
+        let goldW = smoothstep(15.5, 17.4, h) * (1.0 - smoothstep(18.5, 19.8, h))
+        let duskW = smoothstep(18.2, 19.4, h) * (1.0 - smoothstep(20.0, 21.4, h))
+        let nightW = max(0.0, 1.0 - min(1.0, dawnW + dayW + goldW + duskW))
+        let wSum = max(dawnW + dayW + goldW + duskW + nightW, 1e-4)
+        let wd = dawnW / wSum, wy = dayW / wSum, wg = goldW / wSum, wk = duskW / wSum, wn = nightW / wSum
+
+        func blend3(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, _ d: SIMD3<Float>, _ e: SIMD3<Float>) -> SIMD3<Float> {
+            return a * wd + b * wy + c * wg + d * wk + e * wn
+        }
+        func blend1(_ a: Float, _ b: Float, _ c: Float, _ d: Float, _ e: Float) -> Float {
+            return a * wd + b * wy + c * wg + d * wk + e * wn
+        }
+
+        var sunCol = blend3(
+            SIMD3<Float>(1.12, 0.72, 0.44),  // dawn rose-amber
+            SIMD3<Float>(1.04, 0.98, 0.91),  // midday crisp
+            SIMD3<Float>(1.18, 0.78, 0.40),  // Rosewood golden hour
+            SIMD3<Float>(0.98, 0.48, 0.28),  // dusk ember
+            SIMD3<Float>(0.42, 0.54, 0.78)   // moonlight
+        )
+        var skyZen = blend3(
+            SIMD3<Float>(0.055, 0.11, 0.28),
+            SIMD3<Float>(0.075, 0.20, 0.48),
+            SIMD3<Float>(0.048, 0.105, 0.24),
+            SIMD3<Float>(0.025, 0.042, 0.11),
+            SIMD3<Float>(0.011, 0.020, 0.044)
+        )
+        var skyHor = blend3(
+            SIMD3<Float>(0.74, 0.46, 0.30),
+            SIMD3<Float>(0.48, 0.62, 0.78),
+            SIMD3<Float>(0.76, 0.48, 0.26),
+            SIMD3<Float>(0.44, 0.24, 0.22),
+            SIMD3<Float>(0.048, 0.076, 0.135)
+        )
+        let corona = blend3(
+            SIMD3<Float>(0.95, 0.56, 0.32),
+            SIMD3<Float>(0.62, 0.76, 0.92),
+            SIMD3<Float>(1.00, 0.62, 0.26),
+            SIMD3<Float>(0.65, 0.32, 0.22),
+            SIMD3<Float>(0.18, 0.30, 0.52)
+        )
+        let skyGnd = blend3(
+            SIMD3<Float>(0.028, 0.024, 0.024),
+            SIMD3<Float>(0.040, 0.042, 0.045),
+            SIMD3<Float>(0.028, 0.024, 0.022),
+            SIMD3<Float>(0.016, 0.016, 0.022),
+            SIMD3<Float>(0.012, 0.015, 0.022)
+        )
+
+        var sunInt = blend1(3.4, 5.0, 4.8, 2.2, 1.35)
+        var iblInt = blend1(0.95, 1.28, 1.05, 0.85, 0.78)
+        let baseWet = blend1(0.45, 0.16, 0.58, 0.68, 0.72)
+        let wetness = min(0.96, baseWet + rain * (0.94 - baseWet))
+        let fogDensity = blend1(0.0095, 0.0042, 0.0078, 0.0092, 0.0105) + rain * 0.0042
+        let exposure = blend1(1.06, 1.04, 1.08, 1.12, 1.16)
+        let headlights = max(blend1(0.65, 0.25, 0.70, 1.15, 1.45), rain * 1.05)
+        let neonInt = blend1(0.45, 0.10, 0.35, 1.20, 1.85)
+        let clouds = min(0.92, blend1(0.50, 0.42, 0.56, 0.62, 0.58) + rain * 0.32)
+
+        // Overcast storm dimming when raining heavily
+        if rain > 0.01 {
+            let storm = rain * 0.55
+            sunInt *= (1.0 - storm * 0.52)
+            sunCol = simd_mix(sunCol, SIMD3<Float>(0.62, 0.70, 0.84), SIMD3<Float>(repeating: storm * 0.45))
+            skyZen = simd_mix(skyZen, SIMD3<Float>(0.022, 0.032, 0.058), SIMD3<Float>(repeating: storm * 0.55))
+            skyHor = simd_mix(skyHor, SIMD3<Float>(0.18, 0.22, 0.28) * max(0.32, 1.0 - wn * 0.7), SIMD3<Float>(repeating: storm * 0.55))
+            iblInt *= (1.0 - storm * 0.15)
+        }
+
+        return RTLightingPreset(
+            key: String(format: "tod_%02d", Int(h)),
+            name: String(format: "Rockport 24h (%02d:%02d)", Int(h), Int((h - floor(h)) * 60.0)),
+            sunDirection: sunDir,
+            sunColor: sunCol,
+            sunIntensity: sunInt,
+            sunConeRadius: 0.028 + rain * 0.018,
+            coronaColor: corona,
+            skyZenith: skyZen,
+            skyHorizon: skyHor,
+            skyGround: skyGnd,
+            iblIntensity: iblInt,
+            wetness: wetness,
+            fogDensity: fogDensity,
+            exposure: exposure,
+            bloomThreshold: blend1(1.45, 1.75, 1.45, 1.20, 1.05),
+            bloomIntensity: blend1(0.28, 0.16, 0.26, 0.38, 0.46),
+            headlightsOn: headlights,
+            neonTint: SIMD3<Float>(1.0, 0.68, 0.26),
+            neonIntensity: neonInt,
+            cloudCoverage: clouds
+        )
     }
 
     static func defaultMaterialTable() -> [RTMaterial] {
@@ -1285,7 +1540,13 @@ enum RTSceneBuilder {
         vertices.reserveCapacity(80000)
         indices.reserveCapacity(240000)
 
+        let catalogEntry = RTCarCatalog.resolve(carKey)
         var profile = RTCarProfile.parse(carKey)
+        var canonicalName = catalogEntry.canonicalName
+        var carAlias = catalogEntry.alias
+        var displayName = catalogEntry.displayName
+        var resolvedCarID = catalogEntry.carID
+        var wheelBounds = RTCarWheelBounds.defaultM3
         var sourceLabel = "synthetic"
         var camTarget = SIMD3<Float>(0.0, 0.50, 0.12)
         var camDist: Float = 4.75
@@ -1301,20 +1562,22 @@ enum RTSceneBuilder {
         var carbonPath: String? = "build/cc0_baked/carbon_fiber_4k.png"
         let carbonNormPath = "build/cc0_raw/car_carbon_fiber/Fabric004_1K-PNG_NormalGL.png"
 
-        var carLiveryMaskPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_livery_mask.png" : nil
-        var carMiscPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_misc.png" : nil
-        var carBadgePath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_badging.png" : nil
-        var carHeadlightPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_headlight.png" : nil
-        var carTaillightPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_taillight.png" : nil
-        var carTirePath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_tire.png" : nil
-        var carInteriorPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_interior.png" : nil
+        var carLiveryMaskPath: String? = (resolvedCarID == 0) ? "build/flywheel/hq_m3_gtr/textures/m3_livery_mask.png" : nil
+        var carMiscPath: String? = (resolvedCarID == 0) ? "build/flywheel/hq_m3_gtr/textures/m3_misc.png" : nil
+        var carBadgePath: String? = (resolvedCarID == 0) ? "build/flywheel/hq_m3_gtr/textures/m3_badging.png" : nil
+        var carHeadlightPath: String? = (resolvedCarID == 0) ? "build/flywheel/hq_m3_gtr/textures/m3_headlight.png" : nil
+        var carTaillightPath: String? = (resolvedCarID == 0) ? "build/flywheel/hq_m3_gtr/textures/m3_taillight.png" : nil
+        var carTirePath: String? = (resolvedCarID == 0) ? "build/flywheel/hq_m3_gtr/textures/m3_tire.png" : nil
+        var carInteriorPath: String? = (resolvedCarID == 0) ? "build/flywheel/hq_m3_gtr/textures/m3_interior.png" : nil
 
         var mats = defaultMaterialTable()
-        var carSupportsLivery = profile.supportsLivery
+        var carSupportsLivery = catalogEntry.supportsLivery
 
         let fm = FileManager.default
+        let autoCachedScene = (!forceSynthetic && scenePath == nil) ? RTCarCatalog.ensureCachedScenePath(for: catalogEntry) : nil
         let priorityPaths = [
             scenePath,
+            autoCachedScene,
             profile.defaultScenePath,
             "build/flywheel/hq_m3_gtr/scene.json",
             "build/metal_wave3/scene/scene.json"
@@ -1341,11 +1604,26 @@ enum RTSceneBuilder {
                 let sceneDir = jURL.deletingLastPathComponent()
 
                 if let cid = root["car_id"] as? String {
+                    let resolved = RTCarCatalog.resolve(cid)
+                    canonicalName = resolved.canonicalName
+                    carAlias = resolved.alias
+                    displayName = resolved.displayName
+                    resolvedCarID = resolved.carID
                     profile = RTCarProfile.parse(cid)
-                    carSupportsLivery = profile.supportsLivery
+                    carSupportsLivery = resolved.supportsLivery
                 }
-                if profile != .m3_gtr {
+                if resolvedCarID != 0 {
                     carLiveryMaskPath = nil
+                }
+                if let wb = root["wheel_bounds"] as? [String: Any] {
+                    wheelBounds = RTCarWheelBounds(
+                        frontAxleZ: Float((wb["front_axle_z"] as? Double) ?? 1.40),
+                        rearAxleZ: Float((wb["rear_axle_z"] as? Double) ?? -1.30),
+                        wheelRadiusF: Float((wb["wheel_radius_f"] as? Double) ?? 0.33),
+                        wheelRadiusR: Float((wb["wheel_radius_r"] as? Double) ?? 0.33),
+                        halfTrackF: Float((wb["half_track_f"] as? Double) ?? 0.80),
+                        halfTrackR: Float((wb["half_track_r"] as? Double) ?? 0.80)
+                    )
                 }
 
                 // Apply authentic per-car factory paint material from scene.json
@@ -1425,8 +1703,23 @@ enum RTSceneBuilder {
                     )
                     if mesh.triangleCount > 0 { meshes.append(mesh) }
                 }
-                if profile == .m3_gtr {
+                if resolvedCarID == 0 && !meshes.contains(where: { $0.name.uppercased().contains("UNDERBODY_BACKING") }) {
                     appendM3WheelWellAndIntakeBackings(meshes: &meshes, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+                }
+                // Auto-derive wheelBounds from loaded wheel meshes if scene.json lacked explicit wheel_bounds
+                for m in meshes {
+                    switch m.role {
+                    case .wheelFL:
+                        if abs(m.pivotCenter.z) > 0.2 { wheelBounds.frontAxleZ = m.pivotCenter.z }
+                        if abs(m.pivotCenter.x) > 0.2 { wheelBounds.halfTrackF = abs(m.pivotCenter.x) }
+                        if m.pivotCenter.y > 0.2 { wheelBounds.wheelRadiusF = m.pivotCenter.y }
+                    case .wheelRL:
+                        if abs(m.pivotCenter.z) > 0.2 { wheelBounds.rearAxleZ = m.pivotCenter.z }
+                        if abs(m.pivotCenter.x) > 0.2 { wheelBounds.halfTrackR = abs(m.pivotCenter.x) }
+                        if m.pivotCenter.y > 0.2 { wheelBounds.wheelRadiusR = m.pivotCenter.y }
+                    default:
+                        break
+                    }
                 }
             } else if fm.fileExists(atPath: "build/obj_preview/cars_bmwm3gtre46_geometry_bin__BMWM3GTRE46_KIT00_BODY_B.obj") {
                 sourceLabel = "build/obj_preview"
@@ -1554,8 +1847,12 @@ enum RTSceneBuilder {
         return RTScenePackage(
             sourceLabel: sourceLabel,
             carProfile: profile,
-            carID: profile.carID,
+            canonicalCarName: canonicalName,
+            carAlias: carAlias,
+            carDisplayName: displayName,
+            carID: resolvedCarID,
             carSupportsLivery: carSupportsLivery && (loadedLivery != nil || forceSynthetic),
+            wheelBounds: wheelBounds,
             meshes: meshes,
             vertexBuffer: vBuf,
             indexBuffer: iBuf,
