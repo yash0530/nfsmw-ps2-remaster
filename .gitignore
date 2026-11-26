@@ -74,6 +74,7 @@ venv/
 *.swo
 .vscode/
 .idea/
+.claude/
 
 # Native Metal / Rust / C / Audio & 3D Preview Build Outputs
 target/
