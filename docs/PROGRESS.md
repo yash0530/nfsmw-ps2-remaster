@@ -8,5 +8,5 @@
 | `v2.3` | 4K HUD/Loading Icons & Opt-In Per-Car VU1 Geometry | Done | 677 HUD BC7 DDS + 4 Hero Cars · 59.25 FPS · User QA | `v2.3.0` |
 | `v2.4` | Measured VLT Handling/Pursuit Polish & Save Proof | Done | Authentic VLT + Save Proof · 59.66 FPS · User QA | `v2.4.0` |
 | `v2.5` | Sculpted 3D Relief & Baked AO World/Car Textures | Done | 5,859 Sculpted 3D DDS · 59.33 FPS · User QA | `v2.5.0` |
-| `v2.6` | True-Limit 3D Car Geometry + Glossy Clearcoat/Shadow Lighting | In Progress | 15+ Blacklist/Hero VU1 + LightMaterials/Reflections · User QA | — |
+| `v2.6` | True-Limit 3D Car Geometry + Glossy Clearcoat/Shadow Lighting | Done | 24 3D Cars (+162K tris) + Clearcoat · 59.20 FPS · User QA | `v2.6.0` |
 | `v2.7` | Real PS2 World Vertex-AO / 3D Hemisphere Shading (`STREAML2RA`) | In Progress | Geometry-aware building/curb contact AO + sun contrast · User QA | — |

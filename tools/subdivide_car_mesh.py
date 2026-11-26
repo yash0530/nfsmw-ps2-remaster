@@ -474,6 +474,144 @@ def _subdivide_once(
     )
 
 
+def _pn_edge_midpoint_canon(
+    pa: Vec3, pb: Vec3, na: Vec3, nb: Vec3, pka: PosKey, pkb: PosKey,
+    sharp_edges: Set[Tuple[PosKey, PosKey]], aabb_min: Vec3, aabb_max: Vec3, preserve_aabb: bool,
+) -> Vec3:
+    """Canonical-order PN curved edge midpoint so adjacent triangles share bit-exact coords."""
+    if pka > pkb:
+        pa, pb, na, nb, pka, pkb = pb, pa, nb, na, pkb, pka
+    mid = _scale(_add(pa, pb), 0.5)
+    if (pka, pkb) not in sharp_edges:
+        ev = _sub(pb, pa)
+        elen = _len(ev)
+        if elen >= 1e-9:
+            w_ab, w_ba = _dot(ev, na), -_dot(ev, nb)
+            delta = tuple(-0.125 * (w_ab * na[i] + w_ba * nb[i]) for i in range(3))
+            dlen = _len(delta)
+            if dlen > 0.25 * elen and dlen > 1e-12:
+                delta = _scale(delta, (0.25 * elen) / dlen)
+            mid = _add(mid, delta)
+    if not preserve_aabb:
+        return mid
+    return (max(aabb_min[0], min(aabb_max[0], mid[0])),
+            max(aabb_min[1], min(aabb_max[1], mid[1])),
+            max(aabb_min[2], min(aabb_max[2], mid[2])))
+
+
+def subdivide_compiled_mesh_selective(
+    mesh: CompiledMesh, *, crease_deg: float = 38.0, min_curve_deg: float = 8.0,
+    min_edge_len: float = 0.015, max_output_tris: Optional[int] = None,
+    preserve_aabb: bool = True, lock_material_seams: bool = True, lock_uv_seams: bool = False,
+) -> Tuple[CompiledMesh, SubdivideStats]:
+    """Watertight Red-Green curvature-selective PN-triangle subdivision (0 T-junctions)."""
+    if not mesh.triangles or not mesh.vertices:
+        raise ValueError("Cannot subdivide an empty mesh")
+    (vert_pkeys, pk_pos, tri_fnorms, edge_tris, sharp_edges, corner_normals,
+     smooth_cnt, sharp_cnt, boundary_cnt) = _analyze_topology(
+        mesh, crease_deg=crease_deg, lock_material_seams=lock_material_seams, lock_uv_seams=lock_uv_seams
+    )
+    aabb_min = tuple(min(v[i] for v in mesh.vertices) for i in range(3))
+    aabb_max = tuple(max(v[i] for v in mesh.vertices) for i in range(3))
+    edge_dihedral = {
+        ek: math.degrees(math.acos(max(-1.0, min(1.0, _dot(tri_fnorms[ts[0]], tri_fnorms[ts[1]])))))
+        for ek, ts in edge_tris.items() if len(ts) == 2 and ek not in sharp_edges
+    }
+
+    candidates: List[Tuple[float, int, Tuple[Tuple[PosKey, PosKey], ...]]] = []
+    for ti, (i0, i1, i2, _tx, _lm) in enumerate(mesh.triangles):
+        pk0, pk1, pk2 = vert_pkeys[i0], vert_pkeys[i1], vert_pkeys[i2]
+        if pk0 == pk1 or pk1 == pk2 or pk2 == pk0:
+            continue
+        p0, p1, p2 = pk_pos[pk0], pk_pos[pk1], pk_pos[pk2]
+        max_e = max(_len(_sub(p1, p0)), _len(_sub(p2, p1)), _len(_sub(p0, p2)))
+        if max_e < min_edge_len:
+            continue
+        eks = tuple((a, b) if a <= b else (b, a) for a, b in ((pk0, pk1), (pk1, pk2), (pk2, pk0)))
+        n0, n1, n2 = corner_normals[(ti, 0)], corner_normals[(ti, 1)], corner_normals[(ti, 2)]
+        curve = max(
+            edge_dihedral.get(eks[0], 0.0), edge_dihedral.get(eks[1], 0.0), edge_dihedral.get(eks[2], 0.0),
+            *(math.degrees(math.acos(max(-1.0, min(1.0, _dot(a, b))))) for a, b in ((n0, n1), (n1, n2), (n2, n0))),
+        )
+        if curve >= min_curve_deg:
+            candidates.append((curve * max_e, ti, eks))
+
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    split_edges: Set[Tuple[PosKey, PosKey]] = set()
+    est_tris = len(mesh.triangles)
+    for _score, _ti, eks in candidates:
+        new_eks = [ek for ek in eks if ek not in split_edges]
+        delta = sum(len(edge_tris[ek]) for ek in new_eks)
+        if new_eks and (max_output_tris is None or est_tris + delta <= max_output_tris):
+            split_edges.update(new_eks)
+            est_tris += delta
+
+    out_v: List[Vec3] = []
+    out_vn: List[Vec3] = []
+    out_vt: List[Vec2] = []
+    out_tris: List[Tuple[int, int, int, int, int]] = []
+    vert_cache: Dict[Tuple[object, Tuple[int, int, int], Tuple[int, int]], int] = {}
+
+    def _emit(tag: object, pos: Vec3, nrm: Vec3, uv: Vec2) -> int:
+        p_c = tuple(max(aabb_min[i], min(aabb_max[i], pos[i])) for i in range(3)) if preserve_aabb else pos
+        n_c = _norm(nrm)
+        key = (tag, (round(n_c[0] * 127.0), round(n_c[1] * 127.0), round(n_c[2] * 127.0)),
+               (round(uv[0] * 4096.0), round(uv[1] * 4096.0)))
+        if key in vert_cache:
+            return vert_cache[key]
+        idx = len(out_v)
+        out_v.append(p_c); out_vn.append(n_c); out_vt.append(uv); vert_cache[key] = idx
+        return idx
+
+    for ti, (i0, i1, i2, tx, lm) in enumerate(mesh.triangles):
+        pks = (vert_pkeys[i0], vert_pkeys[i1], vert_pkeys[i2])
+        ps = (pk_pos[pks[0]], pk_pos[pks[1]], pk_pos[pks[2]])
+        ns = (corner_normals[(ti, 0)], corner_normals[(ti, 1)], corner_normals[(ti, 2)])
+        uvs = (mesh.uvs[i0], mesh.uvs[i1], mesh.uvs[i2])
+        eks = tuple((pks[a], pks[b]) if pks[a] <= pks[b] else (pks[b], pks[a]) for a, b in ((0, 1), (1, 2), (2, 0)))
+        flags = tuple(ek in split_edges for ek in eks)
+        k = int(flags[0]) + int(flags[1]) + int(flags[2])
+        vs = [_emit(("v", pks[s]), ps[s], ns[s], uvs[s]) for s in range(3)]
+
+        def _mid(a: int, b: int, ek: Tuple[PosKey, PosKey]) -> Tuple[int, Vec3]:
+            mp = _pn_edge_midpoint_canon(ps[a], ps[b], ns[a], ns[b], pks[a], pks[b], sharp_edges, aabb_min, aabb_max, preserve_aabb)
+            nm = _norm(_add(ns[a], ns[b]), fallback=tri_fnorms[ti])
+            uvm = (0.5 * (uvs[a][0] + uvs[b][0]), 0.5 * (uvs[a][1] + uvs[b][1]))
+            return _emit(("e", ek), mp, nm, uvm), mp
+
+        if k == 0:
+            out_tris.append((vs[0], vs[1], vs[2], tx, lm))
+        elif k == 3:
+            e01, _ = _mid(0, 1, eks[0]); e12, _ = _mid(1, 2, eks[1]); e20, _ = _mid(2, 0, eks[2])
+            out_tris.extend(((vs[0], e01, e20, tx, lm), (e01, vs[1], e12, tx, lm),
+                             (e20, e12, vs[2], tx, lm), (e01, e12, e20, tx, lm)))
+        elif k == 1:
+            rot = flags.index(True)
+            a, b, c = rot, (rot + 1) % 3, (rot + 2) % 3
+            em, _ = _mid(a, b, eks[rot])
+            out_tris.extend(((vs[a], em, vs[c], tx, lm), (em, vs[b], vs[c], tx, lm)))
+        else:
+            unsplit = flags.index(False)
+            a, b, c = (unsplit + 2) % 3, unsplit, (unsplit + 1) % 3
+            e_ab, mp_ab = _mid(a, b, eks[a]); e_ca, mp_ca = _mid(c, a, eks[c])
+            out_tris.append((vs[a], e_ab, e_ca, tx, lm))
+            if _len(_sub(mp_ab, ps[c])) <= _len(_sub(ps[b], mp_ca)):
+                out_tris.extend(((e_ab, vs[b], vs[c], tx, lm), (e_ab, vs[c], e_ca, tx, lm)))
+            else:
+                out_tris.extend(((e_ab, vs[b], e_ca, tx, lm), (vs[b], vs[c], e_ca, tx, lm)))
+
+    cur = CompiledMesh(out_v, out_vn, out_vt, out_tris, dict(mesh.group_meta))
+    stats = SubdivideStats(
+        mode="pn_selective", levels=1, crease_deg=crease_deg,
+        input_vertices=len(mesh.vertices), input_triangles=len(mesh.triangles),
+        output_vertices=len(out_v), output_triangles=len(out_tris),
+        smooth_edges=smooth_cnt, sharp_edges=sharp_cnt, boundary_edges=boundary_cnt,
+        aabb_min=[round(min(v[i] for v in out_v), 6) for i in range(3)],
+        aabb_max=[round(max(v[i] for v in out_v), 6) for i in range(3)],
+    )
+    return cur, stats
+
+
 def subdivide_compiled_mesh(
     mesh: CompiledMesh,
     *,
@@ -680,9 +818,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--in", dest="in_obj", type=Path, required=True, help="Input Wavefront .obj")
     parser.add_argument("--out", dest="out_obj", type=Path, required=True, help="Output smoothed .obj")
-    parser.add_argument("--mode", choices=("pn", "loop"), default="pn", help="Subdivision scheme (default: pn)")
+    parser.add_argument("--mode", choices=("pn", "loop", "pn_selective"), default="pn", help="Subdivision scheme (default: pn)")
     parser.add_argument("--levels", type=int, default=1, help="Subdivision iterations (default: 1)")
     parser.add_argument("--crease-deg", type=float, default=38.0, help="Dihedral crease threshold in degrees (default: 38.0)")
+    parser.add_argument("--min-curve-deg", type=float, default=8.0, help="Selective curvature threshold in degrees (default: 8.0)")
+    parser.add_argument("--max-tris", type=int, default=None, help="Optional output triangle budget for pn_selective")
     parser.add_argument("--no-preserve-aabb", action="store_true", help="Allow vertices slightly outside original AABB")
     parser.add_argument("--part-name", type=str, default=None, help="Object name written into output OBJ")
     parser.add_argument("--json", action="store_true", help="Emit JSON report")
@@ -692,15 +832,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    stats = subdivide_obj_file(
-        args.in_obj,
-        args.out_obj,
-        crease_deg=args.crease_deg,
-        mode=args.mode,
-        levels=args.levels,
-        preserve_aabb=not args.no_preserve_aabb,
-        part_name=args.part_name,
-    )
+    if args.mode == "pn_selective":
+        mesh = load_obj_mesh(args.in_obj)
+        sub_mesh, stats = subdivide_compiled_mesh_selective(
+            mesh, crease_deg=args.crease_deg, min_curve_deg=args.min_curve_deg,
+            max_output_tris=args.max_tris, preserve_aabb=not args.no_preserve_aabb,
+        )
+        export_rich_obj(args.out_obj, args.part_name or args.in_obj.stem, sub_mesh, group_meta=sub_mesh.group_meta)  # type: ignore[arg-type]
+    else:
+        stats = subdivide_obj_file(
+            args.in_obj,
+            args.out_obj,
+            crease_deg=args.crease_deg,
+            mode=args.mode,
+            levels=args.levels,
+            preserve_aabb=not args.no_preserve_aabb,
+            part_name=args.part_name,
+        )
     if args.json:
         print(json.dumps(dataclasses.asdict(stats), indent=2))
     else:
