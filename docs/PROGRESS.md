@@ -2,8 +2,8 @@
 | :--- | :--- | :--- | :--- | :--- |
 | `v0.5` | PS2/PCSX2 Baseline (84-car VU1, lighting, 170 BC7 tex) | Done | PCSX2 v2.6.3 baseline | `b1bff22` |
 | `v0.6`–`v1.4` | Standalone Metal RT Prototype (dropped from `main`) | Archived | Archived (`archive/standalone-metal-rt-v1.4`) | `v1.4.0` |
-| `stabilize` | Green Ubuntu + macOS CI, `.pnach` Audit & ISO Round-Trip | In Progress | CI + Rust BC7 + SHA-256 ISO proof | — |
-| `v2.1` | PCSX2 4K/32-bit Profile, 60 FPS Proof & Baseline Video | Queued | User QA | — |
-| `v2.2` | District-by-District Faithful HD Textures (In-Game Dumps) | Queued | User QA | — |
+| `stabilize` | Green Ubuntu + macOS CI, `.pnach` Audit & ISO Round-Trip | Done | CI green (Ubuntu 3.11/3.12 + macOS) + Rust BC7 + SHA-256 ISO proof | `e03ce49` |
+| `v2.1` | PCSX2 4K/32-bit Profile, 60 FPS Proof & Baseline Video | In Progress | Opus 5.5 + Live PCSX2 Race · User QA | — |
+| `v2.2` | District-by-District Faithful HD Textures (In-Game Dumps) | In Progress | Offline Hasher + BC7 Pack · User QA | — |
 | `v2.3` | 4K HUD/Loading Icons & Opt-In Per-Car VU1 Geometry | Queued | User QA | — |
 | `v2.4` | Measured VLT Handling/Pursuit Polish & Save Proof | Queued | User QA | — |
