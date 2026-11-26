@@ -135,3 +135,14 @@ patch=0,EE,004075A4,word,3421CCCD
 author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
 description=Lowers DrawAScenery reflection-view projected-pixel cull threshold (0x003DB0D4) from 32px to 12px so 2.6x more Rockport skyline buildings and autumn trees render inside car 5-face envmaps and planar road reflections.
 patch=0,EE,003DB0D4,word,2A02000C
+
+[Warm Late-Autumn Lighting & Fog (Optional)]
+author=NFSMW: Rockport 2026 (MIPS/ELF-verified for SLUS-21351)
+description=Warm late-autumn grade: FillLightDiffuseColour (0.87,0.90,1.00 -> 0.97,0.93,0.88), fill intensity 2.1f -> 2.4f, base/horizon weather fog start 212f/229f -> 340f/380f, and g_MaxRoadDampness 1.0f -> 0.52f damp-asphalt cap. Do not combine with [Real-Time Planar Damp-Asphalt Road Reflections (Optional)].
+patch=0,EE,005474A0,word,3F7851EC
+patch=0,EE,005474A4,word,3F6E147B
+patch=0,EE,005474A8,word,3F6147AE
+patch=0,EE,005474B0,word,4019999A
+patch=0,EE,00593E94,word,43AA0000
+patch=0,EE,00593ED0,word,43BE0000
+patch=0,EE,005A2C80,word,3F051EB8
