@@ -470,6 +470,61 @@
           "note": "DrawAScenery (0x003DB0D4): slti $v0,$s0,0x20 (32 px reflection cull) -> slti $v0,$s0,0x0c (12 px reflection cull)"
         }
       ]
+    },
+    {
+      "id": "warm_autumn_lighting_v21",
+      "name": "Warm Late-Autumn Lighting, Cleared Mid-Fog & Balanced Road Dampness (v2.1)",
+      "description": "Warms FillLightDiffuseColour (0.87,0.90,1.00 -> 0.97,0.93,0.88), lifts FillLightDiffuseIntensity (2.1 -> 2.4), extends BaseWeatherFogStart/HorizWeatherFogStart (212/229 -> 340/380), and balances g_MaxRoadDampness (1.0 -> 0.52).",
+      "category": "visual",
+      "author": "NFSMW: Rockport 2026 (MIPS/ELF-verified for SLUS-21351)",
+      "enabled_by_default": false,
+      "mutually_exclusive_with": [
+        "always_wet_road_reflections"
+      ],
+      "writes": [
+        {
+          "vaddr": "0x005474A0",
+          "expected_orig": "0x3F5EB852",
+          "patched": "0x3F7851EC",
+          "note": "FillLightDiffuseColour.r 0.87f -> 0.97f"
+        },
+        {
+          "vaddr": "0x005474A4",
+          "expected_orig": "0x3F666666",
+          "patched": "0x3F6E147B",
+          "note": "FillLightDiffuseColour.g 0.90f -> 0.93f"
+        },
+        {
+          "vaddr": "0x005474A8",
+          "expected_orig": "0x3F800000",
+          "patched": "0x3F6147AE",
+          "note": "FillLightDiffuseColour.b 1.00f -> 0.88f"
+        },
+        {
+          "vaddr": "0x005474B0",
+          "expected_orig": "0x40066666",
+          "patched": "0x4019999A",
+          "note": "FillLightDiffuseIntensity 2.10f -> 2.40f"
+        },
+        {
+          "vaddr": "0x00593E94",
+          "expected_orig": "0x43540000",
+          "patched": "0x43AA0000",
+          "note": "BaseWeatherFogStart 212.0f -> 340.0f"
+        },
+        {
+          "vaddr": "0x00593ED0",
+          "expected_orig": "0x43650000",
+          "patched": "0x43BE0000",
+          "note": "HorizWeatherFogStart 229.0f -> 380.0f"
+        },
+        {
+          "vaddr": "0x005A2C80",
+          "expected_orig": "0x3F800000",
+          "patched": "0x3F051EB8",
+          "note": "g_MaxRoadDampness 1.00f -> 0.52f"
+        }
+      ]
     }
   ]
 }
