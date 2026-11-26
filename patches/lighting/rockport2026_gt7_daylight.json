@@ -1,0 +1,1356 @@
+{
+  "schema_version": 1,
+  "id": "rockport2026_gt7_daylight",
+  "name": "Rockport 2026 GT7 Crisp Daylight Lighting",
+  "description": "Flagship v0.5 Gran Turismo 7-inspired daylight lighting overhaul for GLOBAL\\GLOBALB.LZC: rebalances ALL 5 SunInfos profiles (MIDDAY, PARKLAND, SUNSET, PROTOTYPE, E3DEMO) to eliminate any residual olive/yellow solar haze across Career, Free Roam, Quick Race, and Frontend, and upgrades 33 car, glass, chrome, aluminum, brake, carbon, rubber, and road LightMaterials for crisp neutral daylight clarity and rich clearcoat reflections. Verified byte-exact against untouched SLUS-21351 and packs in-place inside GLOBALMEMORYFILE.BIN.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\GLOBALB.LZC",
+    "uncompressed_bytes": 871900,
+    "companion_memfile": "GLOBAL\\GLOBALMEMORYFILE.BIN"
+  },
+  "patches": [
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "Position",
+      "expected_offset": "0x000abf20",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5300.0,
+        -3300.0,
+        4050.0
+      ],
+      "note": "High-elevation GT7 crisp midday solar vector"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abf2c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5300.0,
+        -3300.0,
+        4050.0
+      ],
+      "note": "Align MIDDAY car ground shadows with high daylight sun"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf40",
+      "expected_orig": 1.0,
+      "new_value": 1.18,
+      "note": "Crisp bright daylight solar core"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Size",
+      "expected_offset": "0x000abf44",
+      "expected_orig": 60.0,
+      "new_value": 52.0,
+      "note": "Focused clean solar disc optics"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abf50",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        253,
+        248,
+        128
+      ],
+      "note": "Pure sunlit white solar core (removes yellow-amber cast)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf64",
+      "expected_orig": 0.5,
+      "new_value": 0.42,
+      "note": "Clean controlled atmospheric sky halo"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Size",
+      "expected_offset": "0x000abf68",
+      "expected_orig": 320.0,
+      "new_value": 390.0,
+      "note": "Smooth wide clear-sky scatter radius"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abf74",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        165,
+        212,
+        255,
+        128
+      ],
+      "note": "Azure blue clear-sky scatter replacing olive-brown halo"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf88",
+      "expected_orig": 0.7,
+      "new_value": 0.52,
+      "note": "Refined daylight major sun shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abf98",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        215,
+        234,
+        255,
+        128
+      ],
+      "note": "Cool daylight-white major rays replacing sepia glare"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abfac",
+      "expected_orig": 0.32,
+      "new_value": 0.25,
+      "note": "Subtle crisp secondary shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abfbc",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        205,
+        228,
+        255,
+        128
+      ],
+      "note": "Cool sky-white secondary scatter"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PARKLAND",
+      "field": "Position",
+      "expected_offset": "0x000abae0",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        2400.0
+      ],
+      "new_value": [
+        4850.0,
+        -2650.0,
+        3800.0
+      ],
+      "note": "Elevate L2RA SunTrack PARKLAND vector to crisp GT7 daylight"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PARKLAND",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abaec",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        2400.0
+      ],
+      "new_value": [
+        4850.0,
+        -2650.0,
+        3800.0
+      ],
+      "note": "Synchronize PARKLAND car shadow vector with daylight sun"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "Position",
+      "expected_offset": "0x000abbf0",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        1700.0
+      ],
+      "new_value": [
+        4900.0,
+        -1800.0,
+        3200.0
+      ],
+      "note": "Elevate SUNSET fallback to crisp afternoon daylight so zero olive haze appears"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abbfc",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        1700.0
+      ],
+      "new_value": [
+        4900.0,
+        -1800.0,
+        3200.0
+      ],
+      "note": "Match SUNSET car shadow vector to crisp afternoon sun"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc10",
+      "expected_orig": 1.0,
+      "new_value": 1.12,
+      "note": "Balanced clean afternoon solar core intensity"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abc20",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        248,
+        232,
+        128
+      ],
+      "note": "Clean warm-white solar disc replacing amber-orange tint"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc34",
+      "expected_orig": 0.5,
+      "new_value": 0.44,
+      "note": "Clean pale-sky afternoon corona"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abc44",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        195,
+        222,
+        255,
+        128
+      ],
+      "note": "Clean clear-sky afternoon scatter replacing olive [130,110,25]"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc58",
+      "expected_orig": 0.7,
+      "new_value": 0.5,
+      "note": "Refined afternoon major shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abc68",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        235,
+        238,
+        246,
+        128
+      ],
+      "note": "Neutral daylight-white major shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc7c",
+      "expected_orig": 0.32,
+      "new_value": 0.24,
+      "note": "Subtle clean secondary shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abc8c",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        225,
+        232,
+        248,
+        128
+      ],
+      "note": "Neutral sky-white secondary shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PROTOTYPE",
+      "field": "Position",
+      "expected_offset": "0x000abd00",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5300.0,
+        -3300.0,
+        4050.0
+      ],
+      "note": "Align PROTOTYPE sun vector with GT7 daylight"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PROTOTYPE",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abd0c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5300.0,
+        -3300.0,
+        4050.0
+      ],
+      "note": "Align PROTOTYPE car shadow vector with GT7 daylight"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "Position",
+      "expected_offset": "0x000abe10",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5300.0,
+        -3300.0,
+        4050.0
+      ],
+      "note": "Align E3DEMO sun vector with GT7 daylight"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abe1c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5300.0,
+        -3300.0,
+        4050.0
+      ],
+      "note": "Align E3DEMO car shadow vector with GT7 daylight"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abe40",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        253,
+        248,
+        128
+      ],
+      "note": "Neutralize E3DEMO amber core to clean daylight white"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abe64",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        165,
+        212,
+        255,
+        128
+      ],
+      "note": "Neutralize E3DEMO olive halo to clear azure sky"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abe88",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        215,
+        234,
+        255,
+        128
+      ],
+      "note": "Neutralize E3DEMO sepia major rays"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abeac",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        205,
+        228,
+        255,
+        128
+      ],
+      "note": "Neutralize E3DEMO sepia secondary rays"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x000047bc",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        0.97,
+        0.99,
+        1.03
+      ],
+      "note": "Eliminate baked sepia-brown ROAD shadow crush under GT7 daylight"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMaxScale",
+      "expected_offset": "0x000047c8",
+      "expected_orig": 1.0,
+      "new_value": 1.08,
+      "note": "Lift sunlit asphalt midtone clarity without washing out detail"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x000047cc",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        0.97,
+        0.99,
+        1.03
+      ],
+      "note": "Neutral cool-slate daylight asphalt diffuse"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularPower",
+      "expected_offset": "0x000047e0",
+      "expected_orig": 1.523,
+      "new_value": 2.25,
+      "note": "Crisp GT7 micro-sheen along sunlit tarmac"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WHEELBLUR",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000541c",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        0.96,
+        0.98,
+        1.01
+      ],
+      "note": "Neutralize sepia bias on spinning wheel blur"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WHEELBLUR",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000542c",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        0.96,
+        0.98,
+        1.01
+      ],
+      "note": "Clean neutral daylight wheel motion blur"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00004868",
+      "expected_orig": 0.1,
+      "new_value": 0.24,
+      "note": "Lift crushed tire rubber shadow readability from 0.10 to 0.24"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000486c",
+      "expected_orig": [
+        1.0,
+        0.95,
+        0.9
+      ],
+      "new_value": [
+        0.98,
+        0.99,
+        1.0
+      ],
+      "note": "Remove warm brownish rubber tint"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000487c",
+      "expected_orig": [
+        1.0,
+        0.95,
+        0.9
+      ],
+      "new_value": [
+        0.98,
+        0.99,
+        1.0
+      ],
+      "note": "Clean neutral matte rubber highlights"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x000048a4",
+      "expected_orig": 0.1,
+      "new_value": 0.16,
+      "note": "Subtle realistic sidewall sheen on performance tires"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000003c",
+      "expected_orig": [
+        0.7,
+        0.7,
+        0.7
+      ],
+      "new_value": [
+        0.82,
+        0.84,
+        0.88
+      ],
+      "note": "Brighten machined aluminum shadow response"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000004c",
+      "expected_orig": [
+        0.7,
+        0.7,
+        0.7
+      ],
+      "new_value": [
+        0.88,
+        0.9,
+        0.94
+      ],
+      "note": "Clean bright brushed-aluminum daylight albedo"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00000068",
+      "expected_orig": [
+        0.6,
+        0.6,
+        0.66
+      ],
+      "new_value": [
+        0.92,
+        0.95,
+        1.0
+      ],
+      "note": "Crisp silver-white aluminum specular"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000088",
+      "expected_orig": 0.001,
+      "new_value": 0.65,
+      "note": "Add crisp sky envmap reflection to brushed aluminum"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000098",
+      "expected_orig": 0.001,
+      "new_value": 0.35,
+      "note": "Balanced facing reflection on aluminum trim"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000c14",
+      "expected_orig": 0.0,
+      "new_value": 0.55,
+      "note": "Crisp sunlit glint highlights on chrome trim"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00000c24",
+      "expected_orig": 0.0,
+      "new_value": 0.3,
+      "note": "Clean facing chrome specular response"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000c38",
+      "expected_orig": 2.0,
+      "new_value": 2.55,
+      "note": "GT7-grade mirror sky reflection on chrome"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGCHROME",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x000026e4",
+      "expected_orig": 0.0,
+      "new_value": 0.5,
+      "note": "Crisp specular glints on chrome magnesium wheels"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGCHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002708",
+      "expected_orig": 2.0,
+      "new_value": 2.45,
+      "note": "Brighter sky reflection on chrome mag wheels"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGSILVER",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002868",
+      "expected_orig": 2.0,
+      "new_value": 2.35,
+      "note": "Richer forged-alloy sky reflection on stock silver rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGSILVER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002878",
+      "expected_orig": 0.5,
+      "new_value": 0.72,
+      "note": "Balanced alloy sheen across rim spokes"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004ee8",
+      "expected_orig": 1.5,
+      "new_value": 2.05,
+      "note": "Richer forged-alloy sky reflection on custom rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004ef8",
+      "expected_orig": 0.25,
+      "new_value": 0.45,
+      "note": "Crisper facing reflection on aftermarket rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004f98",
+      "expected_orig": 1.5,
+      "new_value": 2.25,
+      "note": "High-contrast chrome rim sky reflection"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004fa8",
+      "expected_orig": 1.5,
+      "new_value": 2.0,
+      "note": "Consistent chrome rim mirror response"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00000198",
+      "expected_orig": 0.5,
+      "new_value": 0.68,
+      "note": "Keep drilled brake rotors visible inside wheel wells"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x000001c4",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Metallic glint across machined brake rotors"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000001e8",
+      "expected_orig": 0.0,
+      "new_value": 0.55,
+      "note": "Subtle machined steel reflection on brake discs"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CALIPER",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000484",
+      "expected_orig": 0.2,
+      "new_value": 0.4,
+      "note": "Crisp gloss paint sheen on brake calipers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00005654",
+      "expected_orig": 0.0,
+      "new_value": 0.35,
+      "note": "Crisp daylight specular grazing reflection on windshields"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00005658",
+      "expected_orig": [
+        1.1,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        0.98,
+        1.01,
+        1.05
+      ],
+      "note": "Cool clear-sky glass specular replacing reddish [1.1,1.0,1.0]"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005688",
+      "expected_orig": 0.5,
+      "new_value": 0.82,
+      "note": "Rich GT7 sky reflection across windshield glass"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDOWMASK",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x000055a8",
+      "expected_orig": [
+        1.1,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        0.98,
+        1.01,
+        1.05
+      ],
+      "note": "Match side/rear glass specular edge to crisp daylight"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDOWMASK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000055d8",
+      "expected_orig": 0.5,
+      "new_value": 0.78,
+      "note": "Clearer sky reflection across side windows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "HEADLIGHTGLASS",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002374",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Crystal-clear daylight glint on headlight lenses"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKELIGHTGLASS",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000324",
+      "expected_orig": 0.0,
+      "new_value": 0.4,
+      "note": "Glossy acrylic highlight on taillight lenses"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CLEARPLASTIC",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00000cc8",
+      "expected_orig": [
+        1.1,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        0.98,
+        1.01,
+        1.04
+      ],
+      "note": "Remove reddish tint on clear light covers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x000005e8",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Pure white clearcoat specular on carbon fiber weave"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "SpecularMaxRGB",
+      "expected_offset": "0x000005f8",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Neutral white facing specular on carbon fiber"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000618",
+      "expected_orig": 0.1,
+      "new_value": 0.32,
+      "note": "Glossy clearcoat sky reflection on carbon hoods/wings"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00000698",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Neutral white clearcoat specular on secondary carbon fiber"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "SpecularMaxRGB",
+      "expected_offset": "0x000006a8",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Neutral white facing specular on secondary carbon fiber"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000006c8",
+      "expected_orig": 0.1,
+      "new_value": 0.32,
+      "note": "Match secondary carbon fiber clearcoat reflection"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFIC",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004ad8",
+      "expected_orig": 0.0,
+      "new_value": 0.25,
+      "note": "Subtle daylight clearcoat sky reflection on traffic vehicles"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFICWINDOWS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004b88",
+      "expected_orig": 0.1,
+      "new_value": 0.42,
+      "note": "Crisp sky reflection on traffic car windows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002ef8",
+      "expected_orig": 0.75,
+      "new_value": 0.88,
+      "note": "Luminous shadow-side metallic silver readability (M3 GTR base)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002f34",
+      "expected_orig": 0.3,
+      "new_value": 0.52,
+      "note": "Crisp GT7 clearcoat specular highlight on silver"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002f58",
+      "expected_orig": 0.2,
+      "new_value": 0.42,
+      "note": "Deep sky clearcoat reflection on metallic silver"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002b88",
+      "expected_orig": 0.6,
+      "new_value": 0.76,
+      "note": "Rich shadow readability on metallic blue (M3 GTR stripes)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002bc4",
+      "expected_orig": 0.2,
+      "new_value": 0.38,
+      "note": "Crisper metallic flake glint on royal blue"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002be8",
+      "expected_orig": 0.2,
+      "new_value": 0.4,
+      "note": "Deep clearcoat sky reflection on metallic blue"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002e48",
+      "expected_orig": 0.6,
+      "new_value": 0.76,
+      "note": "Vibrant shaded crimson on metallic red exotics"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002e84",
+      "expected_orig": 0.2,
+      "new_value": 0.38,
+      "note": "Crisp clearcoat glint on metallic red"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002ea8",
+      "expected_orig": 0.3,
+      "new_value": 0.42,
+      "note": "Rich daylight reflection on metallic red"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002b14",
+      "expected_orig": 0.2,
+      "new_value": 0.38,
+      "note": "Crisp studio highlight on metallic obsidian black"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002b38",
+      "expected_orig": 0.3,
+      "new_value": 0.48,
+      "note": "Deep mirror sky reflection on metallic black"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002ce8",
+      "expected_orig": 0.1,
+      "new_value": 0.42,
+      "note": "Prevent severe shadow crushing on metallic graphite gray (was 0.10)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002d48",
+      "expected_orig": 0.2,
+      "new_value": 0.4,
+      "note": "Clean clearcoat reflection on graphite metallic"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002c38",
+      "expected_orig": 0.5,
+      "new_value": 0.68,
+      "note": "Clean luminous shaded metallic gold"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002c98",
+      "expected_orig": 0.2,
+      "new_value": 0.38,
+      "note": "Glossy daylight sky reflection on gold"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002d98",
+      "expected_orig": 0.6,
+      "new_value": 0.74,
+      "note": "Vibrant daylight metallic green"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002df8",
+      "expected_orig": 0.2,
+      "new_value": 0.38,
+      "note": "Clean clearcoat sky bounce on metallic green"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002fa8",
+      "expected_orig": 0.4,
+      "new_value": 0.65,
+      "note": "Crisp shaded yellow exotic paint (Gallardo/Corvette)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003008",
+      "expected_orig": 0.2,
+      "new_value": 0.38,
+      "note": "Glossy clearcoat reflection on metallic yellow"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003f78",
+      "expected_orig": 0.75,
+      "new_value": 0.88,
+      "note": "Clean luminous studio white paint shadows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x00003f7c",
+      "expected_orig": [
+        1.0,
+        1.0,
+        0.99
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Pure neutral white diffuse min tint"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x00003f8c",
+      "expected_orig": [
+        1.0,
+        1.0,
+        0.99
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Pure neutral white diffuse max tint"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003fd8",
+      "expected_orig": 0.3,
+      "new_value": 0.45,
+      "note": "Glossy clearcoat reflection on white paint"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003af8",
+      "expected_orig": 3.0,
+      "new_value": 3.45,
+      "note": "Sharp fresnel sky separation on gloss black"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003b08",
+      "expected_orig": 0.3,
+      "new_value": 0.5,
+      "note": "Deep clearcoat sky reflection on gloss black"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTRED",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003f28",
+      "expected_orig": 0.3,
+      "new_value": 0.44,
+      "note": "Rich clearcoat sky reflection on gloss red"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLUE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003b58",
+      "expected_orig": 0.5,
+      "new_value": 0.68,
+      "note": "Lift shaded regular blue paint clarity"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLUE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003bb8",
+      "expected_orig": 0.2,
+      "new_value": 0.4,
+      "note": "Glossy clearcoat reflection on gloss blue"
+    }
+  ]
+}

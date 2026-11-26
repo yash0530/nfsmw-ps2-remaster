@@ -1,9 +1,9 @@
 # NFSMW: Rockport 2026 — Native Apple Silicon Metal 4 Hardware Ray Tracing Engine
 # Pure Apple Swift + Metal (zero external packages).
 # Usage:
-#   make -C native_metal_rt OUT_DIR=../build/metal_rt_wave3
+#   make -C native_metal_rt OUT_DIR=../build/metal_rt_wave4
 
-OUT_DIR ?= ../build/metal_rt_wave3
+OUT_DIR ?= ../build/metal_rt_wave4
 SWIFTC ?= /usr/bin/swiftc
 SDK ?= $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
 TARGET ?= arm64-apple-macosx14.0

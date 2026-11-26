@@ -221,7 +221,7 @@ class TestElfPatchJsonSchema(unittest.TestCase):
         spec = self._validate_patch_file(PATCHES_PATH)
         self.assertEqual(spec["target"].get("elf_sha1"), EXPECTED_ELF_SHA1)
         patches = spec["patches"]
-        self.assertEqual(len(patches), 19)
+        self.assertEqual(len(patches), 21)
 
         default_ids = [p["id"] for p in patches if p["enabled_by_default"]]
         self.assertEqual(
@@ -237,7 +237,7 @@ class TestElfPatchJsonSchema(unittest.TestCase):
         )
 
         total_writes = sum(len(p["writes"]) for p in patches)
-        self.assertEqual(total_writes, 38)
+        self.assertEqual(total_writes, 43)
 
 
 class TestElfDisasmOffline(unittest.TestCase):
@@ -468,7 +468,7 @@ class TestLiveRetailElfVerification(unittest.TestCase):
                         f"{patch['id']} @ 0x{vaddr:08X}: patched instruction 0x{pat:08X} failed decode",
                     )
                 checked += 1
-        self.assertEqual(checked, 38)
+        self.assertEqual(checked, 43)
 
     def test_apply_elf_patches_defaults_and_each_individual_patch(self) -> None:
         assert self._elf is not None
@@ -520,6 +520,16 @@ class TestLiveRetailElfVerification(unittest.TestCase):
         self.assertEqual(
             elf_disasm.disassemble_instruction(self._elf.read_u32(0x003DE77C), 0x003DE77C),
             "ori     $at, $at, 0x8889",
+        )
+        # UpdateAndRender__4Rain dry-road dampness branch + g_MaxRoadDampness (1.0f) + DrawAScenery reflection cull
+        self.assertEqual(
+            elf_disasm.disassemble_instruction(self._elf.read_u32(0x00407560), 0x00407560),
+            "bc1t    0x00407570",
+        )
+        self.assertEqual(self._elf.read_u32(0x005A2C80), 0x3F800000)
+        self.assertEqual(
+            elf_disasm.disassemble_instruction(self._elf.read_u32(0x003DB0D4), 0x003DB0D4),
+            "slti    $v0, $s0, 0x20",
         )
 
 

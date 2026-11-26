@@ -732,5 +732,153 @@ class TestV03ProfilesAndLightingDualSync(unittest.TestCase):
             self.assertIn(r"GLOBAL\GLOBALMEMORYFILE.BIN", staged)
 
 
+class TestV05ProfilesAndWave45Cli(unittest.TestCase):
+    """Validate flagship v0.5 Forza Ultra / Autumn profiles, readiness keys, and Wave-5 CLI delegation."""
+
+    def test_v05_flagship_and_forza_autumn_profiles_validate_cleanly(self) -> None:
+        report = rockport_cli.collect_profiles(repo_root=REPO_ROOT)
+        self.assertEqual(report["status"], "pass", f"Profiles failed: {report}")
+        by_id = {p["profile_id"]: p for p in report["profiles"]}
+
+        # Flagship v0.5.0 profile: verified 8.9/10 iter_17 release candidate
+        self.assertIn("rockport2026_v0.5", by_id)
+        v05 = by_id["rockport2026_v0.5"]
+        self.assertTrue(v05["valid"], f"rockport2026_v0.5 invalid: {v05['errors']}")
+        self.assertEqual(v05["elf_patch_count"], 9)
+        self.assertIn("always_wet_road_reflections", v05["elf_patch_ids"])
+        self.assertIn("high_detail_reflection_scenery", v05["elf_patch_ids"])
+        self.assertEqual(v05["vlt_recipe_count"], 5)
+        self.assertGreaterEqual(v05["vlt_edit_count"], 350)
+        v05_vlt_names = [Path(r["recipe"]).name for r in v05["vlt_recipes"]]
+        self.assertEqual(
+            v05_vlt_names,
+            [
+                "forza_hero_camera.json",
+                "modern_handling_tuning.json",
+                "full_roster_handling.json",
+                "pursuit_and_traffic.json",
+                "forza_ultra_look.json",
+            ],
+        )
+        self.assertEqual(v05["lighting_recipe_count"], 1)
+        self.assertEqual(v05["lighting_edit_count"], 293)
+        self.assertEqual(Path(v05["lighting_recipes"][0]["recipe"]).name, "rockport2026_forza_ultra.json")
+        self.assertEqual(v05["zz_override_count"], 88)
+
+        raw_v05 = json.loads(Path(v05["file"]).read_text(encoding="utf-8"))
+        zz_v05 = raw_v05["zz_overrides"]
+        self.assertEqual(len(zz_v05), 88)
+        self.assertTrue(all(item.get("optional") is True for item in zz_v05))
+        self.assertTrue(all(not item["file"].startswith("/") for item in zz_v05))
+        excluded = ("BRAKES", "WHEELS", "SPOILER", "ROOF")
+        self.assertFalse(any(tok in z["virtual_path"].upper() for z in zz_v05 for tok in excluded))
+        self.assertEqual(sum(1 for z in zz_v05 if z["virtual_path"].startswith("CARS\\")), 84)
+        self.assertEqual(sum(1 for z in zz_v05 if z["virtual_path"].startswith("SOUND\\")), 4)
+
+        # Alternate v0.5 Forza Autumn profile remains valid
+        self.assertIn("rockport2026_v0.5_forza_autumn", by_id)
+        fa = by_id["rockport2026_v0.5_forza_autumn"]
+        self.assertTrue(fa["valid"], f"rockport2026_v0.5_forza_autumn invalid: {fa['errors']}")
+        self.assertEqual(fa["elf_patch_count"], 7)
+        self.assertEqual(fa["vlt_recipe_count"], 5)
+        self.assertEqual(fa["lighting_recipe_count"], 1)
+        self.assertEqual(fa["lighting_edit_count"], 91)
+        self.assertEqual(Path(fa["lighting_recipes"][0]["recipe"]).name, "rockport2026_forza_autumn.json")
+        self.assertEqual(fa["zz_override_count"], 12)
+
+    def test_collect_tool_readiness_reports_wave4_and_key_driver(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rt4 = root / "build" / "metal_rt_wave4" / "RockportMetalRT"
+            kd = root / "build" / "flywheel" / "key_driver"
+            rt4.parent.mkdir(parents=True)
+            kd.parent.mkdir(parents=True)
+            rt4.write_bytes(b"MACH_O_STUB")
+            kd.write_bytes(b"MACH_O_STUB")
+
+            readiness = rockport_cli.collect_tool_readiness(root)
+            self.assertTrue(readiness["metal_rt_wave4_built"])
+            self.assertTrue(readiness["metal_rt_built"])
+            self.assertTrue(readiness["key_driver_built"])
+
+    def test_wave45_cli_subcommands_delegate_cleanly(self) -> None:
+        recorded: List[List[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            recorded.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with mock.patch("rockport_cli.subprocess.run", side_effect=fake_run):
+            rc_uf = rockport_cli.main(
+                ["upgrade-fleet", "--synthetic", "--export-hq-rt", "--crease-deg", "40.0", "--json"]
+            )
+            rc_ew = rockport_cli.main(
+                [
+                    "enhance-world",
+                    "--dumps-dir",
+                    "build/flywheel/sandbox_textures/SLUS-21351/dumps",
+                    "--out-dir",
+                    "build/flywheel/world_enhanced_v2/replacements",
+                    "--scale",
+                    "4",
+                    "--max-size",
+                    "2048",
+                    "--limit",
+                    "5",
+                ]
+            )
+            rc_pd = rockport_cli.main(
+                ["pine-drive", "probe", "--slot", "28011", "--", "--json"]
+            )
+            rc_vq = rockport_cli.main(
+                ["video-qa", "probe", "--", "session_video.mp4"]
+            )
+            rc_rf = rockport_cli.main(
+                [
+                    "race-flywheel",
+                    "--iter-name",
+                    "iter_test",
+                    "--shadeboost",
+                    "52,50,54,50",
+                    "--cas-sharpness",
+                    "50",
+                    "--dry-run",
+                    "--json",
+                ]
+            )
+            rc_rf_ana = rockport_cli.main(
+                ["race-flywheel", "analyze", "--json", "--", "frame_01.png"]
+            )
+
+        self.assertEqual((rc_uf, rc_ew, rc_pd, rc_vq, rc_rf, rc_rf_ana), (0, 0, 0, 0, 0, 0))
+        self.assertEqual(len(recorded), 6)
+        self.assertEqual(Path(recorded[0][1]).name, "upgrade_car_fleet.py")
+        self.assertIn("--synthetic", recorded[0])
+        self.assertIn("--export-hq-rt", recorded[0])
+
+        self.assertEqual(Path(recorded[1][1]).name, "enhance_world_dumps.py")
+        self.assertIn("--scale", recorded[1])
+        self.assertIn("2048", recorded[1])
+        self.assertIn("--limit", recorded[1])
+
+        self.assertEqual(Path(recorded[2][1]).name, "pcsx2_pine_driver.py")
+        self.assertIn("--slot", recorded[2])
+        self.assertIn("probe", recorded[2])
+        self.assertIn("--json", recorded[2])
+
+        self.assertEqual(Path(recorded[3][1]).name, "video_qa_pipeline.py")
+        self.assertEqual(recorded[3][2], "probe")
+        self.assertIn("session_video.mp4", recorded[3])
+
+        self.assertEqual(Path(recorded[4][1]).name, "race_flywheel.py")
+        self.assertEqual(recorded[4][2], "run-race")
+        self.assertIn("--dry-run", recorded[4])
+        self.assertIn("--shadeboost", recorded[4])
+
+        self.assertEqual(Path(recorded[5][1]).name, "race_flywheel.py")
+        self.assertEqual(recorded[5][2], "analyze")
+        self.assertIn("frame_01.png", recorded[5])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -167,6 +167,8 @@ def collect_tool_readiness(repo_root: Path) -> Dict[str, Any]:
     rockport_dds_bin = repo_root / "build" / "dds_wave3" / "target" / "release" / "rockport_dds"
     metal_pbr_bin = repo_root / "build" / "metal_wave3" / "RockportMetalPBR"
     metal_rt_bin = repo_root / "build" / "metal_rt_wave3" / "RockportMetalRT"
+    metal_rt_wave4_bin = repo_root / "build" / "metal_rt_wave4" / "RockportMetalRT"
+    key_driver_bin = repo_root / "build" / "flywheel" / "key_driver"
 
     models_dir = repo_root / "models"
     model_files = []
@@ -182,7 +184,9 @@ def collect_tool_readiness(repo_root: Path) -> Dict[str, Any]:
         "dds_and_media_clis": cli_bins,
         "rockport_dds_built": rockport_dds_bin.is_file(),
         "metal_pbr_built": metal_pbr_bin.is_file(),
-        "metal_rt_built": metal_rt_bin.is_file(),
+        "metal_rt_built": metal_rt_bin.is_file() or metal_rt_wave4_bin.is_file(),
+        "metal_rt_wave4_built": metal_rt_wave4_bin.is_file(),
+        "key_driver_built": key_driver_bin.is_file(),
         "dds_encoder_ready": rockport_dds_bin.is_file() or cli_bins.get("cargo", False) or any(
             cli_bins[k] for k in ("dds_tool", "kram", "cuttlefish", "texconv", "compressonatorcli", "nvcompress")
         ),
@@ -368,7 +372,9 @@ def print_status_human(data: Dict[str, Any]) -> None:
         f"  Readiness     : BC7 DDS Encoder={'READY' if tools['dds_encoder_ready'] else 'not installed'} "
         f"(rockport_dds={'built' if tools.get('rockport_dds_built') else 'unbuilt'}), "
         f"Metal PBR={'READY' if tools.get('metal_pbr_built') else 'unbuilt'}, "
-        f"Metal 4 RT={'READY' if tools.get('metal_rt_built') else 'unbuilt'}, "
+        f"Metal 4 RT={'READY' if tools.get('metal_rt_built') else 'unbuilt'} "
+        f"(wave4={'built' if tools.get('metal_rt_wave4_built') else 'unbuilt'}), "
+        f"KeyDriver={'READY' if tools.get('key_driver_built') else 'unbuilt'}, "
         f"AI Upscaler={'READY' if tools['ai_upscaler_ready'] else 'not installed'}, "
         f"Models={len(tools['models_found'])}"
     )
@@ -1705,13 +1711,115 @@ def build_parser() -> argparse.ArgumentParser:
     p_lv.add_argument(
         "--iso",
         type=Path,
-        default=REPO_ROOT / "build" / "NFSMW_BlackEdition_Rockport2026_v0.4.iso",
+        default=REPO_ROOT / "build" / "NFSMW_BlackEdition_Rockport2026_v0.5.iso",
     )
-    p_lv.add_argument("--out-dir", type=Path, default=REPO_ROOT / "build" / "pcsx2_verify_wave3")
+    p_lv.add_argument("--out-dir", type=Path, default=REPO_ROOT / "build" / "pcsx2_verify_wave5")
     p_lv.add_argument("--boot-wait", type=float, default=28.0)
     p_lv.add_argument("--skip-screenshot", action="store_true")
     p_lv.add_argument("--dry-run", action="store_true")
     p_lv.add_argument("--json", action="store_true")
+
+    # upgrade-fleet (Batch PS2 high-poly car fleet + Gnsu audio upgrader)
+    p_uf = sub.add_parser(
+        "upgrade-fleet",
+        help="Batch PN-subdivide PS2 car GEOMETRY.BINs (wheel-safe 84-car VU1 fleet), tune Gnsu audio synths, or export HQ RT hero",
+    )
+    p_uf.add_argument("--iso", type=Path, default=None, help="Untouched PS2 ISO path (strictly read-only)")
+    p_uf.add_argument("--out-dir", type=Path, default=REPO_ROOT / "build" / "geom_wave5_full")
+    p_uf.add_argument("--cars", nargs="+", default=None, help="Subset of car directory names under CARS\\")
+    p_uf.add_argument("--crease-deg", type=float, default=38.0)
+    p_uf.add_argument("--no-audio", action="store_true")
+    p_uf.add_argument("--skip-fleet", action="store_true")
+    p_uf.add_argument("--export-hq-rt", action="store_true")
+    p_uf.add_argument("--hq-out", type=Path, default=REPO_ROOT / "build" / "flywheel" / "hq_m3_gtr")
+    p_uf.add_argument("--spoiler", choices=("auto", "force", "off"), default="auto")
+    p_uf.add_argument("--synthetic", action="store_true")
+    p_uf.add_argument("--json", action="store_true")
+
+    # enhance-world (Detail-preserving 4x World Texture Super-Resolution + BC7 DDS pack)
+    p_ew = sub.add_parser(
+        "enhance-world",
+        help="Detail-preserving 4x local world texture enhancer & BC7_UNORM DDS builder (preserves exact PS2 GS 0x80 alpha)",
+    )
+    p_ew.add_argument(
+        "--dumps-dir",
+        type=Path,
+        default=REPO_ROOT / "build" / "flywheel" / "sandbox_textures" / SERIAL / "dumps",
+        help="Input PCSX2 dumps directory containing dumped PNG textures",
+    )
+    p_ew.add_argument(
+        "--out-dir",
+        type=Path,
+        default=REPO_ROOT / "build" / "flywheel" / "world_enhanced_v2" / "replacements",
+        help="Output replacements directory for BC7_UNORM .dds files",
+    )
+    p_ew.add_argument("--tpk-dir", type=Path, default=REPO_ROOT / "build" / "tpk_extracted")
+    p_ew.add_argument("--no-tpk", action="store_true")
+    p_ew.add_argument("--scale", type=int, choices=(2, 4), default=4)
+    p_ew.add_argument("--max-size", type=int, default=2048)
+    p_ew.add_argument("--encoder-bin", type=Path, default=None)
+    p_ew.add_argument("--upscaler-weights", type=Path, default=None)
+    p_ew.add_argument("--workers", type=int, default=4)
+    p_ew.add_argument("--dds-threads", type=int, default=2)
+    p_ew.add_argument("--strict-psmt4", action="store_true")
+    p_ew.add_argument("--limit", type=int, default=None)
+    p_ew.add_argument("--preview-path", type=Path, default=None)
+    p_ew.add_argument("--manifest-path", type=Path, default=None)
+    p_ew.add_argument("extra_args", nargs=argparse.REMAINDER, help="Additional arguments forwarded to enhance_world_dumps.py")
+
+    # pine-drive (PCSX2 v2.6.3 PINE IPC RAM telemetry & closed-loop driving autopilot)
+    p_pd = sub.add_parser(
+        "pine-drive",
+        help="Delegate to tools/pcsx2_pine_driver.py (probe, wait-state, or 20 Hz closed-loop autopilot)",
+    )
+    p_pd.add_argument(
+        "action",
+        nargs="?",
+        choices=("probe", "wait-state", "autopilot"),
+        default="probe",
+        help="PINE driver sub-action (default: probe)",
+    )
+    p_pd.add_argument("--socket", type=str, default=None, help="Explicit PINE Unix socket path")
+    p_pd.add_argument("--slot", type=int, default=28011, help="PCSX2 PINESlot (default: 28011)")
+    p_pd.add_argument("--timeout", type=float, default=None, help="Socket timeout in seconds")
+    p_pd.add_argument("extra_args", nargs=argparse.REMAINDER, help="Additional arguments forwarded to pcsx2_pine_driver.py")
+
+    # video-qa (Native AVFoundation MP4 QA extractor, contact sheets & telemetry)
+    p_vq = sub.add_parser(
+        "video-qa",
+        help="Delegate to tools/video_qa_pipeline.py (extract-qa, probe, transcode, find-window, synth-video)",
+    )
+    p_vq.add_argument(
+        "action",
+        choices=("extract-qa", "probe", "transcode", "find-window", "synth-video"),
+        help="Video QA sub-action",
+    )
+    p_vq.add_argument("extra_args", nargs=argparse.REMAINDER, help="Arguments forwarded to video_qa_pipeline.py")
+
+    # race-flywheel (Sandboxed PCSX2 live driving & visual lookdev flywheel)
+    p_rf = sub.add_parser(
+        "race-flywheel",
+        help="Delegate to tools/race_flywheel.py (run-race, analyze, or montage)",
+    )
+    p_rf.add_argument(
+        "action",
+        nargs="?",
+        choices=("run-race", "analyze", "montage"),
+        default="run-race",
+        help="Flywheel sub-action (default: run-race)",
+    )
+    p_rf.add_argument("--iso", type=Path, default=None)
+    p_rf.add_argument("--flywheel-dir", type=Path, default=None)
+    p_rf.add_argument("--iter-name", type=str, default=None)
+    p_rf.add_argument("--script", type=str, default=None)
+    p_rf.add_argument("--dump-textures", action="store_true")
+    p_rf.add_argument("--replacements-dir", type=Path, default=None)
+    p_rf.add_argument("--shadeboost", type=str, default=None)
+    p_rf.add_argument("--cas-sharpness", type=int, default=None)
+    p_rf.add_argument("--upscale", type=int, default=None)
+    p_rf.add_argument("--dry-run", action="store_true")
+    p_rf.add_argument("--json", action="store_true")
+    p_rf.add_argument("extra_args", nargs=argparse.REMAINDER, help="Additional arguments forwarded to race_flywheel.py")
 
     return parser
 
@@ -1913,6 +2021,140 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             cmd.append("--dry-run")
         if args.json:
             cmd.append("--json")
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "upgrade-fleet":
+        cmd = [
+            sys.executable,
+            str(TOOLS_DIR / "upgrade_car_fleet.py"),
+            "--out-dir",
+            str(args.out_dir),
+            "--crease-deg",
+            str(args.crease_deg),
+            "--hq-out",
+            str(args.hq_out),
+            "--spoiler",
+            args.spoiler,
+        ]
+        if args.iso is not None:
+            cmd.extend(["--iso", str(args.iso)])
+        if args.cars:
+            cmd.append("--cars")
+            cmd.extend(args.cars)
+        if args.no_audio:
+            cmd.append("--no-audio")
+        if args.skip_fleet:
+            cmd.append("--skip-fleet")
+        if args.export_hq_rt:
+            cmd.append("--export-hq-rt")
+        if args.synthetic:
+            cmd.append("--synthetic")
+        if args.json:
+            cmd.append("--json")
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "enhance-world":
+        cmd = [
+            sys.executable,
+            str(TOOLS_DIR / "enhance_world_dumps.py"),
+            "--dumps-dir",
+            str(args.dumps_dir),
+            "--out-dir",
+            str(args.out_dir),
+            "--tpk-dir",
+            str(args.tpk_dir),
+            "--scale",
+            str(args.scale),
+            "--max-size",
+            str(args.max_size),
+            "--workers",
+            str(args.workers),
+            "--dds-threads",
+            str(args.dds_threads),
+        ]
+        if args.no_tpk:
+            cmd.append("--no-tpk")
+        if args.encoder_bin is not None:
+            cmd.extend(["--encoder-bin", str(args.encoder_bin)])
+        if args.upscaler_weights is not None:
+            cmd.extend(["--upscaler-weights", str(args.upscaler_weights)])
+        if args.strict_psmt4:
+            cmd.append("--strict-psmt4")
+        if args.limit is not None:
+            cmd.extend(["--limit", str(args.limit)])
+        if args.preview_path is not None:
+            cmd.extend(["--preview-path", str(args.preview_path)])
+        if args.manifest_path is not None:
+            cmd.extend(["--manifest-path", str(args.manifest_path)])
+        extra = list(args.extra_args or [])
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        cmd.extend(extra)
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "pine-drive":
+        cmd = [
+            sys.executable,
+            str(TOOLS_DIR / "pcsx2_pine_driver.py"),
+            "--slot",
+            str(args.slot),
+        ]
+        if args.socket is not None:
+            cmd.extend(["--socket", args.socket])
+        if args.timeout is not None:
+            cmd.extend(["--timeout", str(args.timeout)])
+        cmd.append(args.action)
+        extra = list(args.extra_args or [])
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        cmd.extend(extra)
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "video-qa":
+        cmd = [
+            sys.executable,
+            str(TOOLS_DIR / "video_qa_pipeline.py"),
+            args.action,
+        ]
+        extra = list(args.extra_args or [])
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        cmd.extend(extra)
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
+
+    if args.command == "race-flywheel":
+        cmd = [
+            sys.executable,
+            str(TOOLS_DIR / "race_flywheel.py"),
+            args.action,
+        ]
+        if args.action == "run-race":
+            if args.iso is not None:
+                cmd.extend(["--iso", str(args.iso)])
+            if args.flywheel_dir is not None:
+                cmd.extend(["--flywheel-dir", str(args.flywheel_dir)])
+            if args.iter_name is not None:
+                cmd.extend(["--iter-name", args.iter_name])
+            if args.script is not None:
+                cmd.extend(["--script", args.script])
+            if args.dump_textures:
+                cmd.append("--dump-textures")
+            if args.replacements_dir is not None:
+                cmd.extend(["--replacements-dir", str(args.replacements_dir)])
+            if args.shadeboost is not None:
+                cmd.extend(["--shadeboost", args.shadeboost])
+            if args.cas_sharpness is not None:
+                cmd.extend(["--cas-sharpness", str(args.cas_sharpness)])
+            if args.upscale is not None:
+                cmd.extend(["--upscale", str(args.upscale)])
+            if args.dry_run:
+                cmd.append("--dry-run")
+        if args.json and args.action in ("run-race", "analyze"):
+            cmd.append("--json")
+        extra = list(args.extra_args or [])
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        cmd.extend(extra)
         return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
 
     return 2

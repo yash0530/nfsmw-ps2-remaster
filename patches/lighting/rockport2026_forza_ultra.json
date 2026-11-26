@@ -1,0 +1,3099 @@
+{
+  "schema_version": 1,
+  "id": "rockport2026_forza_ultra",
+  "name": "Rockport 2026 Forza Ultra \u2014 Authentic MW2005 Autumn Cinema & Clearcoat Lighting",
+  "description": "Max-ceiling lighting & material overhaul for GLOBAL\\GLOBALB.LZC preserving Need for Speed: Most Wanted (2005)'s iconic moody late-autumn sunlit atmosphere while eliminating 2005 brown/olive mud: upgrades ALL 5 SunInfos profiles (MIDDAY, SUNSET, PARKLAND, PROTOTYPE, E3DEMO) for crisp golden-autumn sunlit drama and sculptural shadows, re-tunes ROAD for deep cool-slate wet-asphalt contrast with golden sunlit sheen, and upgrades 64 car-paint, pearl, glass, tint, chrome, aluminum, rim, exhaust, mirror, spoiler, carbon, brake, rubber, and traffic LightMaterials for rich 5-face real-time clearcoat reflections. Verified byte-exact against untouched SLUS-21351 and packs in-place inside GLOBALMEMORYFILE.BIN.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\GLOBALB.LZC",
+    "uncompressed_bytes": 871900,
+    "companion_memfile": "GLOBAL\\GLOBALMEMORYFILE.BIN"
+  },
+  "patches": [
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "Position",
+      "expected_offset": "0x000abf20",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -2450.0,
+        2750.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (MIDDAY, Z=2750)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abf2c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -2450.0,
+        2750.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (MIDDAY, Z=2750)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf40",
+      "expected_orig": 1.0,
+      "new_value": 0.62,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 0 intensity (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Size",
+      "expected_offset": "0x000abf44",
+      "expected_orig": 60.0,
+      "new_value": 50.0,
+      "note": "Tightened anti-washout halo/disc size on layer 0 (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abf50",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        246,
+        224,
+        128
+      ],
+      "note": "Warm sunlit gold-white core replacing amber crush (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf64",
+      "expected_orig": 0.5,
+      "new_value": 0.24,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 1 intensity (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Size",
+      "expected_offset": "0x000abf68",
+      "expected_orig": 320.0,
+      "new_value": 275.0,
+      "note": "Tightened anti-washout halo/disc size on layer 1 (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abf74",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        245,
+        205,
+        145,
+        128
+      ],
+      "note": "Warm golden-sky autumn corona replacing olive [130,110,25] (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf88",
+      "expected_orig": 0.7,
+      "new_value": 0.32,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 2 intensity (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abf98",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        250,
+        218,
+        168,
+        128
+      ],
+      "note": "Clean warm sunlit major shafts (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abfac",
+      "expected_orig": 0.32,
+      "new_value": 0.16,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 3 intensity (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abfbc",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        242,
+        212,
+        165,
+        128
+      ],
+      "note": "Clean warm champagne secondary shafts (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "Position",
+      "expected_offset": "0x000abbf0",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        1700.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        2050.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (SUNSET, Z=2050)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abbfc",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        1700.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        2050.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (SUNSET, Z=2050)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc10",
+      "expected_orig": 1.0,
+      "new_value": 0.68,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 0 intensity (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Size",
+      "expected_offset": "0x000abc14",
+      "expected_orig": 60.0,
+      "new_value": 56.0,
+      "note": "Tightened anti-washout halo/disc size on layer 0 (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abc20",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        240,
+        200,
+        128
+      ],
+      "note": "Warm sunlit gold-white core replacing amber crush (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc34",
+      "expected_orig": 0.5,
+      "new_value": 0.28,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 1 intensity (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Size",
+      "expected_offset": "0x000abc38",
+      "expected_orig": 320.0,
+      "new_value": 300.0,
+      "note": "Tightened anti-washout halo/disc size on layer 1 (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abc44",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        255,
+        192,
+        118,
+        128
+      ],
+      "note": "Warm golden-sky autumn corona replacing olive [130,110,25] (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc58",
+      "expected_orig": 0.7,
+      "new_value": 0.36,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 2 intensity (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abc68",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        255,
+        204,
+        142,
+        128
+      ],
+      "note": "Clean warm sunlit major shafts (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc7c",
+      "expected_orig": 0.32,
+      "new_value": 0.18,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 3 intensity (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abc8c",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        255,
+        192,
+        130,
+        128
+      ],
+      "note": "Clean warm champagne secondary shafts (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "Position",
+      "expected_offset": "0x000abe10",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -2450.0,
+        2750.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (E3DEMO, Z=2750)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abe1c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -2450.0,
+        2750.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (E3DEMO, Z=2750)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abe30",
+      "expected_orig": 1.0,
+      "new_value": 0.62,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 0 intensity (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Size",
+      "expected_offset": "0x000abe34",
+      "expected_orig": 60.0,
+      "new_value": 50.0,
+      "note": "Tightened anti-washout halo/disc size on layer 0 (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abe40",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        246,
+        224,
+        128
+      ],
+      "note": "Warm sunlit gold-white core replacing amber crush (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abe54",
+      "expected_orig": 0.5,
+      "new_value": 0.24,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 1 intensity (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Size",
+      "expected_offset": "0x000abe58",
+      "expected_orig": 320.0,
+      "new_value": 275.0,
+      "note": "Tightened anti-washout halo/disc size on layer 1 (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abe64",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        245,
+        205,
+        145,
+        128
+      ],
+      "note": "Warm golden-sky autumn corona replacing olive [130,110,25] (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abe78",
+      "expected_orig": 0.7,
+      "new_value": 0.32,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 2 intensity (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abe88",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        250,
+        218,
+        168,
+        128
+      ],
+      "note": "Clean warm sunlit major shafts (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abe9c",
+      "expected_orig": 0.32,
+      "new_value": 0.16,
+      "note": "Decoupled anti-clipping (<2% clip) solar layer 3 intensity (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abeac",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        242,
+        212,
+        165,
+        128
+      ],
+      "note": "Clean warm champagne secondary shafts (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PARKLAND",
+      "field": "Position",
+      "expected_offset": "0x000abae0",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        2400.0
+      ],
+      "new_value": [
+        4950.0,
+        -1850.0,
+        2650.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (PARKLAND, Z=2650)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PARKLAND",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abaec",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        2400.0
+      ],
+      "new_value": [
+        4950.0,
+        -1850.0,
+        2650.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (PARKLAND, Z=2650)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PROTOTYPE",
+      "field": "Position",
+      "expected_offset": "0x000abd00",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -2450.0,
+        2750.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (PROTOTYPE, Z=2750)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PROTOTYPE",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abd0c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -2450.0,
+        2750.0
+      ],
+      "note": "Elevated anti-glare late-autumn solar vector (PROTOTYPE, Z=2750)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Size",
+      "expected_offset": "0x000abf8c",
+      "expected_orig": 800.0,
+      "new_value": 580.0,
+      "note": "Tightened anti-clipping crepuscular shaft radius on layer 2 (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Size",
+      "expected_offset": "0x000abfb0",
+      "expected_orig": 800.0,
+      "new_value": 560.0,
+      "note": "Tightened anti-clipping crepuscular shaft radius on layer 3 (MIDDAY)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Size",
+      "expected_offset": "0x000abc5c",
+      "expected_orig": 800.0,
+      "new_value": 620.0,
+      "note": "Tightened anti-clipping crepuscular shaft radius on layer 2 (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Size",
+      "expected_offset": "0x000abc80",
+      "expected_orig": 800.0,
+      "new_value": 600.0,
+      "note": "Tightened anti-clipping crepuscular shaft radius on layer 3 (SUNSET)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Size",
+      "expected_offset": "0x000abe7c",
+      "expected_orig": 500.0,
+      "new_value": 420.0,
+      "note": "Tightened anti-clipping crepuscular shaft radius on layer 2 (E3DEMO)"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Size",
+      "expected_offset": "0x000abea0",
+      "expected_orig": 500.0,
+      "new_value": 400.0,
+      "note": "Tightened anti-clipping crepuscular shaft radius on layer 3 (E3DEMO)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x000047b8",
+      "expected_orig": 1.0,
+      "new_value": 1.12,
+      "note": "Lift shaded corridor & safehouse tarmac brightness (mean_luma 68-80, shadow_crush <3%)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x000047bc",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        0.98,
+        0.96,
+        0.94
+      ],
+      "note": "Warm neutral-slate damp asphalt shadow diffuse (fixes cold R/B=0.83 tint)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMaxScale",
+      "expected_offset": "0x000047c8",
+      "expected_orig": 1.0,
+      "new_value": 1.14,
+      "note": "Crisp sunlit damp tarmac dynamic range"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x000047cc",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        1.04,
+        0.99,
+        0.93
+      ],
+      "note": "Warm late-autumn sunlit road bounce"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularPower",
+      "expected_offset": "0x000047e0",
+      "expected_orig": 1.523,
+      "new_value": 3.2,
+      "note": "Tight Forza-style wet-asphalt specular streak along sunlit tarmac"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x000047e4",
+      "expected_orig": 1.0,
+      "new_value": 0.92,
+      "note": "Balanced grazing wet-tarmac specular sheen without double-clipping with planar road reflections"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x000047e8",
+      "expected_orig": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.08,
+        0.98,
+        0.86
+      ],
+      "note": "Warm golden autumn specular sheen on damp road"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x000047f4",
+      "expected_orig": 1.0,
+      "new_value": 0.85,
+      "note": "Controlled facing wet-asphalt specular sheen (zero highlight blowout)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularMaxRGB",
+      "expected_offset": "0x000047f8",
+      "expected_orig": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.05,
+        0.97,
+        0.88
+      ],
+      "note": "Warm sunlit asphalt specular balance"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WHEELBLUR",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000541c",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        0.98,
+        0.96,
+        0.94
+      ],
+      "note": "Eliminate sepia crush on spinning wheel blur"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WHEELBLUR",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000542c",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        0.98,
+        0.96,
+        0.94
+      ],
+      "note": "Clean neutral-warm spinning wheel blur"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00004868",
+      "expected_orig": 0.1,
+      "new_value": 0.34,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on RUBBER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000486c",
+      "expected_orig": [
+        1.0,
+        0.95,
+        0.9
+      ],
+      "new_value": [
+        0.96,
+        0.97,
+        0.99
+      ],
+      "note": "Clean charcoal satin tire rubber"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000487c",
+      "expected_orig": [
+        1.0,
+        0.95,
+        0.9
+      ],
+      "new_value": [
+        0.98,
+        0.98,
+        0.99
+      ],
+      "note": "Clean neutral performance tire highlights"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x000048a4",
+      "expected_orig": 0.1,
+      "new_value": 0.2,
+      "note": "Subtle realistic satin tire sidewall sheen"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00000198",
+      "expected_orig": 0.5,
+      "new_value": 0.86,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on BRAKEDISC"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x000001c4",
+      "expected_orig": 0.0,
+      "new_value": 0.55,
+      "note": "Crisp machined steel glint on brake rotors"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000001e8",
+      "expected_orig": 0.0,
+      "new_value": 0.65,
+      "note": "Metallic environment reflection on brake discs"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000001f8",
+      "expected_orig": 0.0,
+      "new_value": 0.25,
+      "note": "Subtle facing sheen on brake rotors"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKES",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000003f8",
+      "expected_orig": 0.001,
+      "new_value": 0.55,
+      "note": "Machined metallic reflection on brake assemblies"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CALIPER",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000484",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp gloss paint highlight on brake calipers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CALIPER",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000004a8",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Clearcoat bounce on painted brake calipers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_CALIPERS",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00004c04",
+      "expected_orig": 0.0,
+      "new_value": 0.48,
+      "note": "Gloss highlight on custom brake calipers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_CALIPERS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004c28",
+      "expected_orig": 0.001,
+      "new_value": 0.5,
+      "note": "Clearcoat sky reflection on custom calipers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "GOLDROTOR",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002188",
+      "expected_orig": 0.001,
+      "new_value": 0.75,
+      "note": "Metallic gold reflection on slotted rotors"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000003c",
+      "expected_orig": [
+        0.7,
+        0.7,
+        0.7
+      ],
+      "new_value": [
+        0.84,
+        0.85,
+        0.88
+      ],
+      "note": "Clean bright brushed-aluminum shadow response"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000004c",
+      "expected_orig": [
+        0.7,
+        0.7,
+        0.7
+      ],
+      "new_value": [
+        0.92,
+        0.92,
+        0.94
+      ],
+      "note": "Crisp sunlit machined aluminum"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00000068",
+      "expected_orig": [
+        0.6,
+        0.6,
+        0.66
+      ],
+      "new_value": [
+        1.0,
+        0.97,
+        0.92
+      ],
+      "note": "Warm sunlit aluminum specular"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000088",
+      "expected_orig": 0.001,
+      "new_value": 1.1,
+      "note": "Unlock real-time 5-face reflection on brushed aluminum (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000098",
+      "expected_orig": 0.001,
+      "new_value": 0.48,
+      "note": "Balanced facing reflection on aluminum trim"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000c14",
+      "expected_orig": 0.0,
+      "new_value": 0.65,
+      "note": "Crisp sunlit glint highlights on chrome trim"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00000c24",
+      "expected_orig": 0.0,
+      "new_value": 0.35,
+      "note": "Clean facing chrome specular"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000c38",
+      "expected_orig": 2.0,
+      "new_value": 2.75,
+      "note": "Forza-grade mirror sky/city reflection on chrome"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000c48",
+      "expected_orig": 2.0,
+      "new_value": 2.35,
+      "note": "Rich facing mirror reflection on chrome"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MIRROR",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000030a8",
+      "expected_orig": 0.001,
+      "new_value": 2.6,
+      "note": "Unlock true mirror reflection on side/rearview mirrors (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MIRROR",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000030b8",
+      "expected_orig": 0.001,
+      "new_value": 1.8,
+      "note": "Facing mirror reflection on side mirrors (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "EXHAUST_TIP",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000020d8",
+      "expected_orig": 0.001,
+      "new_value": 2.2,
+      "note": "Unlock polished stainless reflection on exhaust tips (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "EXHAUST_TIP",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000020e8",
+      "expected_orig": 0.001,
+      "new_value": 1.2,
+      "note": "Facing stainless sheen on exhaust tips (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_EXHAUST",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004cd8",
+      "expected_orig": 0.001,
+      "new_value": 2.1,
+      "note": "Unlock polished chrome reflection on USER_EXHAUST (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_EXHAUST",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004ce8",
+      "expected_orig": 0.001,
+      "new_value": 1.1,
+      "note": "Facing polished sheen on USER_EXHAUST (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_EXHAUST2",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004d88",
+      "expected_orig": 0.001,
+      "new_value": 2.1,
+      "note": "Unlock polished chrome reflection on USER_EXHAUST2 (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_EXHAUST2",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004d98",
+      "expected_orig": 0.001,
+      "new_value": 1.1,
+      "note": "Facing polished sheen on USER_EXHAUST2 (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGGUNMETAL",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000027b8",
+      "expected_orig": 0.001,
+      "new_value": 1.65,
+      "note": "Unlock real-time 5-face rim reflection on MAGGUNMETAL (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGGUNMETAL",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000027c8",
+      "expected_orig": 0.001,
+      "new_value": 0.55,
+      "note": "Facing forged-alloy sheen on MAGGUNMETAL (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGSILVERGLOSS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002918",
+      "expected_orig": 0.001,
+      "new_value": 1.65,
+      "note": "Unlock real-time 5-face rim reflection on MAGSILVERGLOSS (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGSILVERGLOSS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002928",
+      "expected_orig": 0.001,
+      "new_value": 0.55,
+      "note": "Facing forged-alloy sheen on MAGSILVERGLOSS (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_GLOSS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00005048",
+      "expected_orig": 0.001,
+      "new_value": 1.65,
+      "note": "Unlock real-time 5-face rim reflection on USER_RIMS_GLOSS (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_GLOSS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005058",
+      "expected_orig": 0.001,
+      "new_value": 0.55,
+      "note": "Facing forged-alloy sheen on USER_RIMS_GLOSS (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_GUNMETAL",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000050f8",
+      "expected_orig": 0.001,
+      "new_value": 1.65,
+      "note": "Unlock real-time 5-face rim reflection on USER_RIMS_GUNMETAL (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_GUNMETAL",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005108",
+      "expected_orig": 0.001,
+      "new_value": 0.55,
+      "note": "Facing forged-alloy sheen on USER_RIMS_GUNMETAL (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_MAGSILVER",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000051a8",
+      "expected_orig": 0.001,
+      "new_value": 1.65,
+      "note": "Unlock real-time 5-face rim reflection on USER_RIMS_MAGSILVER (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_MAGSILVER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000051b8",
+      "expected_orig": 0.001,
+      "new_value": 0.55,
+      "note": "Facing forged-alloy sheen on USER_RIMS_MAGSILVER (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_MET",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00005258",
+      "expected_orig": 0.001,
+      "new_value": 1.65,
+      "note": "Unlock real-time 5-face rim reflection on USER_RIMS_MET (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_MET",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005268",
+      "expected_orig": 0.001,
+      "new_value": 0.55,
+      "note": "Facing forged-alloy sheen on USER_RIMS_MET (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_SILVERGLOSS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00005308",
+      "expected_orig": 0.001,
+      "new_value": 1.65,
+      "note": "Unlock real-time 5-face rim reflection on USER_RIMS_SILVERGLOSS (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_SILVERGLOSS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005318",
+      "expected_orig": 0.001,
+      "new_value": 0.55,
+      "note": "Facing forged-alloy sheen on USER_RIMS_SILVERGLOSS (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGCHROME",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x000026e4",
+      "expected_orig": 0.0,
+      "new_value": 0.6,
+      "note": "Crisp specular glints on chrome mag wheels"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGCHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002708",
+      "expected_orig": 2.0,
+      "new_value": 2.65,
+      "note": "Mirror skyline reflection on chrome mag wheels"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGCHROME",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002718",
+      "expected_orig": 2.0,
+      "new_value": 2.25,
+      "note": "Facing mirror reflection on chrome mag wheels"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGSILVER",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002868",
+      "expected_orig": 2.0,
+      "new_value": 2.55,
+      "note": "Rich forged-alloy reflection on stock silver rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGSILVER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002878",
+      "expected_orig": 0.5,
+      "new_value": 0.85,
+      "note": "Balanced alloy sheen across rim spokes"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004ee8",
+      "expected_orig": 1.5,
+      "new_value": 2.25,
+      "note": "Rich forged-alloy reflection on custom rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004ef8",
+      "expected_orig": 0.25,
+      "new_value": 0.65,
+      "note": "Crisper facing reflection on aftermarket rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004f98",
+      "expected_orig": 1.5,
+      "new_value": 2.55,
+      "note": "High-contrast chrome rim reflection"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004fa8",
+      "expected_orig": 1.5,
+      "new_value": 2.15,
+      "note": "Consistent chrome rim mirror response"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_SPOILER",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000537c",
+      "expected_orig": [
+        1.0,
+        1.0,
+        0.769
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Eliminate yellow tint [1.0,1.0,0.77] on custom spoilers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_SPOILER",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000053b8",
+      "expected_orig": 0.001,
+      "new_value": 2.4,
+      "note": "Unlock clearcoat reflection on aftermarket spoilers (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_SPOILER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000053c8",
+      "expected_orig": 0.001,
+      "new_value": 0.45,
+      "note": "Facing clearcoat reflection on spoilers (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "SHINYMOLDINGS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004968",
+      "expected_orig": 0.001,
+      "new_value": 1.4,
+      "note": "Unlock gloss trim reflection on shiny moldings (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "SHINYMOLDINGS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004978",
+      "expected_orig": 0.001,
+      "new_value": 0.4,
+      "note": "Facing gloss trim sheen on moldings (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "SHINYPLASTIC",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004a18",
+      "expected_orig": 0.001,
+      "new_value": 1.2,
+      "note": "Unlock gloss clearcoat reflection on shiny plastic (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "SHINYPLASTIC",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004a28",
+      "expected_orig": 0.001,
+      "new_value": 0.35,
+      "note": "Facing gloss reflection on shiny plastic (was 0.001)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x000005e8",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.02,
+        1.0,
+        0.97
+      ],
+      "note": "Crisp warm-white clearcoat specular on CARBONFIBER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "SpecularMaxRGB",
+      "expected_offset": "0x000005f8",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.02,
+        1.0,
+        0.97
+      ],
+      "note": "Clean facing specular on CARBONFIBER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000608",
+      "expected_orig": 3.0,
+      "new_value": 3.4,
+      "note": "Glossy clearcoat grazing reflection on CARBONFIBER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000618",
+      "expected_orig": 0.1,
+      "new_value": 0.48,
+      "note": "Rich clearcoat sky reflection on CARBONFIBER hoods/wings"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00000698",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.02,
+        1.0,
+        0.97
+      ],
+      "note": "Crisp warm-white clearcoat specular on CARBONFIBER2"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "SpecularMaxRGB",
+      "expected_offset": "0x000006a8",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.02,
+        1.0,
+        0.97
+      ],
+      "note": "Clean facing specular on CARBONFIBER2"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000006b8",
+      "expected_orig": 3.0,
+      "new_value": 3.4,
+      "note": "Glossy clearcoat grazing reflection on CARBONFIBER2"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000006c8",
+      "expected_orig": 0.1,
+      "new_value": 0.48,
+      "note": "Rich clearcoat sky reflection on CARBONFIBER2 hoods/wings"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00005654",
+      "expected_orig": 0.0,
+      "new_value": 0.55,
+      "note": "Crisp sunlit grazing glint on windshields"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00005664",
+      "expected_orig": 0.0,
+      "new_value": 0.22,
+      "note": "Subtle facing glass specular highlight"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00005658",
+      "expected_orig": [
+        1.1,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.02,
+        1.0,
+        0.97
+      ],
+      "note": "Clean warm-white glass glint replacing reddish [1.1,1.0,1.0]"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00005678",
+      "expected_orig": 3.0,
+      "new_value": 3.6,
+      "note": "Deep Forza-style glass Fresnel reflection"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005688",
+      "expected_orig": 0.5,
+      "new_value": 0.95,
+      "note": "Rich real-time autumn sky & skyline reflection across windshield"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDOWMASK",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x000055a4",
+      "expected_orig": 0.0,
+      "new_value": 0.5,
+      "note": "Crisp sunlit grazing glint on side/rear glass"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDOWMASK",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x000055a8",
+      "expected_orig": [
+        1.1,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.02,
+        1.0,
+        0.97
+      ],
+      "note": "Neutral sunlit side/rear glass specular"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDOWMASK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000055c8",
+      "expected_orig": 3.0,
+      "new_value": 3.5,
+      "note": "Deep Fresnel reflection on side/rear windows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDOWMASK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000055d8",
+      "expected_orig": 0.5,
+      "new_value": 0.9,
+      "note": "Clear real-time sky reflection across side/rear windows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "HEADLIGHTGLASS",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002374",
+      "expected_orig": 0.0,
+      "new_value": 0.55,
+      "note": "Crystal-clear sunlit glint on headlight lenses"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "HEADLIGHTGLASS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002398",
+      "expected_orig": 3.0,
+      "new_value": 3.4,
+      "note": "Rich glass reflection on headlight housings"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKELIGHTGLASS",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000324",
+      "expected_orig": 0.0,
+      "new_value": 0.5,
+      "note": "Glossy acrylic highlight on taillight lenses"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKELIGHTGLASS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000348",
+      "expected_orig": 3.0,
+      "new_value": 3.4,
+      "note": "Rich glossy reflection on taillights"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKELIGHTGLASS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000358",
+      "expected_orig": 0.4,
+      "new_value": 0.72,
+      "note": "Facing reflection across taillight acrylic"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CLEARPLASTIC",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000cc4",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Crisp specular highlight on clear light covers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CLEARPLASTIC",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00000cc8",
+      "expected_orig": [
+        1.1,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.02,
+        1.0,
+        0.97
+      ],
+      "note": "Clean warm-white light cover specular"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CLEARPLASTIC",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000cf8",
+      "expected_orig": 0.5,
+      "new_value": 0.8,
+      "note": "Rich sky reflection on clear light covers"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L1_BLACK",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00005704",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Sunlit specular glint on WINDSHIELD_TINT_L1_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L1_BLACK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00005728",
+      "expected_orig": 2.0,
+      "new_value": 2.85,
+      "note": "Deep mirror reflection on WINDSHIELD_TINT_L1_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L1_BLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005738",
+      "expected_orig": 0.5,
+      "new_value": 0.85,
+      "note": "Rich facing sky reflection on WINDSHIELD_TINT_L1_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L1_MBLACK",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00005864",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Sunlit specular glint on WINDSHIELD_TINT_L1_MBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L1_MBLACK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00005888",
+      "expected_orig": 2.0,
+      "new_value": 2.85,
+      "note": "Deep mirror reflection on WINDSHIELD_TINT_L1_MBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L1_MBLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005898",
+      "expected_orig": 0.5,
+      "new_value": 0.85,
+      "note": "Rich facing sky reflection on WINDSHIELD_TINT_L1_MBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L2_BLACK",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00005bd4",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Sunlit specular glint on WINDSHIELD_TINT_L2_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L2_BLACK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00005bf8",
+      "expected_orig": 1.75,
+      "new_value": 2.85,
+      "note": "Deep mirror reflection on WINDSHIELD_TINT_L2_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L2_BLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005c08",
+      "expected_orig": 0.5,
+      "new_value": 0.85,
+      "note": "Rich facing sky reflection on WINDSHIELD_TINT_L2_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L3_BLACK",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00006414",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Sunlit specular glint on WINDSHIELD_TINT_L3_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L3_BLACK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00006438",
+      "expected_orig": 1.75,
+      "new_value": 2.85,
+      "note": "Deep mirror reflection on WINDSHIELD_TINT_L3_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD_TINT_L3_BLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00006448",
+      "expected_orig": 0.5,
+      "new_value": 0.85,
+      "note": "Rich facing sky reflection on WINDSHIELD_TINT_L3_BLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFIC",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00004aa4",
+      "expected_orig": 0.0,
+      "new_value": 0.38,
+      "note": "Add sunlit clearcoat specular to traffic cars"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFIC",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004ac8",
+      "expected_orig": 2.0,
+      "new_value": 2.85,
+      "note": "Richer grazing clearcoat reflection on traffic cars"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFIC",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004ad8",
+      "expected_orig": 0.0,
+      "new_value": 0.42,
+      "note": "Facing clearcoat reflection on traffic cars (was 0.0)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFICWINDOWS",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00004b54",
+      "expected_orig": 0.0,
+      "new_value": 0.38,
+      "note": "Add sunlit glint to traffic car windows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFICWINDOWS",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00004b58",
+      "expected_orig": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "new_value": [
+        1.02,
+        1.0,
+        0.97
+      ],
+      "note": "Replace zero [0,0,0] specular RGB on traffic windows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFICWINDOWS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004b78",
+      "expected_orig": 2.0,
+      "new_value": 2.85,
+      "note": "Crisp grazing reflection on traffic windows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFICWINDOWS",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004b88",
+      "expected_orig": 0.1,
+      "new_value": 0.58,
+      "note": "Rich autumn sky reflection on traffic windows"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002ef8",
+      "expected_orig": 0.75,
+      "new_value": 0.98,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on METPAINTSILVER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "SpecularPower",
+      "expected_offset": "0x00002f20",
+      "expected_orig": 3.0,
+      "new_value": 4.5,
+      "note": "Tighter Forza clearcoat specular highlight on METPAINTSILVER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002f24",
+      "expected_orig": 0.7,
+      "new_value": 0.92,
+      "note": "Vibrant grazing metallic flake glint on METPAINTSILVER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002f34",
+      "expected_orig": 0.3,
+      "new_value": 0.56,
+      "note": "Crisp facing clearcoat highlight on METPAINTSILVER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "EnvmapPower",
+      "expected_offset": "0x00002f44",
+      "expected_orig": 0.15,
+      "new_value": 0.25,
+      "note": "Smooth Fresnel clearcoat falloff on METPAINTSILVER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002f48",
+      "expected_orig": 3.5,
+      "new_value": 4.4,
+      "note": "Deep 5-face real-time grazing reflection on METPAINTSILVER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002f58",
+      "expected_orig": 0.2,
+      "new_value": 0.65,
+      "note": "Rich 5-face real-time roof/hood/rear reflection on METPAINTSILVER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002b88",
+      "expected_orig": 0.6,
+      "new_value": 0.88,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on METPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "SpecularPower",
+      "expected_offset": "0x00002bb0",
+      "expected_orig": 3.0,
+      "new_value": 4.5,
+      "note": "Tighter Forza clearcoat specular highlight on METPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002bb4",
+      "expected_orig": 0.7,
+      "new_value": 0.92,
+      "note": "Vibrant grazing metallic flake glint on METPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002bc4",
+      "expected_orig": 0.2,
+      "new_value": 0.5,
+      "note": "Crisp facing clearcoat highlight on METPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "EnvmapPower",
+      "expected_offset": "0x00002bd4",
+      "expected_orig": 0.2,
+      "new_value": 0.26,
+      "note": "Smooth Fresnel clearcoat falloff on METPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002bd8",
+      "expected_orig": 3.5,
+      "new_value": 4.4,
+      "note": "Deep 5-face real-time grazing reflection on METPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002be8",
+      "expected_orig": 0.2,
+      "new_value": 0.62,
+      "note": "Rich 5-face real-time roof/hood/rear reflection on METPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002e48",
+      "expected_orig": 0.6,
+      "new_value": 0.88,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on METPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "SpecularPower",
+      "expected_offset": "0x00002e70",
+      "expected_orig": 3.0,
+      "new_value": 4.5,
+      "note": "Tighter Forza clearcoat specular highlight on METPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002e74",
+      "expected_orig": 0.7,
+      "new_value": 0.92,
+      "note": "Vibrant grazing metallic flake glint on METPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002e84",
+      "expected_orig": 0.2,
+      "new_value": 0.5,
+      "note": "Crisp facing clearcoat highlight on METPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "EnvmapPower",
+      "expected_offset": "0x00002e94",
+      "expected_orig": 0.2,
+      "new_value": 0.26,
+      "note": "Smooth Fresnel clearcoat falloff on METPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002e98",
+      "expected_orig": 3.5,
+      "new_value": 4.4,
+      "note": "Deep 5-face real-time grazing reflection on METPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002ea8",
+      "expected_orig": 0.3,
+      "new_value": 0.62,
+      "note": "Rich 5-face real-time roof/hood/rear reflection on METPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "SpecularPower",
+      "expected_offset": "0x00002b00",
+      "expected_orig": 3.0,
+      "new_value": 4.8,
+      "note": "Tighter Forza clearcoat specular highlight on METPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002b04",
+      "expected_orig": 0.7,
+      "new_value": 0.95,
+      "note": "Vibrant grazing metallic flake glint on METPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002b14",
+      "expected_orig": 0.2,
+      "new_value": 0.52,
+      "note": "Crisp facing clearcoat highlight on METPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "EnvmapPower",
+      "expected_offset": "0x00002b24",
+      "expected_orig": 0.2,
+      "new_value": 0.28,
+      "note": "Smooth Fresnel clearcoat falloff on METPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002b28",
+      "expected_orig": 3.5,
+      "new_value": 4.6,
+      "note": "Deep 5-face real-time grazing reflection on METPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002b38",
+      "expected_orig": 0.3,
+      "new_value": 0.68,
+      "note": "Rich 5-face real-time roof/hood/rear reflection on METPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002ce8",
+      "expected_orig": 0.1,
+      "new_value": 0.58,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on METPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "SpecularPower",
+      "expected_offset": "0x00002d10",
+      "expected_orig": 8.0,
+      "new_value": 6.5,
+      "note": "Tighter Forza clearcoat specular highlight on METPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002d14",
+      "expected_orig": 0.7,
+      "new_value": 0.92,
+      "note": "Vibrant grazing metallic flake glint on METPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002d24",
+      "expected_orig": 0.0,
+      "new_value": 0.42,
+      "note": "Crisp facing clearcoat highlight on METPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "EnvmapPower",
+      "expected_offset": "0x00002d34",
+      "expected_orig": 0.15,
+      "new_value": 0.25,
+      "note": "Smooth Fresnel clearcoat falloff on METPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002d38",
+      "expected_orig": 3.5,
+      "new_value": 4.4,
+      "note": "Deep 5-face real-time grazing reflection on METPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGRAY",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002d48",
+      "expected_orig": 0.2,
+      "new_value": 0.62,
+      "note": "Rich 5-face real-time roof/hood/rear reflection on METPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002c38",
+      "expected_orig": 0.5,
+      "new_value": 0.82,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on METPAINTGOLD"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "SpecularPower",
+      "expected_offset": "0x00002c60",
+      "expected_orig": 3.0,
+      "new_value": 4.5,
+      "note": "Tighter Forza clearcoat specular highlight on METPAINTGOLD"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002c64",
+      "expected_orig": 0.7,
+      "new_value": 0.92,
+      "note": "Vibrant grazing metallic flake glint on METPAINTGOLD"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002c74",
+      "expected_orig": 0.5,
+      "new_value": 0.56,
+      "note": "Crisp facing clearcoat highlight on METPAINTGOLD"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "EnvmapPower",
+      "expected_offset": "0x00002c84",
+      "expected_orig": 0.15,
+      "new_value": 0.25,
+      "note": "Smooth Fresnel clearcoat falloff on METPAINTGOLD"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002c88",
+      "expected_orig": 3.5,
+      "new_value": 4.4,
+      "note": "Deep 5-face real-time grazing reflection on METPAINTGOLD"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002c98",
+      "expected_orig": 0.2,
+      "new_value": 0.6,
+      "note": "Rich 5-face real-time roof/hood/rear reflection on METPAINTGOLD"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002d98",
+      "expected_orig": 0.6,
+      "new_value": 0.88,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on METPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "SpecularPower",
+      "expected_offset": "0x00002dc0",
+      "expected_orig": 3.0,
+      "new_value": 4.5,
+      "note": "Tighter Forza clearcoat specular highlight on METPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002dc4",
+      "expected_orig": 0.7,
+      "new_value": 0.92,
+      "note": "Vibrant grazing metallic flake glint on METPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002dd4",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp facing clearcoat highlight on METPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "EnvmapPower",
+      "expected_offset": "0x00002de4",
+      "expected_orig": 0.2,
+      "new_value": 0.26,
+      "note": "Smooth Fresnel clearcoat falloff on METPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002de8",
+      "expected_orig": 3.5,
+      "new_value": 4.4,
+      "note": "Deep 5-face real-time grazing reflection on METPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGREEN",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002df8",
+      "expected_orig": 0.2,
+      "new_value": 0.6,
+      "note": "Rich 5-face real-time roof/hood/rear reflection on METPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002fa8",
+      "expected_orig": 0.4,
+      "new_value": 0.78,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on METPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "SpecularPower",
+      "expected_offset": "0x00002fd0",
+      "expected_orig": 3.0,
+      "new_value": 4.5,
+      "note": "Tighter Forza clearcoat specular highlight on METPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002fd4",
+      "expected_orig": 0.7,
+      "new_value": 0.92,
+      "note": "Vibrant grazing metallic flake glint on METPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00002fe4",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp facing clearcoat highlight on METPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "EnvmapPower",
+      "expected_offset": "0x00002ff4",
+      "expected_orig": 0.15,
+      "new_value": 0.25,
+      "note": "Smooth Fresnel clearcoat falloff on METPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002ff8",
+      "expected_orig": 3.5,
+      "new_value": 4.4,
+      "note": "Deep 5-face real-time grazing reflection on METPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003008",
+      "expected_orig": 0.2,
+      "new_value": 0.58,
+      "note": "Rich 5-face real-time roof/hood/rear reflection on METPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00003ad4",
+      "expected_orig": 0.1,
+      "new_value": 0.45,
+      "note": "Crisp clearcoat specular highlight on REGPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00003ae4",
+      "expected_orig": 0.0,
+      "new_value": 0.28,
+      "note": "Facing clearcoat glint on REGPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003af8",
+      "expected_orig": 3.0,
+      "new_value": 4.0,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003b08",
+      "expected_orig": 0.3,
+      "new_value": 0.64,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLUE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003b58",
+      "expected_orig": 0.5,
+      "new_value": 0.82,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on REGPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLUE",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00003b84",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp clearcoat specular highlight on REGPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLUE",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00003b94",
+      "expected_orig": 0.2,
+      "new_value": 0.34,
+      "note": "Facing clearcoat glint on REGPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLUE",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003ba8",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLUE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003bb8",
+      "expected_orig": 0.2,
+      "new_value": 0.56,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTBLUE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGRAY",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003c08",
+      "expected_orig": 0.5,
+      "new_value": 0.78,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on REGPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGRAY",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00003c34",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp clearcoat specular highlight on REGPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGRAY",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00003c44",
+      "expected_orig": 0.2,
+      "new_value": 0.34,
+      "note": "Facing clearcoat glint on REGPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGRAY",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003c58",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGRAY",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003c68",
+      "expected_orig": 0.2,
+      "new_value": 0.56,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTGRAY"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGREEN",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003cb8",
+      "expected_orig": 0.7,
+      "new_value": 0.9,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on REGPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGREEN",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00003ce4",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp clearcoat specular highlight on REGPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGREEN",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00003cf4",
+      "expected_orig": 0.2,
+      "new_value": 0.34,
+      "note": "Facing clearcoat glint on REGPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGREEN",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003d08",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTGREEN",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003d18",
+      "expected_orig": 0.2,
+      "new_value": 0.54,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTGREEN"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTORANGE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003d68",
+      "expected_orig": 0.7,
+      "new_value": 0.92,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on REGPAINTORANGE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTORANGE",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00003d94",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp clearcoat specular highlight on REGPAINTORANGE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTORANGE",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00003da4",
+      "expected_orig": 0.0,
+      "new_value": 0.32,
+      "note": "Facing clearcoat glint on REGPAINTORANGE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTORANGE",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003db8",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTORANGE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTORANGE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003dc8",
+      "expected_orig": 0.2,
+      "new_value": 0.54,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTORANGE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTPINK",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003e18",
+      "expected_orig": 0.5,
+      "new_value": 0.82,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on REGPAINTPINK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTPINK",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00003e44",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp clearcoat specular highlight on REGPAINTPINK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTPINK",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00003e54",
+      "expected_orig": 0.2,
+      "new_value": 0.34,
+      "note": "Facing clearcoat glint on REGPAINTPINK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTPINK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003e68",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTPINK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTPINK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003e78",
+      "expected_orig": 0.2,
+      "new_value": 0.54,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTPINK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTRED",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00003ef4",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp clearcoat specular highlight on REGPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTRED",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00003f04",
+      "expected_orig": 0.0,
+      "new_value": 0.32,
+      "note": "Facing clearcoat glint on REGPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTRED",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003f18",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTRED",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003f28",
+      "expected_orig": 0.3,
+      "new_value": 0.58,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003f78",
+      "expected_orig": 0.75,
+      "new_value": 0.98,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on REGPAINTWHITE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00003fa4",
+      "expected_orig": 0.0,
+      "new_value": 0.42,
+      "note": "Crisp clearcoat specular highlight on REGPAINTWHITE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00003fb4",
+      "expected_orig": 0.2,
+      "new_value": 0.36,
+      "note": "Facing clearcoat glint on REGPAINTWHITE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003fc8",
+      "expected_orig": 3.0,
+      "new_value": 3.85,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTWHITE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003fd8",
+      "expected_orig": 0.3,
+      "new_value": 0.56,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTWHITE"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTYELLOW",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00004054",
+      "expected_orig": 0.2,
+      "new_value": 0.48,
+      "note": "Crisp clearcoat specular highlight on REGPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTYELLOW",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x00004064",
+      "expected_orig": 0.0,
+      "new_value": 0.32,
+      "note": "Facing clearcoat glint on REGPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTYELLOW",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004078",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Rich Fresnel 5-face reflection on REGPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTYELLOW",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004088",
+      "expected_orig": 0.2,
+      "new_value": 0.54,
+      "note": "Deep clearcoat sky/city reflection on REGPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x00003f7c",
+      "expected_orig": [
+        1.0,
+        1.0,
+        0.99
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Pure neutral white diffuse min"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x00003f8c",
+      "expected_orig": [
+        1.0,
+        1.0,
+        0.99
+      ],
+      "new_value": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "note": "Pure neutral white diffuse max"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003208",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003218",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL1",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000032b8",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL1"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL1",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000032c8",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL1"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL2",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003368",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL2"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL2",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003378",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL2"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL3",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003418",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL3"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL3",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003428",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL3"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL4",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000034c8",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL4"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL4",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000034d8",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL4"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL5",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003578",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL5"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL5",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003588",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL5"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL6",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003628",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL6"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL6",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003638",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL6"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL7",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x000036d8",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL7"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL7",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000036e8",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL7"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL8",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003788",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL8"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL8",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003798",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL8"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL9",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003838",
+      "expected_orig": 3.5,
+      "new_value": 4.25,
+      "note": "Deep Forza pearlescent 5-face reflection on PEARL9"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "PEARL9",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003848",
+      "expected_orig": 0.1,
+      "new_value": 0.46,
+      "note": "Rich facing pearlescent reflection on PEARL9"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002ad8",
+      "expected_orig": 1.0,
+      "new_value": 1.12,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on METPAINTBLACK"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTRED",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003ec8",
+      "expected_orig": 0.8,
+      "new_value": 0.94,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on REGPAINTRED"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTYELLOW",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00004028",
+      "expected_orig": 0.8,
+      "new_value": 0.94,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on REGPAINTYELLOW"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFIC",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00004a78",
+      "expected_orig": 1.0,
+      "new_value": 1.16,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on TRAFFIC"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x000005b8",
+      "expected_orig": 0.6,
+      "new_value": 0.76,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on CARBONFIBER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00000668",
+      "expected_orig": 0.6,
+      "new_value": 0.76,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on CARBONFIBER2"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CALIPER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00000458",
+      "expected_orig": 0.7,
+      "new_value": 0.85,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on CALIPER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "INTERIOR",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002558",
+      "expected_orig": 1.0,
+      "new_value": 1.18,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on INTERIOR"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BOTTOM",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x000000e8",
+      "expected_orig": 0.833,
+      "new_value": 0.98,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on BOTTOM"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGCHROME",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x000026b8",
+      "expected_orig": 0.5,
+      "new_value": 0.68,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on MAGCHROME"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_SPOILER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00005368",
+      "expected_orig": 0.585,
+      "new_value": 0.76,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on USER_SPOILER"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "DULLENGINE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00001e78",
+      "expected_orig": 0.247,
+      "new_value": 0.44,
+      "note": "Lift shaded corridor & safehouse readability (+15-20%) on DULLENGINE"
+    }
+  ]
+}

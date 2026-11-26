@@ -436,6 +436,56 @@
           "note": "eDisplayFrame (0x0020DA9C): enables while(VBlank - LastSwap < 2) WaitUntilVSync() during GAMEFLOW_STATE_RACING"
         }
       ]
+    },
+    {
+      "id": "always_wet_road_reflections",
+      "name": "Real-Time Planar Damp-Asphalt Road Reflections (Dry + Sunny Weather)",
+      "description": "Unlocks the PS2 engine's native real-time planar road reflection pass (eView[4] -> RT 4) during dry sunlit racing in Rain::UpdateAndRender without triggering falling rain curtains, lens raindrops, or storm fog. Tunes g_MaxRoadDampness from 1.0f (flooded mirror) to 0.65f (realistic Forza-style damp autumn asphalt sheen) while leaving garage floor reflections untouched at 1.0f, and accelerates dampness fade-in (0.005f -> 0.05f/frame) so reflections appear within 0.5s of spawn.",
+      "category": "graphics",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x00407560",
+          "expected_orig": "0x45010003",
+          "patched": "0x00000000",
+          "note": "UpdateAndRender__4Rain (0x00407560): bc1t 0x00407570 -> nop (keeps mDesiredRoadDampness active when mRainIntensity == 0.0f)"
+        },
+        {
+          "vaddr": "0x005A2C80",
+          "expected_orig": "0x3F800000",
+          "patched": "0x3F266666",
+          "note": "UpdateAndRender__4Rain (0x0040756C): g_MaxRoadDampness 1.0f -> 0.65f (photorealistic damp asphalt reflection balance)"
+        },
+        {
+          "vaddr": "0x004075A0",
+          "expected_orig": "0x3C013BA3",
+          "patched": "0x3C013D4C",
+          "note": "UpdateAndRender__4Rain (0x004075A0): mRoadDampness lerp rate 0.005f -> 0.05f (upper 16 bits, ~0.5s fade-in at spawn)"
+        },
+        {
+          "vaddr": "0x004075A4",
+          "expected_orig": "0x3421D70A",
+          "patched": "0x3421CCCD",
+          "note": "UpdateAndRender__4Rain (0x004075A4): mRoadDampness lerp rate 0.005f -> 0.05f (lower 16 bits)"
+        }
+      ]
+    },
+    {
+      "id": "high_detail_reflection_scenery",
+      "name": "High-Detail Car EnvMap & Road Reflection Scenery (2.6x More Reflected Buildings/Trees)",
+      "description": "Lowers ScenerySectionHeader::DrawAScenery projected-pixel cull cutoff for reflection/envmap views (SceneryCullInfo flag 0x20) from 32 px to 12 px so far more Rockport skyline buildings, bridges, and autumn trees appear inside real-time 5-face car reflections and planar road reflections.",
+      "category": "graphics",
+      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "enabled_by_default": false,
+      "writes": [
+        {
+          "vaddr": "0x003DB0D4",
+          "expected_orig": "0x2A020020",
+          "patched": "0x2A02000C",
+          "note": "DrawAScenery (0x003DB0D4): slti $v0,$s0,0x20 (32 px reflection cull) -> slti $v0,$s0,0x0c (12 px reflection cull)"
+        }
+      ]
     }
   ]
 }

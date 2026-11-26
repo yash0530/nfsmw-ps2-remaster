@@ -1,0 +1,496 @@
+{
+  "schema_version": 1,
+  "profile_id": "rockport2026_v0.5",
+  "name": "NFSMW: Rockport 2026 \u2014 Flagship v0.5.0 Release Candidate (Forza Ultra + Wet Reflections + 84-Car VU1 Fleet)",
+  "description": "Verified 8.9/10 (0 P0, 0 P1) flagship v0.5.0 build profile for SLUS-21351: 9 binary-verified MIPS ELF upgrades (true 16:9 native, brown-filter & smear removal, High-LOD cars, 5-face reflections, 3x scenery draw distance, 60Hz ScreenEFX, always-on planar wet road reflections, and 2.67x high-detail reflection scenery), full 5-recipe VLT stack (Forza hero camera, modern & full-roster 39-car handling, tuned pursuits/traffic, and Forza Ultra VisualLook), Forza Ultra anti-clipping late-autumn lighting (293 edits packed in-place inside GLOBALMEMORYFILE.BIN), and optional Wave-5 ZZDATA overrides for the wheel-safe 84-car PN-subdivided VU1 fleet (2.83M tris, excluding GLOBALMEMORYFILE-cached BRAKES/WHEELS/SPOILER/ROOF) plus 4 tuned Gnsu v20 engine synths.",
+  "target": {
+    "game": "Need for Speed: Most Wanted - Black Edition (NTSC-U)",
+    "serial": "SLUS-21351",
+    "elf_name": "SLUS_213.51",
+    "elf_pcsx2_crc": "0518D274"
+  },
+  "output_filename": "NFSMW_BlackEdition_Rockport2026_v0.5.iso",
+  "elf_patches": {
+    "spec": "patches/elf_patches.json",
+    "include_ids": [
+      "remove_brown_filter",
+      "remove_motion_blur",
+      "widescreen_16_9_native",
+      "high_lod_cars",
+      "full_rate_car_reflections",
+      "extended_scenery_draw_distance",
+      "screen_efx_60fps_timing",
+      "always_wet_road_reflections",
+      "high_detail_reflection_scenery"
+    ],
+    "include_optional": false
+  },
+  "vlt_recipes": [
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/forza_hero_camera.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/modern_handling_tuning.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/full_roster_handling.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/pursuit_and_traffic.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/forza_ultra_look.json"
+    }
+  ],
+  "lighting_recipes": [
+    "patches/lighting/rockport2026_forza_ultra.json"
+  ],
+  "zz_overrides": [
+    {
+      "virtual_path": "CARS\\911GT2\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/911GT2_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\911TURBO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/911TURBO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\997S\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/997S_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\A3\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/A3_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\A4\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/A4_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\BMWM3\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/BMWM3_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\BMWM3GTR\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/BMWM3GTR_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\BMWM3GTRE46\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/BMWM3GTRE46_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CAMARO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CAMARO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CARRERAGT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CARRERAGT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CAYMANS\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CAYMANS_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CEMTR\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CEMTR_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CLIO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CLIO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CLK500\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CLK500_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COBALTSS\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COBALTSS_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPGHOST\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPGHOST_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPGTO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPGTO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPGTOGHOST\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPGTOGHOST_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPHELI\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPHELI_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPMIDSIZE\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPMIDSIZE_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPMIDSIZEINT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPMIDSIZEINT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPSPORT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPSPORT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPSPORTGHOST\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPSPORTGHOST_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPSPORTHENCH\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPSPORTHENCH_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPSUV\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPSUV_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\COPSUVL\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/COPSUVL_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CORVETTE\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CORVETTE_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CORVETTEC6R\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CORVETTEC6R_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CTS\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/CTS_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\DB9\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/DB9_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\ECLIPSEGT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/ECLIPSEGT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\ELISE\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/ELISE_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\FORDGT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/FORDGT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\GALLARDO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/GALLARDO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\GARB\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/GARB_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\GTI\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/GTI_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\GTO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/GTO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\IMPREZAWRX\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/IMPREZAWRX_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\IS300\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/IS300_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\LANCEREVO8\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/LANCEREVO8_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\MINIVAN\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/MINIVAN_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\MONARO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/MONARO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\MURCIELAGO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/MURCIELAGO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\MUSTANGGT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/MUSTANGGT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\PICKUPA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/PICKUPA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\PIZZA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/PIZZA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\PUNTO\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/PUNTO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\RX7\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/RX7_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\RX8\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/RX8_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\RX8SPEEDT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/RX8SPEEDT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\SEMI\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/SEMI_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\SL500\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/SL500_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\SL65\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/SL65_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\SLR\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/SLR_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\SUPRA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/SUPRA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TAXI\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TAXI_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAF4DSEDA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAF4DSEDA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAF4DSEDB\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAF4DSEDB_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAF4DSEDC\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAF4DSEDC_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFAMB\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFAMB_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFCAMPER\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFCAMPER_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFCEMTR\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFCEMTR_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFCOURT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFCOURT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFDMPTR\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFDMPTR_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFFICCOUP\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFFICCOUP_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFFIRE\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFFIRE_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFGARB\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFGARB_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFHA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFHA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFMINIVAN\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFMINIVAN_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFNEWS\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFNEWS_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFPICKUPA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFPICKUPA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFPIZZA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFPIZZA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFSTWAG\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFSTWAG_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFSUVA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFSUVA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFTAXI\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFTAXI_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAFVANB\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAFVANB_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAILERA\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAILERA_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAILERB\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAILERB_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAILERCMT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAILERCMT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAILERCON\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAILERCON_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAILERCRATE\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAILERCRATE_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TRAILERLOG\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TRAILERLOG_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\TT\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/TT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\VIPER\\GEOMETRY.BIN",
+      "file": "build/geom_wave5_full/VIPER_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "SOUND\\ENGINE\\GIN_TVR_CERBERA.GIN",
+      "file": "build/geom_wave5_full/audio/bmw_m3_gtr_patched.GIN",
+      "optional": true
+    },
+    {
+      "virtual_path": "SOUND\\ENGINE\\GIN_POR_CARRERA_GT.GIN",
+      "file": "build/geom_wave5_full/audio/carrera_gt_patched.GIN",
+      "optional": true
+    },
+    {
+      "virtual_path": "SOUND\\ENGINE\\GIN_GALLARDO.GIN",
+      "file": "build/geom_wave5_full/audio/gallardo_patched.GIN",
+      "optional": true
+    },
+    {
+      "virtual_path": "SOUND\\ENGINE\\GIN_MUSTSAL_RAMP_V2_CD.GIN",
+      "file": "build/geom_wave5_full/audio/camaro_ss_patched.GIN",
+      "optional": true
+    }
+  ],
+  "allow_zzdata3_append": true
+}

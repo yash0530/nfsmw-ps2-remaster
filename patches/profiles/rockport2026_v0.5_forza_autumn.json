@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "profile_id": "rockport2026_v0.5_forza_autumn",
+  "name": "NFSMW: Rockport 2026 — v0.5 Forza Autumn Golden Hour (8 Hi-Poly Cars + 4 Gnsu Audio)",
+  "description": "Forza Horizon-inspired v0.5.0 autumn golden-hour build profile for SLUS-21351: 7 verified MIPS ELF upgrades (true 16:9 native, brown-filter & smear removal, High-LOD cars, 5-face reflections, 3x scenery draw distance, 60Hz ScreenEFX), full 5-recipe VLT stack (374 edits including GT7 VisualLook & neutral RGB tone curves), Forza Autumn Golden Hour lighting (91 edits across all 5 SunInfos and 27 LightMaterials for warm rim light and wet-asphalt specular sheen, packed in-place inside GLOBALMEMORYFILE.BIN), and optional Wave-4 ZZDATA upgrades for all 8 PN-subdivided hero cars and 4 tuned Gnsu v20 engine synths.",
+  "target": {
+    "game": "Need for Speed: Most Wanted - Black Edition (NTSC-U)",
+    "serial": "SLUS-21351",
+    "elf_name": "SLUS_213.51",
+    "elf_pcsx2_crc": "0518D274"
+  },
+  "output_filename": "NFSMW_BlackEdition_Rockport2026_v0.5_ForzaAutumn.iso",
+  "elf_patches": {
+    "spec": "patches/elf_patches.json",
+    "include_ids": [
+      "remove_brown_filter",
+      "remove_motion_blur",
+      "widescreen_16_9_native",
+      "high_lod_cars",
+      "full_rate_car_reflections",
+      "extended_scenery_draw_distance",
+      "screen_efx_60fps_timing"
+    ],
+    "include_optional": false
+  },
+  "vlt_recipes": [
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/modern_camera.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/modern_handling_tuning.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/full_roster_handling.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/pursuit_and_traffic.json"
+    },
+    {
+      "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+      "recipe": "patches/vlt/gt7_visual_look.json"
+    }
+  ],
+  "lighting_recipes": [
+    "patches/lighting/rockport2026_forza_autumn.json"
+  ],
+  "zz_overrides": [
+    {
+      "virtual_path": "CARS\\BMWM3GTRE46\\GEOMETRY.BIN",
+      "file": "build/geom_wave4/BMWM3GTRE46_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CARRERAGT\\GEOMETRY.BIN",
+      "file": "build/geom_wave4/CARRERAGT_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\GALLARDO\\GEOMETRY.BIN",
+      "file": "build/geom_wave4/GALLARDO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CAMARO\\GEOMETRY.BIN",
+      "file": "build/geom_wave4/CAMARO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\CORVETTE\\GEOMETRY.BIN",
+      "file": "build/geom_wave4/CORVETTE_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\VIPER\\GEOMETRY.BIN",
+      "file": "build/geom_wave4/VIPER_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\MURCIELAGO\\GEOMETRY.BIN",
+      "file": "build/geom_wave4/MURCIELAGO_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "CARS\\RX7\\GEOMETRY.BIN",
+      "file": "build/geom_wave4/RX7_GEOMETRY_UPGRADED.bin",
+      "optional": true
+    },
+    {
+      "virtual_path": "SOUND\\ENGINE\\GIN_TVR_CERBERA.GIN",
+      "file": "build/geom_wave4/audio/bmw_m3_gtr_patched.GIN",
+      "optional": true
+    },
+    {
+      "virtual_path": "SOUND\\ENGINE\\GIN_POR_CARRERA_GT.GIN",
+      "file": "build/geom_wave4/audio/carrera_gt_patched.GIN",
+      "optional": true
+    },
+    {
+      "virtual_path": "SOUND\\ENGINE\\GIN_GALLARDO.GIN",
+      "file": "build/geom_wave4/audio/gallardo_patched.GIN",
+      "optional": true
+    },
+    {
+      "virtual_path": "SOUND\\ENGINE\\GIN_MUSTSAL_RAMP_V2_CD.GIN",
+      "file": "build/geom_wave4/audio/camaro_ss_patched.GIN",
+      "optional": true
+    }
+  ],
+  "allow_zzdata3_append": true
+}

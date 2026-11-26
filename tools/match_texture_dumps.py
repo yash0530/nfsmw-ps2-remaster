@@ -44,7 +44,7 @@ import numpy as np
 from PIL import Image
 
 PCSX2_HASH_RE = re.compile(
-    r"^(?P<tex>[0-9a-fA-F]{8,16})(?:-(?P<clut>[0-9a-fA-F]{8,16}))?$"
+    r"^(?P<tex>[0-9a-fA-F]{8,16})(?:-(?P<part2>[0-9a-fA-F]{8,16}))?(?:-(?P<flags>[0-9a-fA-F]{8}))?$"
 )
 
 # Byte popcount lookup table for vectorized 64-bit Hamming distance without
@@ -159,14 +159,34 @@ def hamming_distance(a: int, b: int) -> int:
     return bin((a ^ b) & 0xFFFFFFFFFFFFFFFF).count("1")
 
 
-def parse_pcsx2_stem(stem: str) -> Tuple[Optional[str], Optional[str], bool]:
-    """Parse ``<TexHash>-<ClutHash>`` or ``<TexHash>`` into lowercase canonical tokens."""
+def parse_pcsx2_stem_full(stem: str) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
+    """Parse PCSX2 v2.x texture stems into ``(tex_hash, clut_hash, flags_hex, is_valid)``.
+
+    Supports all PCSX2 dump/replacement stem forms:
+      - 3-part PCSX2 v2.6.3 paletted: ``<TexHash>-<ClutHash>-<Flags>`` (e.g. 14..16 hex - 14..16 hex - 8 hex)
+      - 2-part PCSX2 v2.6.3 direct RGBA (no CLUT): ``<TexHash>-<Flags>`` (12..16 hex - 8 hex)
+      - 2-part legacy paletted: ``<TexHash>-<ClutHash>``
+      - 1-part legacy direct: ``<TexHash>``
+    """
     m = PCSX2_HASH_RE.match(stem.strip())
     if not m:
-        return None, None, False
+        return None, None, None, False
     tex = m.group("tex").lower()
-    clut = m.group("clut").lower() if m.group("clut") else None
-    return tex, clut, True
+    part2 = m.group("part2").lower() if m.group("part2") else None
+    flags = m.group("flags").lower() if m.group("flags") else None
+    if flags is not None:
+        return tex, part2, flags, True
+    if part2 is not None:
+        if len(tex) >= 12 and len(part2) == 8:
+            return tex, None, part2, True
+        return tex, part2, None, True
+    return tex, None, None, True
+
+
+def parse_pcsx2_stem(stem: str) -> Tuple[Optional[str], Optional[str], bool]:
+    """Parse PCSX2 stem into ``(tex_hash, clut_hash, is_valid)`` (backwards-compatible)."""
+    tex, clut, _flags, valid = parse_pcsx2_stem_full(stem)
+    return tex, clut, valid
 
 
 def load_rules(rules_path: Optional[Path]) -> Dict[str, Any]:
@@ -380,7 +400,7 @@ def match_dumps_directory(
     rule_hit_count = 0
 
     for dpath in dump_files:
-        tex_hash, clut_hash, valid_pcsx2 = parse_pcsx2_stem(dpath.stem)
+        tex_hash, clut_hash, flags_hex, valid_pcsx2 = parse_pcsx2_stem_full(dpath.stem)
         with Image.open(dpath) as im:
             dsig = compute_signature(im)
 
@@ -411,9 +431,10 @@ def match_dumps_directory(
             {
                 "dump_path": str(dpath.resolve()),
                 "dump_name": dpath.name,
-                "pcsx2_stem": dpath.stem if valid_pcsx2 else None,
+                "pcsx2_stem": dpath.stem.lower() if valid_pcsx2 else None,
                 "tex_hash": tex_hash,
                 "clut_hash": clut_hash,
+                "flags": flags_hex,
                 "is_valid_pcsx2_name": valid_pcsx2,
                 "dump_size": [dsig.width, dsig.height],
                 "dump_dhash": f"{dsig.dhash:016x}",

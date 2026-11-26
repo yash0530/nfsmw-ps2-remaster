@@ -89,7 +89,12 @@ class TestDecompBridge(unittest.TestCase):
 
             self.assertEqual(manifest["schema_version"], 1)
             self.assertEqual(manifest["target"]["serial"], "SLUS-21351")
-            self.assertEqual(manifest["total_vlt_deltas"], 360)
+            expected_total_vlt = sum(
+                len(json.loads(p.read_text(encoding="utf-8")).get("patches", []))
+                for p in (patches_dir / "vlt").glob("*.json")
+            )
+            self.assertGreaterEqual(manifest["total_vlt_deltas"], 360)
+            self.assertEqual(manifest["total_vlt_deltas"], expected_total_vlt)
             self.assertEqual(manifest["light_materials_count"], 156)
             self.assertEqual(len(manifest["light_materials"]), 156)
 

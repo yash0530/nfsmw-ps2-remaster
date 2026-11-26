@@ -1,0 +1,310 @@
+{
+  "schema_version": 1,
+  "id": "forza_ultra_look",
+  "name": "Rockport 2026 Forza Ultra \u2014 Authentic MW2005 Autumn VisualLook & HDR Light Flares (VLT)",
+  "description": "Cinematic late-autumn color grading overhaul inside GLOBAL\\ATTRIBUTES.BIN faithful to Need for Speed: Most Wanted (2005): rebalances all 5 visuallook nodes with warm golden-autumn bloom, vivid natural saturation, and lifted corridor shadow clarity without muddy sepia crush, and upgrades sun_flare, xenon headlights, and crimson LED taillights in light_flares_cg. Zero offset overlaps with camera, handling, or pursuit VLT recipes.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+    "vault": "db"
+  },
+  "patches": [
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x000457b0",
+      "expected_orig": [
+        0.87,
+        0.68,
+        0.04,
+        1.0
+      ],
+      "new_value": [
+        1.0,
+        0.89,
+        0.72,
+        1.0
+      ],
+      "note": "Crisp warm golden-autumn highlight bloom preserving MW2005 soul without muddy 0.04-blue sepia mush"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x000457c0",
+      "expected_orig": 0.32,
+      "new_value": 0.12,
+      "note": "Decoupled anti-clipping (<2% highlight clip) HDR bloom in default"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "Desaturation",
+      "expected_offset": "0x000457c4",
+      "expected_orig": 0.25,
+      "new_value": 0.04,
+      "note": "Vivid burnt-orange autumn foliage, deep car paint, and rich sunlit Rockport stonework"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x000457cc",
+      "expected_orig": 0.38,
+      "new_value": 0.1,
+      "note": "Lift shaded street corridors & safehouse (mean_luma 68-80, shadow_crush <3%) in default"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x000456d0",
+      "expected_orig": [
+        1.0,
+        0.44,
+        0.05,
+        1.0
+      ],
+      "new_value": [
+        1.0,
+        0.76,
+        0.48,
+        1.0
+      ],
+      "note": "Rich amber-gold late-afternoon sunset bloom without neon orange clipping"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x000456e0",
+      "expected_orig": 0.3,
+      "new_value": 0.14,
+      "note": "Decoupled anti-clipping (<2% highlight clip) HDR bloom in sunset"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "Desaturation",
+      "expected_offset": "0x000456e4",
+      "expected_orig": 0.25,
+      "new_value": 0.03,
+      "note": "Vibrant autumn sunset sky and metallic paint depth"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x000456ec",
+      "expected_orig": 0.34,
+      "new_value": 0.12,
+      "note": "Lift shaded street corridors & safehouse (mean_luma 68-80, shadow_crush <3%) in sunset"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x00045510",
+      "expected_orig": [
+        0.5,
+        0.81,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        0.74,
+        0.88,
+        1.0,
+        1.0
+      ],
+      "note": "Crisp cinematic cool-azure pursuit overdrive bloom"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x00045520",
+      "expected_orig": 0.47,
+      "new_value": 0.15,
+      "note": "Decoupled anti-clipping (<2% highlight clip) HDR bloom in uves"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "Desaturation",
+      "expected_offset": "0x00045524",
+      "expected_orig": 0.25,
+      "new_value": 0.06,
+      "note": "Preserve vivid color separation during intense chases"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x0004552c",
+      "expected_orig": 0.34,
+      "new_value": 0.12,
+      "note": "Lift shaded street corridors & safehouse (mean_luma 68-80, shadow_crush <3%) in uves"
+    },
+    {
+      "class": "visuallook",
+      "node": "extreme_uves",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x000455f0",
+      "expected_orig": [
+        0.99,
+        0.77,
+        0.2,
+        0.99
+      ],
+      "new_value": [
+        1.0,
+        0.88,
+        0.68,
+        0.99
+      ],
+      "note": "Warm crisp autumn highlight bloom during extreme pursuit states"
+    },
+    {
+      "class": "visuallook",
+      "node": "extreme_uves",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x00045600",
+      "expected_orig": 0.28,
+      "new_value": 0.14,
+      "note": "Decoupled anti-clipping (<2% highlight clip) HDR bloom in extreme_uves"
+    },
+    {
+      "class": "visuallook",
+      "node": "extreme_uves",
+      "field": "Desaturation",
+      "expected_offset": "0x00045604",
+      "expected_orig": 0.2,
+      "new_value": 0.06,
+      "note": "Crisp color clarity in extreme pursuit states"
+    },
+    {
+      "class": "visuallook",
+      "node": "extreme_uves",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x0004560c",
+      "expected_orig": 0.34,
+      "new_value": 0.12,
+      "note": "Lift shaded street corridors & safehouse (mean_luma 68-80, shadow_crush <3%) in extreme_uves"
+    },
+    {
+      "class": "visuallook",
+      "node": "copcam",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x00045890",
+      "expected_orig": [
+        0.37,
+        0.42,
+        0.49,
+        0.99
+      ],
+      "new_value": [
+        0.78,
+        0.85,
+        0.94,
+        0.99
+      ],
+      "note": "Clean cool broadcast tint for pursuit/cop cameras"
+    },
+    {
+      "class": "visuallook",
+      "node": "copcam",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x000458a0",
+      "expected_orig": 0.65,
+      "new_value": 0.16,
+      "note": "Decoupled anti-clipping (<2% highlight clip) HDR bloom in copcam"
+    },
+    {
+      "class": "visuallook",
+      "node": "copcam",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x000458ac",
+      "expected_orig": 0.39,
+      "new_value": 0.12,
+      "note": "Lift shaded street corridors & safehouse (mean_luma 68-80, shadow_crush <3%) in copcam"
+    },
+    {
+      "class": "light_flares_cg",
+      "node": "sun_flare",
+      "field": "colour",
+      "expected_offset": "0x00018550",
+      "expected_orig": [
+        1.0,
+        1.0,
+        0.39,
+        1.0
+      ],
+      "new_value": [
+        0.72,
+        0.66,
+        0.54,
+        0.72
+      ],
+      "note": "Tamed golden-white solar flare keeping direct-sun highlight_clip_pct < 2.0%"
+    },
+    {
+      "class": "light_flares_cg",
+      "node": "headlight_inner",
+      "field": "colour",
+      "expected_offset": "0x00018280",
+      "expected_orig": [
+        0.23,
+        0.4,
+        0.6,
+        0.0
+      ],
+      "new_value": [
+        0.82,
+        0.9,
+        1.0,
+        0.45
+      ],
+      "note": "Bright modern xenon-white headlight core"
+    },
+    {
+      "class": "light_flares_cg",
+      "node": "headlight_outer",
+      "field": "colour",
+      "expected_offset": "0x00018220",
+      "expected_orig": [
+        0.4,
+        0.49,
+        0.5,
+        0.34
+      ],
+      "new_value": [
+        0.78,
+        0.88,
+        1.0,
+        0.46
+      ],
+      "note": "Clean luminous xenon headlight halo"
+    },
+    {
+      "class": "light_flares_cg",
+      "node": "brakelight_inner",
+      "field": "colour",
+      "expected_offset": "0x00018340",
+      "expected_orig": [
+        0.93,
+        0.16,
+        0.16,
+        0.2
+      ],
+      "new_value": [
+        1.0,
+        0.14,
+        0.12,
+        0.42
+      ],
+      "note": "Punchy modern LED crimson taillight glow"
+    }
+  ]
+}

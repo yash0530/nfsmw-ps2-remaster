@@ -1,0 +1,213 @@
+{
+  "schema_version": 1,
+  "id": "forza_hero_camera",
+  "name": "Rockport 2026 Forza Hero Chase Camera Pack (VLT)",
+  "description": "Low-slung, dynamic Forza Horizon / GT7-inspired chase camera framing for GLOBAL\\ATTRIBUTES.BIN: lowers close & far chase elevation (1.34m / 1.46m) to showcase glossy roof/rear-glass 5-face reflections and Rockport's towering autumn skyline, tightens motorsport tracking stiffness, and adds dynamic +12 deg high-speed/NOS FOV stretch. Zero overlap with visual look, handling, or pursuit recipes.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+    "vault": "db"
+  },
+  "patches": [
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "STIFFNESS",
+      "index": 0,
+      "expected_offset": "0x0002cd00",
+      "expected_orig": 0.5,
+      "new_value": 0.66,
+      "note": "Planted low-speed motorsport chase tracking"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "STIFFNESS",
+      "index": 1,
+      "expected_offset": "0x0002cd04",
+      "expected_orig": 0.5,
+      "new_value": 0.74,
+      "note": "Rock-steady high-speed chase stability"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "LAG",
+      "index": 0,
+      "expected_offset": "0x0002cd20",
+      "expected_orig": -4.7,
+      "new_value": -4.65,
+      "note": "Heroic close chase framing showcasing paint & rim reflections"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "LAG",
+      "index": 1,
+      "expected_offset": "0x0002cd24",
+      "expected_orig": -6.8,
+      "new_value": -6.45,
+      "note": "Dynamic top-speed pullback keeping car hero-scaled"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "FOV",
+      "index": 0,
+      "expected_offset": "0x0002cd30",
+      "expected_orig": 78.0,
+      "new_value": 82.0,
+      "note": "Cinematic 16:9 widescreen base chase FOV"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "FOV",
+      "index": 1,
+      "expected_offset": "0x0002cd34",
+      "expected_orig": 78.0,
+      "new_value": 94.0,
+      "note": "Exhilarating +12 deg high-speed & NOS dynamic FOV stretch"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "HEIGHT",
+      "index": 0,
+      "expected_offset": "0x0002cd40",
+      "expected_orig": 1.62,
+      "new_value": 1.34,
+      "note": "Low-slung Forza Horizon hero elevation showcasing roof/glass reflections & Rockport skyline"
+    },
+    {
+      "class": "camerainfo",
+      "node": "close",
+      "field": "HEIGHT",
+      "index": 1,
+      "expected_offset": "0x0002cd44",
+      "expected_orig": 1.7,
+      "new_value": 1.44,
+      "note": "Sleek low high-speed elevation for monumental speed & horizon framing"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "STIFFNESS",
+      "index": 0,
+      "expected_offset": "0x0002ce08",
+      "expected_orig": 0.5,
+      "new_value": 0.64,
+      "note": "Responsive far-chase low-speed tracking"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "STIFFNESS",
+      "index": 1,
+      "expected_offset": "0x0002ce0c",
+      "expected_orig": 0.5,
+      "new_value": 0.72,
+      "note": "Tight high-speed far-chase tracking"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "LAG",
+      "index": 0,
+      "expected_offset": "0x0002ce28",
+      "expected_orig": -5.436,
+      "new_value": -5.35,
+      "note": "Balanced heroic far-chase resting distance"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "LAG",
+      "index": 1,
+      "expected_offset": "0x0002ce2c",
+      "expected_orig": -8.2,
+      "new_value": -7.4,
+      "note": "Controlled high-speed far-chase pullback"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "FOV",
+      "index": 0,
+      "expected_offset": "0x0002ce38",
+      "expected_orig": 90.0,
+      "new_value": 88.0,
+      "note": "Clean 16:9 far-chase base FOV"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "FOV",
+      "index": 1,
+      "expected_offset": "0x0002ce3c",
+      "expected_orig": 90.0,
+      "new_value": 98.0,
+      "note": "Dynamic top-speed FOV stretch in far chase view"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "HEIGHT",
+      "index": 0,
+      "expected_offset": "0x0002ce48",
+      "expected_orig": 1.7,
+      "new_value": 1.46,
+      "note": "Low-slung Forza-style far-chase elevation"
+    },
+    {
+      "class": "camerainfo",
+      "node": "far",
+      "field": "HEIGHT",
+      "index": 1,
+      "expected_offset": "0x0002ce4c",
+      "expected_orig": 1.85,
+      "new_value": 1.6,
+      "note": "Sleek high-speed far-chase elevation"
+    },
+    {
+      "class": "camerainfo",
+      "node": "hood",
+      "field": "FOV",
+      "index": 0,
+      "expected_offset": "0x0002cfc4",
+      "expected_orig": 80.0,
+      "new_value": 86.0,
+      "note": "Wider hood-cam 16:9 peripheral awareness"
+    },
+    {
+      "class": "camerainfo",
+      "node": "hood",
+      "field": "FOV",
+      "index": 1,
+      "expected_offset": "0x0002cfc8",
+      "expected_orig": 90.0,
+      "new_value": 98.0,
+      "note": "Dynamic high-speed hood-cam FOV"
+    },
+    {
+      "class": "camerainfo",
+      "node": "bumper",
+      "field": "FOV",
+      "index": 0,
+      "expected_offset": "0x0002ccac",
+      "expected_orig": 83.0,
+      "new_value": 88.0,
+      "note": "Wider bumper-cam apex visibility"
+    },
+    {
+      "class": "camerainfo",
+      "node": "bumper",
+      "field": "FOV",
+      "index": 1,
+      "expected_offset": "0x0002ccb0",
+      "expected_orig": 90.0,
+      "new_value": 98.0,
+      "note": "Dynamic high-speed bumper-cam FOV"
+    }
+  ]
+}

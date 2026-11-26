@@ -164,17 +164,18 @@ def _build_synthetic_geometry_pack() -> bytes:
         (1.2, 2.4, 0.0),
     ]
     scale = 0.0002
-    base_x, base_y, base_z = 1.0, 2.0, 0.0
-    xs_q = [round((v[0] - base_x) / scale) for v in verts_expected]  # [0, 1000, 0, 1000]
-    ys_q = [round((v[1] - base_y) / scale) for v in verts_expected]  # [0, 0, 2000, 2000]
-    zs_q = [0, 0, 0, 0]
+    aabb_min = (1.0, 2.0, 0.0)
+    aabb_max = (1.2, 2.4, 0.0)
+    vec2 = tuple(struct.unpack("<f", struct.pack("<f", c - 0.01))[0] for c in aabb_min)
+    vec3 = tuple(struct.unpack("<f", struct.pack("<f", c + 0.01))[0] for c in aabb_max)
+    # Exact PS2 VU1 hardware base (.vutext 0x0f48..0x1028): float(int(vec2) - 1)
+    base_x, base_y, base_z = (float(int(c) - 1) for c in vec2)
+    xs_q = [round((v[0] - base_x) / scale) for v in verts_expected]
+    ys_q = [round((v[1] - base_y) / scale) for v in verts_expected]
+    zs_q = [round((v[2] - base_z) / scale) for v in verts_expected]
 
     # Bit 14..11 = 1,1,0,0 -> 0x6000 produces ADC=[1,1,0,0] across 4 RNEXT calls
     seed = 0x6000
-    aabb_min = (1.0, 2.0, 0.0)
-    aabb_max = (1.2, 2.4, 0.0)
-    vec2 = tuple(c - 0.01 for c in aabb_min)
-    vec3 = tuple(c + 0.01 for c in aabb_max)
 
     # UVs: test odd-vertex swap correction cleanly (v0=(0.25, 0.75), v1=(0.5, 0.25) swapped in raw)
     # raw int16 * (1/4096):

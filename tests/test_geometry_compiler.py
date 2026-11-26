@@ -203,6 +203,49 @@ class TestGeometryCompilerOffline(unittest.TestCase):
                 self.assertAlmostEqual(ny, dny, delta=0.02)
                 self.assertAlmostEqual(nz, dnz, delta=0.02)
 
+    def test_vu1_hardware_base_and_header_invariants(self) -> None:
+        """Verify PS2 VU1 FTOI0(vec2)-1 base quantization and hdr_b3=lm*4 across sign/integer boundaries."""
+        test_cases = [
+            # (verts, lm, scale, expected_b2)
+            ([(-2.12, -0.94, -0.02), (-1.50, -0.50, 0.40), (-1.10, -0.10, 0.80)], 0, 0.0002, 0x17),
+            ([(1.0099, 0.005, -1.005), (1.50, 0.50, -0.20), (2.44, 0.94, 1.24)], 7, 0.0002, 0x17),
+            ([(0.0001, -0.0001, 1.0101), (0.30, 0.20, 1.20), (0.60, 0.40, 1.40)], 10, 0.0002, 0x17),
+            ([(-4.0, -2.0, 0.5), (1.0, 2.0, 3.0), (5.0, 4.0, 6.0)], 3, 1.0 / 256.0, 0x07),
+        ]
+        for verts, lm, scale, exp_b2 in test_cases:
+            nv = len(verts)
+            norms = [(0.0, 0.0, 1.0)] * nv
+            uvs = [(0.25, 0.75)] * nv
+            adcs = [1, 1] + [0] * (nv - 2)
+            pkt = gc.pack_vif_strip(verts, norms, uvs, adcs, scale=scale, light_material_index=lm)
+
+            # Parse raw VIF packet directly as PS2 VU1 hardware sees it
+            hdr_tag, b0, b1, b2, b3 = struct.unpack_from("<I4B", pkt, 0)
+            self.assertEqual(hdr_tag, 0x6E018000)
+            self.assertEqual((b0, b1, b2, b3), (nv, (nv - 1) // 4, exp_b2, (lm * 4) & 0xFF))
+
+            # Unpack vec2 at addr 0x02 (byte offset 0x1C tag + 4 = 0x20)
+            vec2 = struct.unpack_from("<3f", pkt, 0x20)
+            vu1_base = [float(int(c) - 1) for c in vec2]
+
+            # Simulate real PS2 VU1 hardware decode via geometry_inspect
+            dummy_strip = gi.StripEntry(
+                index=0, flags=0x4180, num_verts=nv, num_polys=nv - 2,
+                material_density=0.0, data_qword_offset=0, nz=0, nt=0,
+                data_qword_size=len(pkt) // 16, poly_group=0, texture_index=0,
+                light_material_index=lm,
+            )
+            dec_v, _, _, _ = gi._unpack_vif_strip(pkt, dummy_strip)
+            for (vx, vy, vz), (dx, dy, dz) in zip(verts, dec_v):
+                self.assertAlmostEqual(vx, dx, delta=scale)
+                self.assertAlmostEqual(vy, dy, delta=scale)
+                self.assertAlmostEqual(vz, dz, delta=scale)
+            # Every quantized coord must be >= 0 (within [0, 32767]) for standard spans
+            for ax in range(3):
+                q_min = round((min(v[ax] for v in verts) - vu1_base[ax]) / scale)
+                self.assertGreaterEqual(q_min, 0)
+                self.assertLessEqual(q_min, 32767)
+
     def test_synthetic_pack_and_replace_solid_roundtrip(self) -> None:
         mesh_a = _make_sphere_patch_grid(3, 3)
         mesh_b = _make_bent_corner_mesh()
@@ -350,6 +393,11 @@ class TestLiveBMWM3GTRRoundTrip(unittest.TestCase):
             self.assertEqual(upg_info.parts[5].strip_poly_total, 14560)
             self.assertEqual(len(upg_meshes[5].triangles), 14560)
 
+            # Strict PS2 VU1 hardware invariant check on every compiled strip of BMWM3GTRE46_KIT00_BODY_B
+            orig_vmin = [min(v[ax] for v in orig_mesh.vertices) for ax in range(3)]
+            orig_vmax = [max(v[ax] for v in orig_mesh.vertices) for ax in range(3)]
+            self._assert_vu1_strip_invariants(repacked, upg_info.parts[5], orig_vmin, orig_vmax)
+
             # Verify every other solid is byte-identical
             for idx in range(pack_info.solid_count):
                 if idx == 5:
@@ -363,6 +411,106 @@ class TestLiveBMWM3GTRRoundTrip(unittest.TestCase):
                     repacked[n_off : n_off + 8 + n_sz],
                     f"Untouched solid {idx} changed",
                 )
+
+    def _assert_vu1_strip_invariants(
+        self,
+        pack_data: bytes,
+        part: gi.SolidPartInfo,
+        expected_min: List[float],
+        expected_max: List[float],
+    ) -> None:
+        """Verify every strip in `part` satisfies retail SLUS-21351 VU1 hardware invariants."""
+        off = part.chunk_offset
+        _, csz = struct.unpack_from("<II", pack_data, off)
+        cur = off + 8
+        end = cur + csz
+        strips = []
+        vif_start = 0
+        while cur + 8 <= end:
+            scid, scsz = struct.unpack_from("<II", pack_data, cur)
+            if scid == gi.CHUNK_MESH_CONT:
+                mp = cur + 8
+                mend = mp + scsz
+                while mp + 8 <= mend:
+                    mcid, mcsz = struct.unpack_from("<II", pack_data, mp)
+                    po = gi._skip_11_padding(pack_data, mp + 8, mp + 8 + mcsz)
+                    if mcid == gi.CHUNK_STRIP_TABLE:
+                        so = po
+                        while so + 16 <= mp + 8 + mcsz:
+                            strips.append(struct.unpack_from("<HBBfHbbBBbb", pack_data, so))
+                            so += 16
+                    elif mcid == gi.CHUNK_VIF_DATA:
+                        vif_start = po
+                    mp += 8 + mcsz
+            cur += 8 + scsz
+
+        self.assertGreater(len(strips), 0)
+        sim_mins = [float("inf")] * 3
+        sim_maxs = [float("-inf")] * 3
+        for idx, s in enumerate(strips):
+            _fl, nv, _np, _md, qoff, _nz, _nt, qsz, _pg, _tx, lm = s
+            sb = pack_data[vif_start + qoff * 16 : vif_start + (qoff + qsz) * 16]
+            hdr_tag, b0, b1, b2, b3 = struct.unpack_from("<I4B", sb, 0)
+            self.assertEqual(hdr_tag, 0x6E018000, f"strip[{idx}] bad header VIF tag")
+            self.assertEqual(b0, nv, f"strip[{idx}] hdr_b0 != nv")
+            self.assertEqual(b1, (nv - 1) // 4, f"strip[{idx}] hdr_b1 != (nv-1)//4")
+            self.assertEqual(b2, 0x17, f"strip[{idx}] hdr_b2 != 0x17")
+            self.assertEqual(b3, (lm * 4) & 0xFF, f"strip[{idx}] hdr_b3 != lm*4")
+
+            scale = struct.unpack_from("<f", sb, 0x10)[0]
+            self.assertAlmostEqual(scale, 0.0002, places=7)
+            vec2 = struct.unpack_from("<3f", sb, 0x20)
+            vec3 = struct.unpack_from("<3f", sb, 0x2C)
+            vu1_base = [float(int(c) - 1) for c in vec2]
+
+            # Unpack int16 positions and simulate exact PS2 VU1 hardware formula
+            q = 0
+            pos_ints: List[int] = []
+            while q + 4 <= len(sb):
+                tag = struct.unpack_from("<I", sb, q)[0]
+                cmd = (tag >> 24) & 0xFF
+                num = (tag >> 16) & 0xFF
+                imm = tag & 0xFFFF
+                if cmd == 0:
+                    q += 4
+                    continue
+                if (cmd & 0x60) == 0x60:
+                    vn = (cmd >> 2) & 3
+                    vl = cmd & 3
+                    addr = imm & 0x3FF
+                    cnt = 256 if num == 0 else num
+                    eb = (32, 16, 8, 16)[vl]
+                    tb = (16 if vl == 3 else (vn + 1) * eb) * cnt
+                    blen = ((tb + 31) // 32) * 4
+                    if 5 <= addr < 0x1D and vl == 1:
+                        pos_ints.extend(struct.unpack(f"<{blen // 2}h", sb[q + 4 : q + 4 + blen]))
+                    q += 4 + blen
+                else:
+                    q += 4
+
+            xs, ys, zs = [], [], []
+            pi = 0
+            rem = nv
+            while rem > 0 and pi + 3 * min(4, rem) <= len(pos_ints):
+                b = min(4, rem)
+                xs.extend(pos_ints[pi : pi + b])
+                ys.extend(pos_ints[pi + b : pi + 2 * b])
+                zs.extend(pos_ints[pi + 2 * b : pi + 3 * b])
+                pi += 3 * b
+                rem -= b
+            self.assertEqual(len(xs), nv)
+            for ax, arr in enumerate((xs, ys, zs)):
+                self.assertGreaterEqual(min(arr), 0, f"strip[{idx}] axis {ax} negative int16 q")
+                for val in arr:
+                    p_vu1 = vu1_base[ax] + val * scale
+                    self.assertGreaterEqual(p_vu1, vec2[ax] - 1e-4)
+                    self.assertLessEqual(p_vu1, vec3[ax] + 1e-4)
+                    sim_mins[ax] = min(sim_mins[ax], p_vu1)
+                    sim_maxs[ax] = max(sim_maxs[ax], p_vu1)
+
+        for ax in range(3):
+            self.assertAlmostEqual(sim_mins[ax], expected_min[ax], delta=0.002)
+            self.assertAlmostEqual(sim_maxs[ax], expected_max[ax], delta=0.002)
 
 
 if __name__ == "__main__":

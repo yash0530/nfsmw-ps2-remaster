@@ -508,6 +508,9 @@ class TestLightingPs2Offline(unittest.TestCase):
         names = {p.name for p in recipe_files}
         self.assertIn("rockport2026_daylight.json", names)
         self.assertIn("rockport2026_golden_hour.json", names)
+        self.assertIn("rockport2026_gt7_daylight.json", names)
+        self.assertIn("rockport2026_forza_autumn.json", names)
+        self.assertIn("rockport2026_forza_ultra.json", names)
 
         for rp in recipe_files:
             data = json.loads(rp.read_text(encoding="utf-8"))
@@ -576,7 +579,13 @@ class TestLightingPs2LiveISO(unittest.TestCase):
         self.assertEqual(self.raw_mf[ent2.offset : ent2.offset + ent2.memory_size], self.raw_lzc)
 
     def test_live_recipes_apply_and_pack_in_place(self):
-        for fname in ("rockport2026_daylight.json", "rockport2026_golden_hour.json"):
+        for fname in (
+            "rockport2026_daylight.json",
+            "rockport2026_golden_hour.json",
+            "rockport2026_gt7_daylight.json",
+            "rockport2026_forza_autumn.json",
+            "rockport2026_forza_ultra.json",
+        ):
             rp = REPO_ROOT / "patches" / "lighting" / fname
             recipe = json.loads(rp.read_text(encoding="utf-8"))
             patched_bun, audit = lighting_ps2.apply_lighting_recipes(self.raw_bun, [recipe])

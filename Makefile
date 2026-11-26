@@ -6,13 +6,13 @@
 #   make build PROFILE=rockport2026_v0.3 ISO="/path/to/Need for Speed - Most Wanted - Black Edition.iso"
 
 ISO ?= $(HOME)/Documents/PS2Games/Need for Speed - Most Wanted - Black Edition.iso
-PROFILE ?= rockport2026_v0.4
+PROFILE ?= rockport2026_v0.5
 PYTHON ?= python3
 
-.PHONY: help status profiles verify test lint audit inspect zdir vlt lighting audio geometry tpk-extract build build-v0.2 build-v0.3 build-v0.4 setup-pcsx2 cc0-search hud-pack build-dds caves decomp-bridge metal-showcase metal-rt live-verify
+.PHONY: help status profiles verify test lint audit inspect zdir vlt lighting audio geometry tpk-extract build build-v0.2 build-v0.3 build-v0.4 build-v0.5 enhance-world pine-drive video-qa setup-pcsx2 cc0-search hud-pack build-dds caves decomp-bridge metal-showcase metal-rt live-verify
 
 help:
-	@echo "NFSMW: Rockport 2026 — Open-Source PS2 + Native Metal 4 RT Suite (v0.4)"
+	@echo "NFSMW: Rockport 2026 — Open-Source PS2 + Native Metal RT Suite (v0.5.0)"
 	@echo ""
 	@echo "Targets:"
 	@echo "  make status         - Show ISO, modded builds, PCSX2 profile, and tool readiness"
@@ -27,12 +27,16 @@ help:
 	@echo "  make geometry       - Inspect BMW M3 GTR GEOMETRY.BIN meshes & LODs"
 	@echo "  make tpk-extract    - Decode embedded PS2 TPK textures read-only into build/tpk_extracted"
 	@echo "  make build          - One-command build + PCSX2 4K Metal 60fps install for $(PROFILE)"
+	@echo "  make build-v0.5     - Build flagship v0.5.0 Forza Ultra + Wet Reflections + 84-car profile"
+	@echo "  make enhance-world  - Enhance live PCSX2 world dumps to 4x BC7 DDS (preserving 0x80 alpha)"
+	@echo "  make pine-drive     - Probe live PCSX2 PINE IPC RAM telemetry (slot 28011)"
+	@echo "  make video-qa       - Show native AVFoundation MP4 video QA pipeline usage"
 	@echo "  make build-dds      - Compile native arm64 Rust BC7 encoder & build mipmapped DDS pack"
 	@echo "  make caves          - Verify MIPS R5900 code caves & emit .pnach"
 	@echo "  make decomp-bridge  - Generate C++20/Metal headers from VLT + lighting recipes"
 	@echo "  make metal-showcase - Launch interactive native Apple Silicon Metal 2026 PBR showcase"
-	@echo "  make metal-rt       - Launch interactive M5 Pro Metal 4 Hardware Ray Tracing showcase"
-	@echo "  make live-verify    - Boot-verify v0.4 ISO live in PCSX2 v2.6.3 Metal"
+	@echo "  make metal-rt       - Launch interactive native Apple Silicon Metal RT showcase"
+	@echo "  make live-verify    - Boot-verify v0.5 ISO live in PCSX2 v2.6.3 Metal"
 	@echo "  make setup-pcsx2    - Install 4K Metal 60fps per-game PCSX2 settings (macOS)"
 	@echo "  make cc0-search     - Search Poly Haven CC0 asphalt/road textures"
 	@echo "  make hud-pack       - Render full 4K dual-theme procedural HUD kits"
@@ -88,6 +92,18 @@ build-v0.3:
 build-v0.4:
 	$(PYTHON) tools/rockport_cli.py build --profile rockport2026_v0.4 --source "$(ISO)" --install-pcsx2 --renderer metal --upscale 6 --anisotropy 16 --ee-cycle-rate 2
 
+build-v0.5:
+	$(PYTHON) tools/rockport_cli.py build --profile rockport2026_v0.5 --source "$(ISO)" --install-pcsx2 --renderer metal --upscale 6 --anisotropy 16 --ee-cycle-rate 2
+
+enhance-world:
+	$(PYTHON) tools/rockport_cli.py enhance-world --scale 4 --max-size 2048
+
+pine-drive:
+	$(PYTHON) tools/rockport_cli.py pine-drive probe
+
+video-qa:
+	$(PYTHON) tools/video_qa_pipeline.py --help
+
 build-dds:
 	$(PYTHON) tools/rockport_cli.py build-dds --size 2048
 
@@ -104,7 +120,7 @@ metal-rt:
 	$(PYTHON) tools/rockport_cli.py metal-rt --iso "$(ISO)" --preset golden_hour
 
 live-verify:
-	$(PYTHON) tools/rockport_cli.py live-verify --iso build/NFSMW_BlackEdition_Rockport2026_v0.4.iso
+	$(PYTHON) tools/rockport_cli.py live-verify --iso build/NFSMW_BlackEdition_Rockport2026_v0.5.iso
 
 setup-pcsx2:
 	$(PYTHON) tools/setup_pcsx2_macos.py --crcs 0518D274 --renderer metal --upscale 6 --anisotropy 16 --ee-cycle-rate 2

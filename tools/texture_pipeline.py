@@ -49,7 +49,9 @@ DEFAULT_PCSX2_REPLACEMENTS = DEFAULT_PCSX2_BASE / "replacements"
 
 SUPPORTED_IMAGE_EXTS = {".png", ".tga", ".bmp", ".webp", ".tif", ".tiff"}
 AUDIT_IMAGE_EXTS = SUPPORTED_IMAGE_EXTS | {".dds"}
-PCSX2_HASH_RE = re.compile(r"^(?P<tex>[0-9a-fA-F]{8,16})(?:-(?P<clut>[0-9a-fA-F]{8,16}))?$")
+PCSX2_HASH_RE = re.compile(
+    r"^(?P<tex>[0-9a-fA-F]{8,16})(?:-(?P<part2>[0-9a-fA-F]{8,16}))?(?:-(?P<flags>[0-9a-fA-F]{8}))?$"
+)
 
 
 class PipelineError(RuntimeError):
@@ -91,11 +93,18 @@ def compute_pot_dimension(value: int, mode: str = "nearest", min_dim: int = 4, m
 
 
 def parse_pcsx2_filename(stem: str) -> Tuple[Optional[str], Optional[str], bool]:
-    """Parse PCSX2 <TexHash>-<ClutHash> or <TexHash> stem."""
+    """Parse PCSX2 ``<TexHash>-<ClutHash>-<Flags>``, ``<TexHash>-<Flags>``, ``<TexHash>-<ClutHash>``, or ``<TexHash>`` stem."""
     match = PCSX2_HASH_RE.match(stem)
     if not match:
         return None, None, False
-    return match.group("tex").lower(), (match.group("clut").lower() if match.group("clut") else None), True
+    tex = match.group("tex").lower()
+    part2 = match.group("part2").lower() if match.group("part2") else None
+    flags = match.group("flags").lower() if match.group("flags") else None
+    if flags is not None:
+        return tex, part2, True
+    if part2 is not None and len(tex) >= 12 and len(part2) == 8:
+        return tex, None, True
+    return tex, part2, True
 
 
 def iter_image_files(root: Path, extensions: set) -> List[Path]:

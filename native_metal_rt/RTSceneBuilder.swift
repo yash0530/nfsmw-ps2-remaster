@@ -56,6 +56,45 @@ struct RTLightingPreset {
     let headlightsOn: Float
     let neonTint: SIMD3<Float>
     let neonIntensity: Float
+    let cloudCoverage: Float
+}
+
+struct RTLookdevConfig: Codable {
+    var preset: String?
+    var sun_elevation_deg: Float?
+    var sun_azimuth_deg: Float?
+    var exposure: Float?
+    var cloud_coverage: Float?
+    var puddle_wetness: Float?
+    var clearcoat_roughness: Float?
+    var flake_strength: Float?
+    var bloom_intensity: Float?
+    var bloom_threshold: Float?
+    var denoise_passes: Int?
+    var camera_fov: Float?
+    var camera_azimuth: Float?
+    var camera_elevation: Float?
+    var camera_distance: Float?
+    var vignette: Float?
+    var contrast: Float?
+    var saturation: Float?
+    var headlights_on: Float?
+    var speed_kmh: Float?
+    var steer_deg: Float?
+}
+
+enum RTPartRole {
+    case worldStatic
+    case carBody
+    case wheelFL
+    case wheelFR
+    case wheelRL
+    case wheelRR
+    case brakeFL
+    case brakeFR
+    case brakeRL
+    case brakeRR
+    case streetlamp(basePos: SIMD3<Float>)
 }
 
 struct RTBLASMesh {
@@ -68,17 +107,87 @@ struct RTBLASMesh {
     let isTransparent: Bool
     let flags: UInt32
     let modelMatrix: simd_float4x4
+    let role: RTPartRole
+    let pivotCenter: SIMD3<Float>
+    let sharedBlasIndex: Int?
+}
+
+enum RTCarProfile: String, CaseIterable {
+    case m3_gtr = "m3_gtr"
+    case carrera_gt = "carrera_gt"
+    case gallardo = "gallardo"
+
+    static func parse(_ raw: String) -> RTCarProfile {
+        switch raw.lowercased().replacingOccurrences(of: "-", with: "_") {
+        case "carrera_gt", "carreragt", "porsche", "cgt":
+            return .carrera_gt
+        case "gallardo", "lamborghini", "lambo":
+            return .gallardo
+        default:
+            return .m3_gtr
+        }
+    }
+
+    var carID: UInt32 {
+        switch self {
+        case .m3_gtr: return 0
+        case .carrera_gt: return 1
+        case .gallardo: return 2
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .m3_gtr: return "BMW M3 GTR E46"
+        case .carrera_gt: return "Porsche Carrera GT"
+        case .gallardo: return "Lamborghini Gallardo"
+        }
+    }
+
+    var defaultScenePath: String {
+        switch self {
+        case .m3_gtr: return "build/flywheel/hq_m3_gtr/scene.json"
+        case .carrera_gt: return "build/flywheel/hq_carrera_gt/scene.json"
+        case .gallardo: return "build/flywheel/hq_gallardo/scene.json"
+        }
+    }
+
+    var supportsLivery: Bool {
+        return self == .m3_gtr
+    }
+
+    func next() -> RTCarProfile {
+        let all = Self.allCases
+        let idx = all.firstIndex(of: self) ?? 0
+        return all[(idx + 1) % all.count]
+    }
 }
 
 struct RTScenePackage {
     let sourceLabel: String
+    let carProfile: RTCarProfile
+    let carID: UInt32
+    let carSupportsLivery: Bool
     let meshes: [RTBLASMesh]
     let vertexBuffer: MTLBuffer
     let indexBuffer: MTLBuffer
     let triMaterialBuffer: MTLBuffer
     let materialBuffer: MTLBuffer
-    let asphaltTexture: MTLTexture
-    let carbonTexture: MTLTexture
+    let asphaltDiffTexture: MTLTexture
+    let asphaltNormalTexture: MTLTexture
+    let asphaltRoughTexture: MTLTexture
+    let concreteDiffTexture: MTLTexture
+    let concreteNormalTexture: MTLTexture
+    let carbonDiffTexture: MTLTexture
+    let carbonNormalTexture: MTLTexture
+    let carLiveryMaskTexture: MTLTexture
+    let carMiscTexture: MTLTexture
+    let carBadgeTexture: MTLTexture
+    let carHeadlightTexture: MTLTexture
+    let carTaillightTexture: MTLTexture
+    let carTireTexture: MTLTexture
+    let carInteriorTexture: MTLTexture
+    let hasAuthenticCarTextures: Bool
     let presets: [String: RTLightingPreset]
     let cameraTarget: SIMD3<Float>
     let cameraDistance: Float
@@ -110,10 +219,27 @@ enum RTMaterialID: UInt32 {
     case urbanGlass = 17
     case neonCyan = 18
     case neonAmber = 19
+    case autumnTerrain = 20
+    case coastalWater = 21
+    case streetlampLED = 22
+    case barrierReflect = 23
+    case foliageAutumn = 24
+    case foliagePine = 25
+    case treeTrunk = 26
+    case carPaintSilver = 27
+    case carBadge = 28
+    case carMiscTrim = 29
+    case carMiscChrome = 30
+    case carMiscMetal = 31
 
     static func fromName(_ name: String) -> RTMaterialID {
         switch name {
         case "car_paint_hero": return .carPaint
+        case "car_paint_silver": return .carPaintSilver
+        case "car_badge": return .carBadge
+        case "car_misc_trim": return .carMiscTrim
+        case "car_misc_chrome": return .carMiscChrome
+        case "car_misc_metal": return .carMiscMetal
         case "chrome_trim": return .chrome
         case "brushed_aluminum": return .brushedAluminum
         case "alloy_rim": return .alloyRim
@@ -138,66 +264,69 @@ enum RTSceneBuilder {
         return [
             "golden_hour": RTLightingPreset(
                 key: "golden_hour",
-                name: "Rockport 2026 Golden Hour",
-                sunDirection: simd_normalize(SIMD3<Float>(0.38, 0.24, 0.89)),
-                sunColor: SIMD3<Float>(1.18, 0.82, 0.44),
-                sunIntensity: 5.8,
-                sunConeRadius: 0.028,
-                coronaColor: SIMD3<Float>(1.0, 0.62, 0.26),
-                skyZenith: SIMD3<Float>(0.09, 0.22, 0.54),
-                skyHorizon: SIMD3<Float>(0.94, 0.48, 0.20),
-                skyGround: SIMD3<Float>(0.04, 0.035, 0.045),
-                iblIntensity: 1.25,
-                wetness: 0.72,
-                fogDensity: 0.006,
+                name: "Rockport 2005 Late-Autumn Industrial Dusk",
+                sunDirection: simd_normalize(SIMD3<Float>(-0.56, 0.20, 0.80)),
+                sunColor: SIMD3<Float>(1.18, 0.78, 0.42),
+                sunIntensity: 4.8,
+                sunConeRadius: 0.026,
+                coronaColor: SIMD3<Float>(0.96, 0.56, 0.24),
+                skyZenith: SIMD3<Float>(0.055, 0.078, 0.115),
+                skyHorizon: SIMD3<Float>(0.58, 0.36, 0.18),
+                skyGround: SIMD3<Float>(0.025, 0.024, 0.026),
+                iblIntensity: 1.12,
+                wetness: 0.68,
+                fogDensity: 0.0068,
                 exposure: 1.06,
-                bloomThreshold: 1.35,
-                bloomIntensity: 0.36,
-                headlightsOn: 1.0,
-                neonTint: SIMD3<Float>(1.0, 0.62, 0.24),
-                neonIntensity: 0.48
+                bloomThreshold: 1.65,
+                bloomIntensity: 0.24,
+                headlightsOn: 0.88,
+                neonTint: SIMD3<Float>(1.0, 0.68, 0.30),
+                neonIntensity: 1.15,
+                cloudCoverage: 0.76
             ),
             "night_neon": RTLightingPreset(
                 key: "night_neon",
-                name: "Rockport 2026 Night Neon",
-                sunDirection: simd_normalize(SIMD3<Float>(-0.44, 0.36, 0.82)),
-                sunColor: SIMD3<Float>(0.52, 0.70, 1.08),
-                sunIntensity: 2.3,
+                name: "Rockport 2005 Midnight Industrial Rain",
+                sunDirection: simd_normalize(SIMD3<Float>(-0.46, 0.34, 0.82)),
+                sunColor: SIMD3<Float>(0.48, 0.62, 0.90),
+                sunIntensity: 2.35,
                 sunConeRadius: 0.042,
-                coronaColor: SIMD3<Float>(0.20, 0.48, 0.95),
-                skyZenith: SIMD3<Float>(0.010, 0.018, 0.048),
-                skyHorizon: SIMD3<Float>(0.065, 0.11, 0.22),
-                skyGround: SIMD3<Float>(0.012, 0.016, 0.024),
-                iblIntensity: 0.95,
-                wetness: 0.94,
-                fogDensity: 0.010,
-                exposure: 1.24,
-                bloomThreshold: 1.0,
-                bloomIntensity: 0.68,
-                headlightsOn: 1.65,
-                neonTint: SIMD3<Float>(0.10, 0.86, 1.0),
-                neonIntensity: 1.45
+                coronaColor: SIMD3<Float>(0.20, 0.36, 0.68),
+                skyZenith: SIMD3<Float>(0.012, 0.020, 0.042),
+                skyHorizon: SIMD3<Float>(0.058, 0.088, 0.148),
+                skyGround: SIMD3<Float>(0.012, 0.015, 0.020),
+                iblIntensity: 1.24,
+                wetness: 0.92,
+                fogDensity: 0.0076,
+                exposure: 1.38,
+                bloomThreshold: 1.50,
+                bloomIntensity: 0.32,
+                headlightsOn: 1.40,
+                neonTint: SIMD3<Float>(1.0, 0.68, 0.30),
+                neonIntensity: 2.35,
+                cloudCoverage: 0.72
             ),
             "daylight": RTLightingPreset(
                 key: "daylight",
-                name: "Rockport 2026 Crisp Daylight",
-                sunDirection: simd_normalize(SIMD3<Float>(0.45, 0.54, 0.71)),
-                sunColor: SIMD3<Float>(1.0, 0.985, 0.95),
-                sunIntensity: 5.8,
-                sunConeRadius: 0.020,
-                coronaColor: SIMD3<Float>(0.68, 0.84, 1.0),
-                skyZenith: SIMD3<Float>(0.14, 0.40, 0.88),
-                skyHorizon: SIMD3<Float>(0.68, 0.83, 0.97),
-                skyGround: SIMD3<Float>(0.07, 0.08, 0.09),
-                iblIntensity: 1.45,
-                wetness: 0.48,
-                fogDensity: 0.004,
+                name: "Rockport 2005 Overcast Autumn Industrial Daylight",
+                sunDirection: simd_normalize(SIMD3<Float>(0.38, 0.52, 0.76)),
+                sunColor: SIMD3<Float>(1.00, 0.96, 0.90),
+                sunIntensity: 4.5,
+                sunConeRadius: 0.032,
+                coronaColor: SIMD3<Float>(0.58, 0.66, 0.74),
+                skyZenith: SIMD3<Float>(0.12, 0.20, 0.32),
+                skyHorizon: SIMD3<Float>(0.48, 0.54, 0.60),
+                skyGround: SIMD3<Float>(0.04, 0.042, 0.045),
+                iblIntensity: 1.22,
+                wetness: 0.52,
+                fogDensity: 0.0054,
                 exposure: 1.02,
-                bloomThreshold: 1.45,
-                bloomIntensity: 0.28,
-                headlightsOn: 0.60,
-                neonTint: SIMD3<Float>(0.35, 0.80, 1.0),
-                neonIntensity: 0.25
+                bloomThreshold: 1.70,
+                bloomIntensity: 0.18,
+                headlightsOn: 0.70,
+                neonTint: SIMD3<Float>(1.0, 0.72, 0.38),
+                neonIntensity: 0.35,
+                cloudCoverage: 0.74
             )
         ]
     }
@@ -208,108 +337,138 @@ enum RTSceneBuilder {
             secondaryColor: SIMD4<Float>(0.1, 0.2, 0.5, 1.5),
             pbrParams: SIMD4<Float>(0.5, 0.3, 0.5, 0.05),
             emissive: SIMD4<Float>(0, 0, 0, 0)
-        ), count: 20)
+        ), count: 32)
 
         mats[Int(RTMaterialID.carPaint.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.78, 0.81, 0.86, 1.0),
-            secondaryColor: SIMD4<Float>(0.05, 0.22, 0.58, 1.5),
-            pbrParams: SIMD4<Float>(0.86, 0.19, 1.0, 0.03),
+            baseColor: SIMD4<Float>(0.66, 0.69, 0.74, 1.0),
+            secondaryColor: SIMD4<Float>(0.015, 0.115, 0.44, 1.56),
+            pbrParams: SIMD4<Float>(0.86, 0.18, 1.0, 0.012),
             emissive: SIMD4<Float>(0, 0, 0, 1)
+        )
+        mats[Int(RTMaterialID.carPaintSilver.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.66, 0.69, 0.74, 1.0),
+            secondaryColor: SIMD4<Float>(0.66, 0.69, 0.74, 1.56),
+            pbrParams: SIMD4<Float>(0.86, 0.19, 1.0, 0.014),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
+        mats[Int(RTMaterialID.carBadge.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.80, 0.82, 0.85, 1.0),
+            secondaryColor: SIMD4<Float>(0.015, 0.115, 0.44, 1.54),
+            pbrParams: SIMD4<Float>(0.35, 0.18, 0.9, 0.02),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
+        mats[Int(RTMaterialID.carMiscTrim.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.08, 0.085, 0.092, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.48),
+            pbrParams: SIMD4<Float>(0.15, 0.48, 0.15, 0.08),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
+        mats[Int(RTMaterialID.carMiscChrome.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.90, 0.92, 0.95, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
+            pbrParams: SIMD4<Float>(0.96, 0.08, 0.0, 0.04),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
+        mats[Int(RTMaterialID.carMiscMetal.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.72, 0.74, 0.78, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
+            pbrParams: SIMD4<Float>(0.92, 0.22, 0.2, 0.06),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.chrome.rawValue)] = RTMaterial(
             baseColor: SIMD4<Float>(0.94, 0.95, 0.97, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
-            pbrParams: SIMD4<Float>(1.0, 0.045, 0.0, 0.04),
+            pbrParams: SIMD4<Float>(1.0, 0.042, 0.0, 0.04),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.brushedAluminum.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.78, 0.80, 0.83, 1.0),
+            baseColor: SIMD4<Float>(0.76, 0.78, 0.81, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
-            pbrParams: SIMD4<Float>(0.94, 0.20, 0.2, 0.08),
+            pbrParams: SIMD4<Float>(0.94, 0.20, 0.20, 0.06),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.alloyRim.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.85, 0.87, 0.91, 1.0),
+            baseColor: SIMD4<Float>(0.88, 0.90, 0.94, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
-            pbrParams: SIMD4<Float>(0.96, 0.13, 0.45, 0.045),
+            pbrParams: SIMD4<Float>(0.96, 0.115, 0.55, 0.032),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.matteTrim.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.055, 0.058, 0.064, 1.0),
+            baseColor: SIMD4<Float>(0.045, 0.048, 0.054, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
-            pbrParams: SIMD4<Float>(0.0, 0.62, 0.0, 0.2),
+            pbrParams: SIMD4<Float>(0.0, 0.55, 0.0, 0.2),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.carbonFiber.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.075, 0.08, 0.088, 1.0),
-            secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
-            pbrParams: SIMD4<Float>(0.08, 0.26, 1.0, 0.04),
+            baseColor: SIMD4<Float>(0.065, 0.070, 0.078, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.54),
+            pbrParams: SIMD4<Float>(0.10, 0.22, 1.0, 0.022),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.rubberTire.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.032, 0.033, 0.036, 1.0),
-            secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
-            pbrParams: SIMD4<Float>(0.0, 0.82, 0.0, 0.5),
+            baseColor: SIMD4<Float>(0.052, 0.054, 0.058, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.48),
+            pbrParams: SIMD4<Float>(0.0, 0.52, 0.0, 0.4),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.smokedGlass.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.04, 0.05, 0.07, 0.58),
+            baseColor: SIMD4<Float>(0.018, 0.022, 0.030, 0.72),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.52),
-            pbrParams: SIMD4<Float>(0.04, 0.03, 1.0, 0.02),
+            pbrParams: SIMD4<Float>(0.02, 0.022, 1.0, 0.015),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.headlightGlass.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.86, 0.91, 0.98, 0.22),
+            baseColor: SIMD4<Float>(0.94, 0.97, 1.0, 0.05),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.52),
-            pbrParams: SIMD4<Float>(0.02, 0.025, 1.0, 0.02),
-            emissive: SIMD4<Float>(0.35, 0.42, 0.55, 0)
+            pbrParams: SIMD4<Float>(0.0, 0.012, 1.0, 0.012),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.headlightEmit.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.95, 0.97, 1.0, 1.0),
+            baseColor: SIMD4<Float>(0.02, 0.024, 0.030, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
-            pbrParams: SIMD4<Float>(0.85, 0.08, 1.0, 0.02),
-            emissive: SIMD4<Float>(6.0, 6.8, 8.2, 0)
+            pbrParams: SIMD4<Float>(0.75, 0.16, 0.6, 0.02),
+            emissive: SIMD4<Float>(4.2, 4.8, 6.2, 0)
         )
         mats[Int(RTMaterialID.taillightEmit.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.85, 0.06, 0.03, 1.0),
-            secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
-            pbrParams: SIMD4<Float>(0.05, 0.12, 1.0, 0.03),
-            emissive: SIMD4<Float>(5.6, 0.45, 0.12, 0)
+            baseColor: SIMD4<Float>(0.14, 0.005, 0.004, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.54),
+            pbrParams: SIMD4<Float>(0.04, 0.045, 1.0, 0.014),
+            emissive: SIMD4<Float>(5.5, 0.08, 0.03, 0)
         )
         mats[Int(RTMaterialID.interiorDark.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.06, 0.062, 0.068, 1.0),
+            baseColor: SIMD4<Float>(0.055, 0.058, 0.064, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
             pbrParams: SIMD4<Float>(0.02, 0.72, 0.0, 0.4),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.brakeRotor.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.62, 0.64, 0.68, 1.0),
+            baseColor: SIMD4<Float>(0.76, 0.78, 0.82, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
-            pbrParams: SIMD4<Float>(0.90, 0.28, 0.0, 0.1),
+            pbrParams: SIMD4<Float>(0.94, 0.22, 0.0, 0.1),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.brakeCaliper.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.82, 0.12, 0.08, 1.0),
-            secondaryColor: SIMD4<Float>(0.82, 0.12, 0.08, 1.5),
-            pbrParams: SIMD4<Float>(0.55, 0.24, 0.9, 0.05),
+            baseColor: SIMD4<Float>(0.88, 0.065, 0.045, 1.0),
+            secondaryColor: SIMD4<Float>(0.88, 0.065, 0.045, 1.54),
+            pbrParams: SIMD4<Float>(0.42, 0.18, 1.0, 0.025),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.licensePlate.rawValue)] = RTMaterial(
             baseColor: SIMD4<Float>(0.16, 0.19, 0.24, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
-            pbrParams: SIMD4<Float>(0.15, 0.38, 0.3, 0.1),
+            pbrParams: SIMD4<Float>(0.15, 0.36, 0.3, 0.1),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.wetAsphalt.rawValue)] = RTMaterial(
             baseColor: SIMD4<Float>(0.12, 0.125, 0.135, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
-            pbrParams: SIMD4<Float>(0.0, 0.34, 0.0, 0.03),
+            pbrParams: SIMD4<Float>(0.0, 0.32, 0.0, 0.03),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.urbanConcrete.rawValue)] = RTMaterial(
-            baseColor: SIMD4<Float>(0.18, 0.19, 0.21, 1.0),
+            baseColor: SIMD4<Float>(0.34, 0.345, 0.355, 1.0),
             secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
-            pbrParams: SIMD4<Float>(0.0, 0.78, 0.0, 0.3),
+            pbrParams: SIMD4<Float>(0.0, 0.74, 0.0, 0.3),
             emissive: SIMD4<Float>(0, 0, 0, 0)
         )
         mats[Int(RTMaterialID.urbanGlass.rawValue)] = RTMaterial(
@@ -330,10 +489,73 @@ enum RTSceneBuilder {
             pbrParams: SIMD4<Float>(0.1, 0.2, 0.5, 0.05),
             emissive: SIMD4<Float>(2.2, 1.1, 0.35, 0)
         )
+        mats[Int(RTMaterialID.autumnTerrain.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.16, 0.11, 0.05, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
+            pbrParams: SIMD4<Float>(0.0, 0.86, 0.0, 0.5),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
+        mats[Int(RTMaterialID.coastalWater.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.012, 0.032, 0.048, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.333),
+            pbrParams: SIMD4<Float>(0.02, 0.022, 0.9, 0.02),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
+        mats[Int(RTMaterialID.streetlampLED.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(1.0, 0.88, 0.68, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
+            pbrParams: SIMD4<Float>(0.1, 0.15, 0.5, 0.05),
+            emissive: SIMD4<Float>(4.5, 3.6, 2.2, 0)
+        )
+        mats[Int(RTMaterialID.barrierReflect.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.95, 0.55, 0.12, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.5),
+            pbrParams: SIMD4<Float>(0.2, 0.12, 0.8, 0.04),
+            emissive: SIMD4<Float>(1.6, 0.65, 0.12, 0)
+        )
+        mats[Int(RTMaterialID.foliageAutumn.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.42, 0.15, 0.03, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
+            pbrParams: SIMD4<Float>(0.0, 0.82, 0.0, 0.5),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
+        mats[Int(RTMaterialID.foliagePine.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.045, 0.085, 0.040, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
+            pbrParams: SIMD4<Float>(0.0, 0.82, 0.0, 0.5),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
+        mats[Int(RTMaterialID.treeTrunk.rawValue)] = RTMaterial(
+            baseColor: SIMD4<Float>(0.09, 0.07, 0.055, 1.0),
+            secondaryColor: SIMD4<Float>(0, 0, 0, 1.45),
+            pbrParams: SIMD4<Float>(0.0, 0.88, 0.0, 0.5),
+            emissive: SIMD4<Float>(0, 0, 0, 0)
+        )
         return mats
     }
 
-    // Smooth vertex normal accumulation when an OBJ lacks explicit normals or needs smoothing
+    static func loadLookdevConfig(from path: String) throws -> RTLookdevConfig {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        return try JSONDecoder().decode(RTLookdevConfig.self, from: data)
+    }
+
+    private static func roleForPartName(_ name: String) -> RTPartRole {
+        let upper = name.uppercased()
+        if upper.contains("BRAKE") {
+            if upper.contains("FL") { return .brakeFL }
+            if upper.contains("FR") { return .brakeFR }
+            if upper.contains("RL") { return .brakeRL }
+            if upper.contains("RR") { return .brakeRR }
+        }
+        if upper.contains("WHEEL") || upper.contains("ENKEI") {
+            if upper.contains("FL") { return .wheelFL }
+            if upper.contains("FR") { return .wheelFR }
+            if upper.contains("RL") { return .wheelRL }
+            if upper.contains("RR") { return .wheelRR }
+        }
+        return .carBody
+    }
+
     private static func computeSmoothNormals(positions: [SIMD3<Float>], indices: [UInt32]) -> [SIMD3<Float>] {
         var accum = [SIMD3<Float>](repeating: .zero, count: positions.count)
         var t = 0
@@ -358,7 +580,6 @@ enum RTSceneBuilder {
         }
     }
 
-    // Parse an OBJ file, optionally converting PS2 Z-up to Y-up meters, and appending into global geometry pools.
     private static func parseOBJIntoPool(
         url: URL,
         name: String,
@@ -366,6 +587,7 @@ enum RTSceneBuilder {
         isTransparent: Bool,
         liveryEnabled: Bool,
         modelMatrix: simd_float4x4,
+        role: RTPartRole,
         materialMapper: (String, SIMD3<Float>) -> RTMaterialID,
         vertices: inout [RTVertex],
         indices: inout [UInt32],
@@ -375,15 +597,17 @@ enum RTSceneBuilder {
         var positions: [SIMD3<Float>] = []
         var texCoords: [SIMD2<Float>] = []
         var normals: [SIMD3<Float>] = []
-        positions.reserveCapacity(4096)
-        texCoords.reserveCapacity(4096)
-        normals.reserveCapacity(4096)
+        positions.reserveCapacity(8192)
+        texCoords.reserveCapacity(8192)
+        normals.reserveCapacity(8192)
 
         var currentGroup = "car_paint_hero"
         var localVerts: [RTVertex] = []
         var localIndices: [UInt32] = []
         var localTriMats: [UInt32] = []
         var vertCache: [SIMD3<Int32>: UInt32] = [:]
+        var minB = SIMD3<Float>(repeating:  Float.greatestFiniteMagnitude)
+        var maxB = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
 
         func convertPos(_ p: SIMD3<Float>) -> SIMD3<Float> {
             if !ps2ZUpToYUp { return p }
@@ -410,6 +634,9 @@ enum RTSceneBuilder {
             let t = (vti >= 0 && vti < texCoords.count) ? texCoords[vti] : .zero
             let p = convertPos(pRaw)
             let n = convertNorm(nRaw)
+            minB = simd_min(minB, p)
+            maxB = simd_max(maxB, p)
+
             let idx = UInt32(localVerts.count)
             localVerts.append(RTVertex(
                 px: p.x, py: p.y, pz: p.z,
@@ -475,7 +702,6 @@ enum RTSceneBuilder {
             }
         }
 
-        // Compute smooth vertex normals if OBJ did not supply vertex normals
         if normals.isEmpty && !localVerts.isEmpty {
             let posArr = localVerts.map { SIMD3<Float>($0.px, $0.py, $0.pz) }
             let smooth = computeSmoothNormals(positions: posArr, indices: localIndices)
@@ -486,6 +712,7 @@ enum RTSceneBuilder {
             }
         }
 
+        let pivot = localVerts.isEmpty ? SIMD3<Float>(repeating: 0) : (minB + maxB) * 0.5
         let vOff = vertices.count
         let iOff = indices.count
         let tOff = triMaterials.count
@@ -502,22 +729,50 @@ enum RTSceneBuilder {
             triangleCount: localTriMats.count,
             isTransparent: isTransparent,
             flags: (liveryEnabled ? 1 : 0) | (isTransparent ? 2 : 0),
-            modelMatrix: modelMatrix
+            modelMatrix: modelMatrix,
+            role: role,
+            pivotCenter: pivot,
+            sharedBlasIndex: nil
         )
     }
 
-    // Add an axis-aligned box into the geometry pool (for Rockport urban architecture & synthetic car parts).
+    private static func appendQuad(
+        _ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>, _ p3: SIMD3<Float>,
+        normal: SIMD3<Float>,
+        matID: RTMaterialID,
+        vertices: inout [RTVertex],
+        indices: inout [UInt32],
+        triMaterials: inout [UInt32],
+        vOffsetBase: Int
+    ) {
+        let base = UInt32(vertices.count - vOffsetBase)
+        let pts = [p0, p1, p2, p3]
+        let uvs = [SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1)]
+        for (k, p) in pts.enumerated() {
+            vertices.append(RTVertex(
+                px: p.x, py: p.y, pz: p.z,
+                nx: normal.x, ny: normal.y, nz: normal.z,
+                u: uvs[k].x, v: uvs[k].y,
+                mx: p.x, my: p.y, mz: p.z,
+                materialID: matID.rawValue
+            ))
+        }
+        indices.append(contentsOf: [base, base + 1, base + 2, base, base + 2, base + 3])
+        triMaterials.append(matID.rawValue)
+        triMaterials.append(matID.rawValue)
+    }
+
     private static func appendBox(
         center: SIMD3<Float>,
         halfExtents: SIMD3<Float>,
         matID: RTMaterialID,
         vertices: inout [RTVertex],
         indices: inout [UInt32],
-        triMaterials: inout [UInt32]
+        triMaterials: inout [UInt32],
+        vOffsetBase: Int = 0
     ) {
         let cx = center.x, cy = center.y, cz = center.z
         let hx = halfExtents.x, hy = halfExtents.y, hz = halfExtents.z
-
         let faces: [(SIMD3<Float>, [SIMD3<Float>])] = [
             (SIMD3<Float>(0, 0, 1),  [SIMD3(cx - hx, cy - hy, cz + hz), SIMD3(cx + hx, cy - hy, cz + hz), SIMD3(cx + hx, cy + hy, cz + hz), SIMD3(cx - hx, cy + hy, cz + hz)]),
             (SIMD3<Float>(0, 0, -1), [SIMD3(cx + hx, cy - hy, cz - hz), SIMD3(cx - hx, cy - hy, cz - hz), SIMD3(cx - hx, cy + hy, cz - hz), SIMD3(cx + hx, cy + hy, cz - hz)]),
@@ -526,16 +781,48 @@ enum RTSceneBuilder {
             (SIMD3<Float>(0, 1, 0),  [SIMD3(cx - hx, cy + hy, cz + hz), SIMD3(cx + hx, cy + hy, cz + hz), SIMD3(cx + hx, cy + hy, cz - hz), SIMD3(cx - hx, cy + hy, cz - hz)]),
             (SIMD3<Float>(0, -1, 0), [SIMD3(cx - hx, cy - hy, cz - hz), SIMD3(cx + hx, cy - hy, cz - hz), SIMD3(cx + hx, cy - hy, cz + hz), SIMD3(cx - hx, cy - hy, cz + hz)])
         ]
-        let uvs = [SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1)]
+        for (n, c) in faces {
+            appendQuad(c[0], c[1], c[2], c[3], normal: n, matID: matID,
+                       vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOffsetBase)
+        }
+    }
 
-        for (n, corners) in faces {
-            let base = UInt32(vertices.count)
-            for (k, p) in corners.enumerated() {
+    private static func appendVerticalTaperedPole(
+        baseCenter: SIMD3<Float>,
+        topCenter: SIMD3<Float>,
+        radiusBase: Float,
+        radiusTop: Float,
+        segments: Int,
+        matID: RTMaterialID,
+        vertices: inout [RTVertex],
+        indices: inout [UInt32],
+        triMaterials: inout [UInt32],
+        vOffsetBase: Int
+    ) {
+        let axis = simd_normalize(topCenter - baseCenter)
+        let refUp = abs(axis.y) < 0.9 ? SIMD3<Float>(0, 1, 0) : SIMD3<Float>(1, 0, 0)
+        let t = simd_normalize(simd_cross(refUp, axis))
+        let b = simd_cross(axis, t)
+
+        for i in 0..<segments {
+            let a0 = Float(i) / Float(segments) * 2.0 * .pi
+            let a1 = Float(i + 1) / Float(segments) * 2.0 * .pi
+            let dir0 = t * cos(a0) + b * sin(a0)
+            let dir1 = t * cos(a1) + b * sin(a1)
+
+            let p0 = baseCenter + dir0 * radiusBase
+            let p1 = baseCenter + dir1 * radiusBase
+            let p2 = topCenter + dir1 * radiusTop
+            let p3 = topCenter + dir0 * radiusTop
+
+            let base = UInt32(vertices.count - vOffsetBase)
+            let pts = [(p0, dir0), (p1, dir1), (p2, dir1), (p3, dir0)]
+            for (k, pair) in pts.enumerated() {
                 vertices.append(RTVertex(
-                    px: p.x, py: p.y, pz: p.z,
-                    nx: n.x, ny: n.y, nz: n.z,
-                    u: uvs[k].x, v: uvs[k].y,
-                    mx: p.x, my: p.y, mz: p.z,
+                    px: pair.0.x, py: pair.0.y, pz: pair.0.z,
+                    nx: pair.1.x, ny: pair.1.y, nz: pair.1.z,
+                    u: Float(k % 2), v: Float(k / 2),
+                    mx: pair.0.x, my: pair.0.y, mz: pair.0.z,
                     materialID: matID.rawValue
                 ))
             }
@@ -581,29 +868,34 @@ enum RTSceneBuilder {
         }
     }
 
-    private static func appendGroundAndRockportArchitecture(
+    // Build Authentic Gritty Rockport 2005 Industrial Overpass & Safehouse Dockyard:
+    // Rain-slicked weathered highway asphalt/concrete deck, reinforced concrete viaduct retaining wall
+    // & bridge piers on left, industrial concrete loading dock & corrugated steel warehouse with
+    // hanging warm sodium-tungsten pendant worklamps on right (zero cartoon trees or Roblox skyline!).
+    private static func appendRockportCoastalHighway(
         meshes: inout [RTBLASMesh],
         vertices: inout [RTVertex],
         indices: inout [UInt32],
         triMaterials: inout [UInt32]
     ) {
-        // 1. Wet Asphalt Ground Plane BLAS (y = 0, [-65, +65])
+        // 1. Rain-Slicked Rockport Industrial Overpass Asphalt Deck (x in [-7.6, +7.6], z in [-155, +155])
         do {
             let vOff = vertices.count
             let iOff = indices.count
             let tOff = triMaterials.count
-            let half: Float = 65.0
+            let hwX: Float = 7.6
+            let hwZ: Float = 155.0
             let corners = [
-                SIMD3<Float>(-half, 0, -half),
-                SIMD3<Float>( half, 0, -half),
-                SIMD3<Float>( half, 0,  half),
-                SIMD3<Float>(-half, 0,  half)
+                SIMD3<Float>(-hwX, 0, -hwZ),
+                SIMD3<Float>( hwX, 0, -hwZ),
+                SIMD3<Float>( hwX, 0,  hwZ),
+                SIMD3<Float>(-hwX, 0,  hwZ)
             ]
             for c in corners {
                 vertices.append(RTVertex(
                     px: c.x, py: c.y, pz: c.z,
                     nx: 0, ny: 1, nz: 0,
-                    u: c.x * 0.2, v: c.z * 0.2,
+                    u: c.x * 0.25, v: c.z * 0.25,
                     mx: c.x, my: c.y, mz: c.z,
                     materialID: RTMaterialID.wetAsphalt.rawValue
                 ))
@@ -612,68 +904,227 @@ enum RTSceneBuilder {
             triMaterials.append(RTMaterialID.wetAsphalt.rawValue)
             triMaterials.append(RTMaterialID.wetAsphalt.rawValue)
             meshes.append(RTBLASMesh(
-                name: "Rockport_WetAsphaltGround",
+                name: "Rockport_WetIndustrialOverpass",
                 vertexOffset: vOff, vertexCount: 4,
                 indexOffset: iOff, triOffset: tOff, triangleCount: 2,
-                isTransparent: false, flags: 4, modelMatrix: matrix_identity_float4x4
+                isTransparent: false, flags: 12, modelMatrix: matrix_identity_float4x4,
+                role: .worldStatic, pivotCenter: .zero, sharedBlasIndex: nil
             ))
         }
 
-        // 2. Stylized Rockport Urban Bridge Pillars, Arches, Downtown Towers & Neon Light Panels
+        // 2. Concrete Jersey Parapet, Heavy Concrete Viaduct Piers & Overpass Deck (left),
+        //    plus Industrial Concrete Loading Dock & Steel Warehouse Facade (right)
+        do {
+            let vOff = vertices.count
+            let iOff = indices.count
+            let tOff = triMaterials.count
+            let zMin: Float = -155.0
+            let zMax: Float = 155.0
+
+            // Left Sloped Reinforced Concrete Jersey Barrier (x ~ -7.0m)
+            let jbProfile: [(Float, Float)] = [
+                (-7.38, 0.00),
+                (-7.34, 0.28),
+                (-7.18, 0.92),
+                (-6.94, 0.92),
+                (-6.78, 0.28),
+                (-6.72, 0.00)
+            ]
+            for k in 0..<(jbProfile.count - 1) {
+                let (x0, y0) = jbProfile[k]
+                let (x1, y1) = jbProfile[k + 1]
+                let segDir = SIMD2<Float>(x1 - x0, y1 - y0)
+                let segN = simd_normalize(SIMD3<Float>(-segDir.y, segDir.x, 0.0))
+                appendQuad(
+                    SIMD3(x0, y0, zMin), SIMD3(x1, y1, zMin),
+                    SIMD3(x1, y1, zMax), SIMD3(x0, y0, zMax),
+                    normal: segN, matID: .urbanConcrete,
+                    vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+                )
+            }
+
+            // Left Industrial Concrete Service Walkway + Heavy Concrete Viaduct Piers & Elevated Overpass Beam
+            appendQuad(
+                SIMD3(-13.5, 0.16, zMin), SIMD3(-7.36, 0.16, zMin),
+                SIMD3(-7.36, 0.16, zMax), SIMD3(-13.5, 0.16, zMax),
+                normal: SIMD3(0, 1, 0), matID: .urbanConcrete,
+                vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+            )
+            // Outer industrial concrete retaining curb & tubular steel viaduct safety rail on left parapet
+            appendBox(center: SIMD3(-7.06, 1.32, 0.0), halfExtents: SIMD3(0.045, 0.035, 155.0),
+                      matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+            appendBox(center: SIMD3(-7.06, 1.08, 0.0), halfExtents: SIMD3(0.035, 0.025, 155.0),
+                      matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+
+            var railPostZ: Float = -96.0
+            while railPostZ <= 120.0 {
+                appendBox(center: SIMD3(-7.06, 1.14, railPostZ), halfExtents: SIMD3(0.04, 0.24, 0.04),
+                          matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+                railPostZ += 6.0
+            }
+
+            // Distant heavy reinforced concrete bridge piers & elevated steel-girder overpass along x = -11.5m
+            // (framing the gritty Rockport industrial horizon without blocking the dramatic sky!)
+            var pierZ: Float = -112.0
+            while pierZ <= 112.0 {
+                // Concrete pier shaft + capital
+                appendBox(center: SIMD3(-11.8, 3.6, pierZ), halfExtents: SIMD3(0.75, 3.6, 0.85),
+                          matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+                appendBox(center: SIMD3(-11.8, 7.1, pierZ), halfExtents: SIMD3(1.45, 0.45, 1.05),
+                          matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+                pierZ += 22.0
+            }
+            // Overhead elevated highway concrete deck & dark weathered steel I-beam fascia (x = -16.5..-9.8, y = 7.55..8.7)
+            appendBox(center: SIMD3(-13.2, 8.15, 0.0), halfExtents: SIMD3(3.4, 0.58, 155.0),
+                      matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+            appendBox(center: SIMD3(-9.75, 7.72, 0.0), halfExtents: SIMD3(0.14, 0.28, 155.0),
+                      matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+
+            // Right Side: Iconic Rockport Industrial Safehouse Concrete Loading Dock & Corrugated Steel Warehouse Bay
+            // Concrete shoulder curb + raised loading dock platform (x = +6.1..+10.8m)
+            appendQuad(
+                SIMD3(6.1, 0.0, zMin), SIMD3(6.45, 0.18, zMin),
+                SIMD3(6.45, 0.18, zMax), SIMD3(6.1, 0.0, zMax),
+                normal: simd_normalize(SIMD3(-0.38, 0.92, 0.0)), matID: .urbanConcrete,
+                vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+            )
+            appendQuad(
+                SIMD3(6.45, 0.18, zMin), SIMD3(7.55, 0.18, zMin),
+                SIMD3(7.55, 0.18, zMax), SIMD3(6.45, 0.18, zMax),
+                normal: SIMD3(0, 1, 0), matID: .urbanConcrete,
+                vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+            )
+            // Concrete loading dock wall (x = +7.55..+11.2m, y = 0.18..1.28m)
+            appendBox(center: SIMD3(9.4, 0.72, 0.0), halfExtents: SIMD3(1.85, 0.56, 155.0),
+                      matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+            // Galvanized steel loading dock edge bumper strip
+            appendBox(center: SIMD3(7.52, 1.22, 0.0), halfExtents: SIMD3(0.06, 0.07, 155.0),
+                      matID: .brushedAluminum, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+
+            // Corrugated dark industrial warehouse wall (x = +10.8m, y = 1.28..9.6m)
+            appendBox(center: SIMD3(11.1, 5.45, 0.0), halfExtents: SIMD3(0.32, 4.20, 155.0),
+                      matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+
+            // Cantilevered dark steel industrial loading-bay roof canopy overhanging dock (x = +6.9..+11.0, y = 5.45)
+            appendBox(center: SIMD3(8.95, 5.55, 0.0), halfExtents: SIMD3(2.15, 0.14, 155.0),
+                      matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+
+            // Rhythmic dark industrial steel I-columns, diagonal canopy braces & glowing warm warehouse clerestory windows
+            var bayZ: Float = -104.0
+            while bayZ <= 128.0 {
+                // Structural steel I-beam pillar along loading dock front edge
+                appendBox(center: SIMD3(7.75, 3.38, bayZ), halfExtents: SIMD3(0.14, 2.15, 0.14),
+                          matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+                // Cross-beam under canopy
+                appendBox(center: SIMD3(9.25, 5.36, bayZ), halfExtents: SIMD3(1.85, 0.10, 0.10),
+                          matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+                // Industrial metal warehouse window bay between columns
+                appendBox(center: SIMD3(10.72, 3.65, bayZ + 4.5), halfExtents: SIMD3(0.05, 0.72, 1.95),
+                          matID: .urbanGlass, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+                // Hanging warm tungsten-sodium industrial pendant worklamp under canopy!
+                appendVerticalTaperedPole(
+                    baseCenter: SIMD3(7.45, 5.42, bayZ + 4.5), topCenter: SIMD3(7.45, 4.92, bayZ + 4.5),
+                    radiusBase: 0.02, radiusTop: 0.02, segments: 6,
+                    matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+                )
+                appendVerticalTaperedPole(
+                    baseCenter: SIMD3(7.45, 4.96, bayZ + 4.5), topCenter: SIMD3(7.45, 4.76, bayZ + 4.5),
+                    radiusBase: 0.08, radiusTop: 0.34, segments: 10,
+                    matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+                )
+                appendBox(center: SIMD3(7.45, 4.74, bayZ + 4.5), halfExtents: SIMD3(0.18, 0.025, 0.18),
+                          matID: .streetlampLED, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+                bayZ += 9.0
+            }
+
+            // Galvanized W-beam steel safety guardrail along right highway curb (x = +5.98m)
+            let wProfile: [(Float, Float)] = [
+                (6.05, 0.44), (5.94, 0.50), (5.94, 0.56), (6.01, 0.60),
+                (5.94, 0.64), (5.94, 0.70), (6.05, 0.76)
+            ]
+            for k in 0..<(wProfile.count - 1) {
+                let (x0, y0) = wProfile[k]
+                let (x1, y1) = wProfile[k + 1]
+                let segDir = SIMD2<Float>(x1 - x0, y1 - y0)
+                let segN = simd_normalize(SIMD3<Float>(-segDir.y, segDir.x, 0.0))
+                appendQuad(
+                    SIMD3(x0, y0, zMin), SIMD3(x1, y1, zMin),
+                    SIMD3(x1, y1, zMax), SIMD3(x0, y0, zMax),
+                    normal: segN, matID: .brushedAluminum,
+                    vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+                )
+            }
+            var gPostZ: Float = -84.0
+            while gPostZ <= 124.0 {
+                appendBox(center: SIMD3(6.10, 0.39, gPostZ), halfExtents: SIMD3(0.055, 0.39, 0.045),
+                          matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+                gPostZ += 4.0
+            }
+
+            meshes.append(RTBLASMesh(
+                name: "Rockport_IndustrialOverpassStructures",
+                vertexOffset: vOff, vertexCount: vertices.count - vOff,
+                indexOffset: iOff, triOffset: tOff, triangleCount: triMaterials.count - tOff,
+                isTransparent: false, flags: 4, modelMatrix: matrix_identity_float4x4,
+                role: .worldStatic, pivotCenter: .zero, sharedBlasIndex: nil
+            ))
+        }
+
+        // 3. Instanced Weathered Dark Steel Highway Cobra-Head Sodium Streetlamps along right curb (x = +6.35m)
         do {
             let vOff = vertices.count
             let iOff = indices.count
             let tOff = triMaterials.count
 
-            // Overpass concrete bridge arch + pillars framing the background (-Z) & flanks
-            appendBox(center: SIMD3(-10.5, 3.2, -13.5), halfExtents: SIMD3(0.70, 3.2, 0.75), matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            appendBox(center: SIMD3( 10.5, 3.2, -13.5), halfExtents: SIMD3(0.70, 3.2, 0.75), matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            appendBox(center: SIMD3(  0.0, 6.2, -13.5), halfExtents: SIMD3(11.8, 0.65, 0.90), matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            // Bridge soffit neon strip (reflects on car roof & hood and wet road!)
-            appendBox(center: SIMD3(  0.0, 5.50, -12.8), halfExtents: SIMD3(8.5, 0.08, 0.08), matID: .neonCyan, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+            appendVerticalTaperedPole(
+                baseCenter: SIMD3(0, 0, 0), topCenter: SIMD3(0, 6.2, 0),
+                radiusBase: 0.11, radiusTop: 0.072, segments: 12,
+                matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+            )
+            appendVerticalTaperedPole(
+                baseCenter: SIMD3(0, 6.15, 0), topCenter: SIMD3(-1.05, 6.60, 0),
+                radiusBase: 0.068, radiusTop: 0.052, segments: 10,
+                matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+            )
+            appendVerticalTaperedPole(
+                baseCenter: SIMD3(-1.02, 6.59, 0), topCenter: SIMD3(-2.15, 6.72, 0),
+                radiusBase: 0.052, radiusTop: 0.042, segments: 10,
+                matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff
+            )
+            appendBox(center: SIMD3(-2.22, 6.71, 0), halfExtents: SIMD3(0.32, 0.055, 0.14),
+                      matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+            appendBox(center: SIMD3(-2.22, 6.648, 0), halfExtents: SIMD3(0.24, 0.015, 0.10),
+                      matID: .streetlampLED, vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
 
-            // Side concrete Jersey barriers with warm amber reflector strips
-            appendBox(center: SIMD3(-8.5, 0.42, 0.0), halfExtents: SIMD3(0.28, 0.42, 16.0), matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            appendBox(center: SIMD3( 8.5, 0.42, 0.0), halfExtents: SIMD3(0.28, 0.42, 16.0), matID: .urbanConcrete, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+            let protoMeshIndex = meshes.count
+            let lampX: Float = 6.35
+            let spacing: Float = 16.0
+            let startZ: Float = -88.5
 
-            // Streetlight stanchions & glowing warm/cyan overhead light bars (reflected in puddles & car paint!)
-            for zPos: Float in [-7.5, 1.5, 10.5] {
-                appendBox(center: SIMD3(-8.2, 2.6, zPos), halfExtents: SIMD3(0.10, 2.6, 0.10), matID: .brushedAluminum, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-                appendBox(center: SIMD3(-7.3, 5.1, zPos), halfExtents: SIMD3(0.95, 0.08, 0.10), matID: .brushedAluminum, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-                appendBox(center: SIMD3(-6.7, 4.98, zPos), halfExtents: SIMD3(0.55, 0.05, 0.12), matID: .neonAmber, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-
-                appendBox(center: SIMD3( 8.2, 2.6, zPos), halfExtents: SIMD3(0.10, 2.6, 0.10), matID: .brushedAluminum, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-                appendBox(center: SIMD3( 7.3, 5.1, zPos), halfExtents: SIMD3(0.95, 0.08, 0.10), matID: .brushedAluminum, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-                appendBox(center: SIMD3( 6.7, 4.98, zPos), halfExtents: SIMD3(0.55, 0.05, 0.12), matID: .neonCyan, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            }
-
-            // Stylized Rockport downtown towers behind & around the plaza for 3D reflections
-            let towers: [(SIMD3<Float>, SIMD3<Float>, RTMaterialID)] = [
-                (SIMD3(-15.0, 9.5, -22.0), SIMD3(3.2, 9.5, 3.2), .urbanGlass),
-                (SIMD3( -5.5, 13.5, -27.0), SIMD3(3.6, 13.5, 3.6), .urbanGlass),
-                (SIMD3(  6.5, 11.5, -25.0), SIMD3(3.4, 11.5, 3.4), .urbanGlass),
-                (SIMD3( 16.0, 8.5, -20.0), SIMD3(3.0, 8.5, 3.0), .urbanConcrete),
-                (SIMD3(-17.5, 7.5,  11.0), SIMD3(2.8, 7.5, 3.5), .urbanGlass),
-                (SIMD3( 18.0, 8.5,  12.0), SIMD3(3.0, 8.5, 3.8), .urbanGlass)
-            ]
-            for (c, h, m) in towers {
-                appendBox(center: c, halfExtents: h, matID: m, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            }
-
-            // Local index array for this BLAS must be 0-based relative to vOff!
-            let totalLocalVerts = vertices.count - vOff
-            let addedTris = triMaterials.count - tOff
-            // Note: appendBox appended global indices; convert indices in [iOff...] to be 0-based relative to vOff!
-            for idx in iOff..<indices.count {
-                indices[idx] -= UInt32(vOff)
-            }
-
+            var baseMat = matrix_identity_float4x4
+            baseMat.columns.3 = SIMD4<Float>(lampX, 0.0, startZ, 1.0)
             meshes.append(RTBLASMesh(
-                name: "Rockport_UrbanArchitecture",
-                vertexOffset: vOff, vertexCount: totalLocalVerts,
-                indexOffset: iOff, triOffset: tOff, triangleCount: addedTris,
-                isTransparent: false, flags: 4, modelMatrix: matrix_identity_float4x4
+                name: "Rockport_Streetlamp_0",
+                vertexOffset: vOff, vertexCount: vertices.count - vOff,
+                indexOffset: iOff, triOffset: tOff, triangleCount: triMaterials.count - tOff,
+                isTransparent: false, flags: 4, modelMatrix: baseMat,
+                role: .streetlamp(basePos: SIMD3(lampX, 0.0, startZ)),
+                pivotCenter: .zero, sharedBlasIndex: nil
             ))
+
+            for k in 1..<12 {
+                let z = startZ + Float(k) * spacing
+                var instMat = matrix_identity_float4x4
+                instMat.columns.3 = SIMD4<Float>(lampX, 0.0, z, 1.0)
+                meshes.append(RTBLASMesh(
+                    name: "Rockport_Streetlamp_\(k)",
+                    vertexOffset: vOff, vertexCount: vertices.count - vOff,
+                    indexOffset: iOff, triOffset: tOff, triangleCount: triMaterials.count - tOff,
+                    isTransparent: false, flags: 4, modelMatrix: instMat,
+                    role: .streetlamp(basePos: SIMD3(lampX, 0.0, z)),
+                    pivotCenter: .zero, sharedBlasIndex: protoMeshIndex
+                ))
+            }
         }
     }
 
@@ -683,42 +1134,37 @@ enum RTSceneBuilder {
         indices: inout [UInt32],
         triMaterials: inout [UInt32]
     ) {
-        // Build a clean synthetic GT coupe + wing + 4 wheels + lights for offline CI (`--synthetic`)
         do {
             let vOff = vertices.count
             let iOff = indices.count
             let tOff = triMaterials.count
-            // Lower body shell
             appendBox(center: SIMD3(0, 0.44, 0.12), halfExtents: SIMD3(0.92, 0.24, 2.22), matID: .carPaint, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            // Cabin roof & hood slope
             appendBox(center: SIMD3(0, 0.84, -0.15), halfExtents: SIMD3(0.72, 0.22, 1.05), matID: .carPaint, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            // Carbon fiber GT wing
             appendBox(center: SIMD3(-0.55, 0.82, -1.88), halfExtents: SIMD3(0.03, 0.18, 0.12), matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
             appendBox(center: SIMD3( 0.55, 0.82, -1.88), halfExtents: SIMD3(0.03, 0.18, 0.12), matID: .matteTrim, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
             appendBox(center: SIMD3( 0.0,  1.02, -1.90), halfExtents: SIMD3(0.86, 0.03, 0.18), matID: .carbonFiber, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            // Headlights & taillights
-            appendBox(center: SIMD3(-0.62, 0.54, 2.34), halfExtents: SIMD3(0.16, 0.06, 0.03), matID: .headlightEmit, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            appendBox(center: SIMD3( 0.62, 0.54, 2.34), halfExtents: SIMD3(0.16, 0.06, 0.03), matID: .headlightEmit, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            appendBox(center: SIMD3(-0.62, 0.64, -2.10), halfExtents: SIMD3(0.18, 0.06, 0.03), matID: .taillightEmit, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
-            appendBox(center: SIMD3( 0.62, 0.64, -2.10), halfExtents: SIMD3(0.18, 0.06, 0.03), matID: .taillightEmit, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+            appendBox(center: SIMD3(-0.58, 0.60, 2.34), halfExtents: SIMD3(0.18, 0.06, 0.03), matID: .headlightEmit, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+            appendBox(center: SIMD3( 0.58, 0.60, 2.34), halfExtents: SIMD3(0.18, 0.06, 0.03), matID: .headlightEmit, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+            appendBox(center: SIMD3(-0.56, 0.78, -2.10), halfExtents: SIMD3(0.18, 0.06, 0.03), matID: .taillightEmit, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+            appendBox(center: SIMD3( 0.56, 0.78, -2.10), halfExtents: SIMD3(0.18, 0.06, 0.03), matID: .taillightEmit, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
 
             for idx in iOff..<indices.count { indices[idx] -= UInt32(vOff) }
             meshes.append(RTBLASMesh(
                 name: "Synthetic_M3_Body",
                 vertexOffset: vOff, vertexCount: vertices.count - vOff,
                 indexOffset: iOff, triOffset: tOff, triangleCount: triMaterials.count - tOff,
-                isTransparent: false, flags: 1, modelMatrix: matrix_identity_float4x4
+                isTransparent: false, flags: 1, modelMatrix: matrix_identity_float4x4,
+                role: .carBody, pivotCenter: .zero, sharedBlasIndex: nil
             ))
         }
 
-        // 4 wheels
-        let wheelPositions: [(String, SIMD3<Float>)] = [
-            ("Synthetic_Wheel_FL", SIMD3(-0.88, 0.33,  1.58)),
-            ("Synthetic_Wheel_FR", SIMD3( 0.88, 0.33,  1.58)),
-            ("Synthetic_Wheel_RL", SIMD3(-0.88, 0.33, -1.14)),
-            ("Synthetic_Wheel_RR", SIMD3( 0.88, 0.33, -1.14))
+        let wheelPositions: [(String, SIMD3<Float>, RTPartRole)] = [
+            ("Synthetic_Wheel_FL", SIMD3(-0.88, 0.33,  1.58), .wheelFL),
+            ("Synthetic_Wheel_FR", SIMD3( 0.88, 0.33,  1.58), .wheelFR),
+            ("Synthetic_Wheel_RL", SIMD3(-0.88, 0.33, -1.14), .wheelRL),
+            ("Synthetic_Wheel_RR", SIMD3( 0.88, 0.33, -1.14), .wheelRR)
         ]
-        for (wName, pos) in wheelPositions {
+        for (wName, pos, role) in wheelPositions {
             let vOff = vertices.count
             let iOff = indices.count
             let tOff = triMaterials.count
@@ -729,7 +1175,8 @@ enum RTSceneBuilder {
                 name: wName,
                 vertexOffset: vOff, vertexCount: vertices.count - vOff,
                 indexOffset: iOff, triOffset: tOff, triangleCount: triMaterials.count - tOff,
-                isTransparent: false, flags: 0, modelMatrix: matrix_identity_float4x4
+                isTransparent: false, flags: 0, modelMatrix: matrix_identity_float4x4,
+                role: role, pivotCenter: pos, sharedBlasIndex: nil
             ))
         }
     }
@@ -738,43 +1185,104 @@ enum RTSceneBuilder {
         device: MTLDevice,
         commandQueue: MTLCommandQueue,
         scenePath: String?,
+        carKey: String = "m3_gtr",
         forceSynthetic: Bool
     ) throws -> RTScenePackage {
         var vertices: [RTVertex] = []
         var indices: [UInt32] = []
         var triMaterials: [UInt32] = []
         var meshes: [RTBLASMesh] = []
-        vertices.reserveCapacity(32768)
-        indices.reserveCapacity(65536)
+        vertices.reserveCapacity(80000)
+        indices.reserveCapacity(240000)
 
+        var profile = RTCarProfile.parse(carKey)
         var sourceLabel = "synthetic"
-        var camTarget = SIMD3<Float>(0.0, 0.56, 0.14)
-        var camDist: Float = 5.25
-        var camAz: Float = 38.0
-        var camEl: Float = 11.5
-        var camFov: Float = 40.0
+        var camTarget = SIMD3<Float>(0.0, 0.50, 0.12)
+        var camDist: Float = 4.75
+        var camAz: Float = 36.0
+        var camEl: Float = 7.5
+        var camFov: Float = 36.0
 
         var asphaltPath: String? = "build/cc0_baked/asphalt_02_wet_4k.png"
+        let asphaltNormPath = "build/cc0_raw/asphalt_02_pbr/asphalt_02_nor_gl_2k.png"
+        let asphaltRoughPath = "build/cc0_raw/asphalt_02_pbr/asphalt_02_rough_2k.png"
+        let concreteDiffPath = "build/cc0_raw/highway_concrete/concrete_wall_004_diff_1k.png"
+        let concreteNormPath = "build/cc0_raw/highway_concrete/concrete_wall_004_nor_gl_1k.png"
         var carbonPath: String? = "build/cc0_baked/carbon_fiber_4k.png"
+        let carbonNormPath = "build/cc0_raw/car_carbon_fiber/Fabric004_1K-PNG_NormalGL.png"
+
+        var carLiveryMaskPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_livery_mask.png" : nil
+        var carMiscPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_misc.png" : nil
+        var carBadgePath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_badging.png" : nil
+        var carHeadlightPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_headlight.png" : nil
+        var carTaillightPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_taillight.png" : nil
+        var carTirePath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_tire.png" : nil
+        var carInteriorPath: String? = (profile == .m3_gtr) ? "build/flywheel/hq_m3_gtr/textures/m3_interior.png" : nil
+
+        var mats = defaultMaterialTable()
+        var carSupportsLivery = profile.supportsLivery
 
         let fm = FileManager.default
-        let resolvedScenePath = scenePath ?? "build/metal_wave3/scene/scene.json"
+        let priorityPaths = [
+            scenePath,
+            profile.defaultScenePath,
+            "build/flywheel/hq_m3_gtr/scene.json",
+            "build/metal_wave3/scene/scene.json"
+        ].compactMap { $0 }
 
+        var chosenJsonURL: URL? = nil
         if !forceSynthetic {
-            let sceneURL = URL(fileURLWithPath: resolvedScenePath)
-            var jsonURL: URL? = nil
-            if resolvedScenePath.hasSuffix(".json") && fm.fileExists(atPath: sceneURL.path) {
-                jsonURL = sceneURL
-            } else if fm.fileExists(atPath: sceneURL.appendingPathComponent("scene.json").path) {
-                jsonURL = sceneURL.appendingPathComponent("scene.json")
+            for candidate in priorityPaths {
+                let u = URL(fileURLWithPath: candidate)
+                if candidate.hasSuffix(".json") && fm.fileExists(atPath: u.path) {
+                    chosenJsonURL = u
+                    break
+                } else if fm.fileExists(atPath: u.appendingPathComponent("scene.json").path) {
+                    chosenJsonURL = u.appendingPathComponent("scene.json")
+                    break
+                }
             }
 
-            if let jURL = jsonURL,
+            if let jURL = chosenJsonURL,
                let data = try? Data(contentsOf: jURL),
                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let parts = root["parts"] as? [[String: Any]] {
                 sourceLabel = "scene.json (\(jURL.path))"
                 let sceneDir = jURL.deletingLastPathComponent()
+
+                if let cid = root["car_id"] as? String {
+                    profile = RTCarProfile.parse(cid)
+                    carSupportsLivery = profile.supportsLivery
+                }
+                if profile != .m3_gtr {
+                    carLiveryMaskPath = nil
+                }
+
+                // Apply authentic per-car factory paint material from scene.json
+                if let matMap = root["materials"] as? [String: Any],
+                   let heroPaint = matMap["car_paint_hero"] as? [String: Any] {
+                    if let liv = heroPaint["livery_enabled"] as? Bool {
+                        carSupportsLivery = liv
+                    }
+                    if let bc = heroPaint["base_color"] as? [Double], bc.count == 3 {
+                        let baseCol = SIMD4<Float>(Float(bc[0]), Float(bc[1]), Float(bc[2]), 1.0)
+                        mats[Int(RTMaterialID.carPaint.rawValue)].baseColor = baseCol
+                        mats[Int(RTMaterialID.carPaintSilver.rawValue)].baseColor = baseCol
+                        mats[Int(RTMaterialID.carPaintSilver.rawValue)].secondaryColor = SIMD4<Float>(baseCol.x, baseCol.y, baseCol.z, 1.56)
+                    }
+                    if let sc = heroPaint["secondary_color"] as? [Double], sc.count == 3 {
+                        let ior = Float((heroPaint["ior"] as? Double) ?? 1.56)
+                        mats[Int(RTMaterialID.carPaint.rawValue)].secondaryColor = SIMD4<Float>(Float(sc[0]), Float(sc[1]), Float(sc[2]), ior)
+                    }
+                    if let met = heroPaint["metallic"] as? Double {
+                        mats[Int(RTMaterialID.carPaint.rawValue)].pbrParams.x = Float(met)
+                        mats[Int(RTMaterialID.carPaintSilver.rawValue)].pbrParams.x = Float(met)
+                    }
+                    if let rough = heroPaint["roughness"] as? Double {
+                        mats[Int(RTMaterialID.carPaint.rawValue)].pbrParams.y = Float(rough)
+                        mats[Int(RTMaterialID.carPaintSilver.rawValue)].pbrParams.y = Float(rough)
+                    }
+                }
 
                 if let cam = root["camera"] as? [String: Any] {
                     if let t = cam["target"] as? [Double], t.count == 3 {
@@ -785,9 +1293,22 @@ enum RTSceneBuilder {
                     if let e = cam["elevation_deg"] as? Double { camEl = Float(e) }
                     if let f = cam["fov_deg"] as? Double { camFov = Float(f) }
                 }
+                // Hero low automotive telephoto framing for authentic NFSMW stance
+                camDist = min(camDist, 4.75)
+                camEl = min(camEl, 7.6)
+                camAz = 36.0
+                camFov = 36.0
+
                 if let textures = root["textures"] as? [String: String] {
                     if let a = textures["asphalt_wet"], fm.fileExists(atPath: a) { asphaltPath = a }
                     if let c = textures["carbon_fiber"], fm.fileExists(atPath: c) { carbonPath = c }
+                    if let p = textures["car_livery_mask"], fm.fileExists(atPath: p) { carLiveryMaskPath = p }
+                    if let p = textures["car_misc"], fm.fileExists(atPath: p) { carMiscPath = p }
+                    if let p = textures["car_badging"], fm.fileExists(atPath: p) { carBadgePath = p }
+                    if let p = textures["car_headlight"], fm.fileExists(atPath: p) { carHeadlightPath = p }
+                    if let p = textures["car_taillight"], fm.fileExists(atPath: p) { carTaillightPath = p }
+                    if let p = textures["car_tire"], fm.fileExists(atPath: p) { carTirePath = p }
+                    if let p = textures["car_interior"], fm.fileExists(atPath: p) { carInteriorPath = p }
                 }
 
                 for part in parts {
@@ -798,13 +1319,15 @@ enum RTSceneBuilder {
                     guard fm.fileExists(atPath: objURL.path) else { continue }
                     let pName = (part["name"] as? String) ?? objURL.deletingPathExtension().lastPathComponent
                     let transparent = (part["transparent"] as? Bool) ?? false
+                    let role = roleForPartName(pName)
                     let mesh = try parseOBJIntoPool(
                         url: objURL,
                         name: pName,
                         ps2ZUpToYUp: false,
                         isTransparent: transparent,
-                        liveryEnabled: true,
+                        liveryEnabled: carSupportsLivery,
                         modelMatrix: matrix_identity_float4x4,
+                        role: role,
                         materialMapper: { matName, _ in RTMaterialID.fromName(matName) },
                         vertices: &vertices,
                         indices: &indices,
@@ -822,6 +1345,7 @@ enum RTSceneBuilder {
                     isTransparent: false,
                     liveryEnabled: true,
                     modelMatrix: matrix_identity_float4x4,
+                    role: .carBody,
                     materialMapper: { grp, pos in
                         if grp.contains("tex5") { return .chrome }
                         if grp.contains("tex6") || grp.contains("tex3") { return .matteTrim }
@@ -836,13 +1360,13 @@ enum RTSceneBuilder {
 
                 let wheelURL = URL(fileURLWithPath: "build/obj_preview/cars_wheels_geometry_bin__ENKEI_STYLE01_17_25_B.obj")
                 if fm.fileExists(atPath: wheelURL.path) {
-                    let wheelSlots: [(String, SIMD3<Float>, Float)] = [
-                        ("ENKEI_FL", SIMD3(-0.88, 0.329,  1.595),  1.0),
-                        ("ENKEI_FR", SIMD3( 0.88, 0.329,  1.595), -1.0),
-                        ("ENKEI_RL", SIMD3(-0.88, 0.329, -1.1295), 1.0),
-                        ("ENKEI_RR", SIMD3( 0.88, 0.329, -1.1295),-1.0)
+                    let wheelSlots: [(String, SIMD3<Float>, Float, RTPartRole)] = [
+                        ("ENKEI_FL", SIMD3(-0.88, 0.329,  1.595),  1.0, .wheelFL),
+                        ("ENKEI_FR", SIMD3( 0.88, 0.329,  1.595), -1.0, .wheelFR),
+                        ("ENKEI_RL", SIMD3(-0.88, 0.329, -1.1295), 1.0, .wheelRL),
+                        ("ENKEI_RR", SIMD3( 0.88, 0.329, -1.1295),-1.0, .wheelRR)
                     ]
-                    for (wName, offset, flipX) in wheelSlots {
+                    for (wName, offset, flipX, wRole) in wheelSlots {
                         var mat = matrix_identity_float4x4
                         mat.columns.0 = SIMD4<Float>(flipX, 0, 0, 0)
                         mat.columns.3 = SIMD4<Float>(offset.x, offset.y, offset.z, 1)
@@ -853,6 +1377,7 @@ enum RTSceneBuilder {
                             isTransparent: false,
                             liveryEnabled: false,
                             modelMatrix: mat,
+                            role: wRole,
                             materialMapper: { grp, _ in
                                 if grp.contains("tex3") { return .rubberTire }
                                 if grp.contains("tex0") { return .matteTrim }
@@ -873,8 +1398,7 @@ enum RTSceneBuilder {
             appendSyntheticCar(meshes: &meshes, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
         }
 
-        // Always append wet asphalt ground plane & stylized Rockport urban architecture BLASes
-        appendGroundAndRockportArchitecture(meshes: &meshes, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+        appendRockportCoastalHighway(meshes: &meshes, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
 
         guard let vBuf = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<RTVertex>.stride, options: .storageModeShared),
               let iBuf = device.makeBuffer(bytes: indices, length: indices.count * MemoryLayout<UInt32>.stride, options: .storageModeShared),
@@ -882,25 +1406,81 @@ enum RTSceneBuilder {
             throw NSError(domain: "RTSceneBuilder", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate Metal geometry buffers"])
         }
 
-        let mats = defaultMaterialTable()
+        // Apply fallback synthetic paint tint if running synthetic mode for non-M3 profiles
+        if sourceLabel == "synthetic" {
+            if profile == .carrera_gt {
+                let col = SIMD4<Float>(0.71, 0.73, 0.76, 1.0)
+                mats[Int(RTMaterialID.carPaint.rawValue)].baseColor = col
+                mats[Int(RTMaterialID.carPaintSilver.rawValue)].baseColor = col
+                carSupportsLivery = false
+            } else if profile == .gallardo {
+                let col = SIMD4<Float>(0.96, 0.66, 0.025, 1.0)
+                mats[Int(RTMaterialID.carPaint.rawValue)].baseColor = col
+                mats[Int(RTMaterialID.carPaintSilver.rawValue)].baseColor = col
+                carSupportsLivery = false
+            }
+        }
         guard let mBuf = device.makeBuffer(bytes: mats, length: mats.count * MemoryLayout<RTMaterial>.stride, options: .storageModeShared) else {
             throw NSError(domain: "RTSceneBuilder", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate Metal material buffer"])
         }
 
-        let asphaltTex = asphaltPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, commandQueue: commandQueue) }
+        let asphaltDiff = asphaltPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: true, maxDim: 2048) }
             ?? makeProceduralAsphaltTexture(device: device)
-        let carbonTex = carbonPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, commandQueue: commandQueue) }
+        let asphaltNorm = loadTexture(at: URL(fileURLWithPath: asphaltNormPath), device: device, srgb: false, maxDim: 1024)
+            ?? makeFlatNormalTexture(device: device)
+        let asphaltRough = loadTexture(at: URL(fileURLWithPath: asphaltRoughPath), device: device, srgb: false, maxDim: 1024)
+            ?? makeConstantLinearTexture(device: device, value: 115)
+        let concreteDiff = loadTexture(at: URL(fileURLWithPath: concreteDiffPath), device: device, srgb: true, maxDim: 1024)
+            ?? makeProceduralConcreteTexture(device: device)
+        let concreteNorm = loadTexture(at: URL(fileURLWithPath: concreteNormPath), device: device, srgb: false, maxDim: 1024)
+            ?? makeFlatNormalTexture(device: device)
+        let carbonDiff = carbonPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: true, maxDim: 1024) }
             ?? makeProceduralCarbonTexture(device: device)
+        let carbonNorm = loadTexture(at: URL(fileURLWithPath: carbonNormPath), device: device, srgb: false, maxDim: 1024)
+            ?? makeFlatNormalTexture(device: device)
+
+        let loadedLivery = (!forceSynthetic) ? carLiveryMaskPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: false, maxDim: 2048) } : nil
+        let loadedMisc = (!forceSynthetic) ? carMiscPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: true, maxDim: 1024) } : nil
+        let loadedBadge = (!forceSynthetic) ? carBadgePath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: true, maxDim: 512) } : nil
+        let loadedHeadlight = (!forceSynthetic) ? carHeadlightPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: true, maxDim: 512) } : nil
+        let loadedTaillight = (!forceSynthetic) ? carTaillightPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: true, maxDim: 512) } : nil
+        let loadedTire = (!forceSynthetic) ? carTirePath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: true, maxDim: 512) } : nil
+        let loadedInterior = (!forceSynthetic) ? carInteriorPath.flatMap { loadTexture(at: URL(fileURLWithPath: $0), device: device, srgb: true, maxDim: 512) } : nil
+        let hasAuthenticTex = (loadedMisc != nil || loadedHeadlight != nil || loadedLivery != nil)
+
+        let carLiveryMask = loadedLivery ?? makeConstantLinearTexture(device: device, value: 0)
+        let carMisc = loadedMisc ?? makeConstantLinearTexture(device: device, value: 160)
+        let carBadge = loadedBadge ?? makeTransparentTexture(device: device)
+        let carHeadlight = loadedHeadlight ?? makeConstantLinearTexture(device: device, value: 80)
+        let carTaillight = loadedTaillight ?? makeConstantLinearTexture(device: device, value: 80)
+        let carTire = loadedTire ?? makeConstantLinearTexture(device: device, value: 120)
+        let carInterior = loadedInterior ?? makeConstantLinearTexture(device: device, value: 45)
 
         return RTScenePackage(
             sourceLabel: sourceLabel,
+            carProfile: profile,
+            carID: profile.carID,
+            carSupportsLivery: carSupportsLivery && (loadedLivery != nil || forceSynthetic),
             meshes: meshes,
             vertexBuffer: vBuf,
             indexBuffer: iBuf,
             triMaterialBuffer: tmBuf,
             materialBuffer: mBuf,
-            asphaltTexture: asphaltTex,
-            carbonTexture: carbonTex,
+            asphaltDiffTexture: asphaltDiff,
+            asphaltNormalTexture: asphaltNorm,
+            asphaltRoughTexture: asphaltRough,
+            concreteDiffTexture: concreteDiff,
+            concreteNormalTexture: concreteNorm,
+            carbonDiffTexture: carbonDiff,
+            carbonNormalTexture: carbonNorm,
+            carLiveryMaskTexture: carLiveryMask,
+            carMiscTexture: carMisc,
+            carBadgeTexture: carBadge,
+            carHeadlightTexture: carHeadlight,
+            carTaillightTexture: carTaillight,
+            carTireTexture: carTire,
+            carInteriorTexture: carInterior,
+            hasAuthenticCarTextures: hasAuthenticTex,
             presets: defaultPresets(),
             cameraTarget: camTarget,
             cameraDistance: camDist,
@@ -914,7 +1494,7 @@ enum RTSceneBuilder {
 
     // MARK: - Texture Helpers
 
-    static func loadTexture(at url: URL, device: MTLDevice, commandQueue: MTLCommandQueue, maxDim: Int = 1024) -> MTLTexture? {
+    static func loadTexture(at url: URL, device: MTLDevice, srgb: Bool, maxDim: Int = 1024) -> MTLTexture? {
         guard FileManager.default.fileExists(atPath: url.path),
               let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
@@ -925,20 +1505,22 @@ enum RTSceneBuilder {
         let height = max(1, Int((Double(cgImage.height) * scale).rounded()))
         let bytesPerRow = width * 4
         var raw = [UInt8](repeating: 0, count: bytesPerRow * height)
-        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+        let cs = srgb ? CGColorSpace(name: CGColorSpace.sRGB) : CGColorSpaceCreateDeviceRGB()
+        guard let colorSpace = cs,
               let ctx = CGContext(
                   data: &raw,
                   width: width,
                   height: height,
                   bitsPerComponent: 8,
                   bytesPerRow: bytesPerRow,
-                  space: cs,
+                  space: colorSpace,
                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
               ) else { return nil }
         ctx.interpolationQuality = .high
         ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: width, height: height, mipmapped: false)
+        let fmt: MTLPixelFormat = srgb ? .rgba8Unorm_srgb : .rgba8Unorm
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: fmt, width: width, height: height, mipmapped: false)
         desc.usage = [.shaderRead]
         guard let tex = device.makeTexture(descriptor: desc) else { return nil }
         tex.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: raw, bytesPerRow: bytesPerRow)
@@ -951,12 +1533,27 @@ enum RTSceneBuilder {
         for y in 0..<size {
             for x in 0..<size {
                 let h = ((x * 73856093) ^ (y * 19349663)) & 255
-                let v = UInt8(42 + (h % 26))
+                let v = UInt8(44 + (h % 28))
                 let idx = (y * size + x) * 4
-                px[idx] = v
-                px[idx + 1] = v
-                px[idx + 2] = UInt8(min(255, Int(v) + 2))
-                px[idx + 3] = 255
+                px[idx] = v; px[idx + 1] = v; px[idx + 2] = UInt8(min(255, Int(v) + 2)); px[idx + 3] = 255
+            }
+        }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: size, height: size, mipmapped: false)
+        desc.usage = [.shaderRead]
+        let tex = device.makeTexture(descriptor: desc)!
+        tex.replace(region: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0, withBytes: px, bytesPerRow: size * 4)
+        return tex
+    }
+
+    static func makeProceduralConcreteTexture(device: MTLDevice) -> MTLTexture {
+        let size = 128
+        var px = [UInt8](repeating: 0, count: size * size * 4)
+        for y in 0..<size {
+            for x in 0..<size {
+                let h = ((x * 2654435761) ^ (y * 2246822519)) & 31
+                let v = UInt8(122 + Int(h))
+                let idx = (y * size + x) * 4
+                px[idx] = v; px[idx + 1] = v; px[idx + 2] = UInt8(min(255, Int(v) + 4)); px[idx + 3] = 255
             }
         }
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: size, height: size, mipmapped: false)
@@ -974,16 +1571,40 @@ enum RTSceneBuilder {
                 let diag = ((x + y) / 4) % 2
                 let v: UInt8 = diag == 0 ? 28 : 48
                 let idx = (y * size + x) * 4
-                px[idx] = v
-                px[idx + 1] = v
-                px[idx + 2] = UInt8(Int(v) + 4)
-                px[idx + 3] = 255
+                px[idx] = v; px[idx + 1] = v; px[idx + 2] = UInt8(Int(v) + 4); px[idx + 3] = 255
             }
         }
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: size, height: size, mipmapped: false)
         desc.usage = [.shaderRead]
         let tex = device.makeTexture(descriptor: desc)!
         tex.replace(region: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0, withBytes: px, bytesPerRow: size * 4)
+        return tex
+    }
+
+    static func makeFlatNormalTexture(device: MTLDevice) -> MTLTexture {
+        let px: [UInt8] = [128, 128, 255, 255]
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        desc.usage = [.shaderRead]
+        let tex = device.makeTexture(descriptor: desc)!
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: px, bytesPerRow: 4)
+        return tex
+    }
+
+    static func makeConstantLinearTexture(device: MTLDevice, value: UInt8) -> MTLTexture {
+        let px: [UInt8] = [value, value, value, 255]
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        desc.usage = [.shaderRead]
+        let tex = device.makeTexture(descriptor: desc)!
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: px, bytesPerRow: 4)
+        return tex
+    }
+
+    static func makeTransparentTexture(device: MTLDevice) -> MTLTexture {
+        let px: [UInt8] = [0, 0, 0, 0]
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        desc.usage = [.shaderRead]
+        let tex = device.makeTexture(descriptor: desc)!
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: px, bytesPerRow: 4)
         return tex
     }
 

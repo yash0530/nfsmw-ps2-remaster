@@ -5,72 +5,56 @@
 
 ---
 
-## 1. Architecture Overview
+## 1. Architecture Overview (Wave 4 GT7-Grade Overhaul)
 
 `native_metal_rt/` implements a standalone, hardware-accelerated ray tracing renderer (`RockportMetalRT`) built on Metal's hardware ray-intersection pipeline (`MTLPrimitiveAccelerationStructure`, `MTLInstanceAccelerationStructure`, and `metal::raytracing::intersector<triangle_data, instancing>`).
 
 | File | Responsibility |
 | :--- | :--- |
 | `native_metal_rt/Makefile` | Compiles `RockportMetalRT` with `swiftc -O -whole-module-optimization`; builds `.metallib` when `xcrun metal` is installed or stages `RayTracing.metal` for runtime compilation. |
-| `native_metal_rt/RTSceneBuilder.swift` | Multi-source scene loader (`scene.json`, direct `build/obj_preview/*.obj` PS2 Z-up → Y-up converter, and offline `--synthetic` procedural coupe) + Rockport wet asphalt & urban architecture BLAS geometry + CC0/procedural textures. |
-| `native_metal_rt/RTRenderer.swift` | Runtime `device.supportsRaytracing` guard, BLAS/TLAS construction via `MTLAccelerationStructureCommandEncoder`, `useResources` residency tracking, progressive `RGBA32Float` accumulation, bloom/ACES compute post-process, and PNG output. |
-| `native_metal_rt/RayTracing.metal` | Compute kernels (`raytraceKernel`, `bloomThresholdKernel`, `bloomBlurKernel`, `compositeKernel`) using `metal::raytracing::intersector<triangle_data, instancing>`. |
-| `native_metal_rt/main.swift` | Interactive 120Hz `MTKView` showcase window + headless CLI (`--headless`, `--scene`, `--synthetic`, `--preset`, `--spp`, `--width`, `--height`, `--out`, `--compare-out`). |
+| `native_metal_rt/RTSceneBuilder.swift` | Multi-source scene loader (`build/flywheel/hq_m3_gtr/scene.json` 58K-poly hero priority, `build/metal_wave3/scene/scene.json`, direct `build/obj_preview/*.obj` PS2 Z-up → Y-up converter, and offline `--synthetic`), Rockport Autumn Coastal Highway geometry (wet highway, concrete Jersey barrier, coastal bay water, sculpted hillside, instanced pine/autumn trees, instanced streetlamps), 4K/2K CC0 PBR texture loader, and `RTLookdevConfig` (`--config <json>`) parser. |
+| `native_metal_rt/RTRenderer.swift` | Runtime `device.supportsRaytracing` guard, BLAS/TLAS construction & dynamic per-frame TLAS updates (steering, spinning wheels, chassis roll/yaw, scrolling highway & streetlamps), demodulated G-buffer + progressive accumulation targets, 4-pass À-Trous denoiser dispatch, bloom/ACES compute post-process, real-time driving physics, and PNG output. |
+| `native_metal_rt/RayTracing.metal` | Compute kernels (`raytraceKernel`, `denoiseAtrousKernel`, `remodulateKernel`, `bloomThresholdKernel`, `bloomBlurKernel`, `compositeKernel`) using `metal::raytracing::intersector<triangle_data, instancing>`, Heitz GGX VNDF sampling, Nishita atmospheric sky + 3D fBM volumetric clouds, twin BMW E46 Angel-Eye projectors, and procedural `"MW 2026"` rear plate. |
+| `native_metal_rt/main.swift` | Interactive 120Hz driveable `MTKView` showcase window (`W/S` throttle/brake, `A/D` steer, `C` chase cam) + headless CLI (`--headless`, `--config`, `--drive-demo`, `--speed-kmh`, `--steer-deg`, `--spp`, `--out`, `--compare-out`). |
 
 ---
 
-## 2. Acceleration Structure Pipeline (BLAS + TLAS)
+## 2. Acceleration Structure Pipeline (BLAS + Dynamic TLAS)
 
-1. **Runtime Hardware Verification**: `RTRenderer.init` verifies `device.supportsRaytracing` and exits with a clear diagnostic if run on hardware without ray tracing support.
+1. **Runtime Hardware Verification**: `RTRenderer.init` verifies `device.supportsRaytracing` and exits cleanly if run on non-RT hardware.
 2. **Global Geometry Pools**: All vertices are packed into `RTVertex` (48-byte stride: `position`, smooth `normal`, `uv`, `modelPos`, `materialID`), paired with `UInt32` index triplets and per-triangle material IDs (`triMaterialBuffer`).
-3. **Per-Mesh BLAS (`MTLPrimitiveAccelerationStructure`)**:
-   - Each car sub-part (`BMWM3GTRE46_KIT00_BODY_B`, interior, windows, headlights, brakelights, 4× positioned `ENKEI_STYLE01_17_25_B` wheels, 4× brake assemblies), the wet asphalt ground plane, and the Rockport urban bridge/tower architecture are built into dedicated `MTLPrimitiveAccelerationStructure` instances via `MTLAccelerationStructureCommandEncoder`.
-4. **Scene TLAS (`MTLInstanceAccelerationStructure`)**:
-   - `MTLAccelerationStructureInstanceDescriptor` records `MTLPackedFloat4x3` model transforms, `accelerationStructureIndex`, and visibility masks:
-     - `0x01`: opaque geometry (car body, wheels, calipers, rotors, asphalt, concrete/neon architecture)
-     - `0x02`: transparent car glass (`smoked_glass`, `headlight_glass`)
-   - Shadow rays query with mask `0x01` so sunlight passes naturally through headlight lenses and cabin glass onto the rollcage/seats and ground, while primary and reflection rays query `0xFF`.
-   - `computeEncoder.useResources(blasList, usage: .read)` is called before dispatching `raytraceKernel` so Metal guarantees residency for all BLASes referenced indirectly by the TLAS.
-
-### Shader Compilation Portability
-
-When Xcode's optional `MetalToolchain` component is not installed (`xcrun metal` unavailable), `RTRenderer` seamlessly falls back to `device.makeLibrary(source:options:)` against `RayTracing.metal` at runtime with `fastMathEnabled = true`. Both `.metallib` and runtime source paths execute the identical Metal Shading Language ray-tracing kernels.
+3. **Per-Mesh BLAS & Shared Instance BLASes**:
+   - Loads `build/flywheel/hq_m3_gtr/scene.json` (crease-locked `18°` L1 PN-subdivided 14,560-tri `BMWM3GTRE46_KIT00_BODY_B`, 4× L1-subdivided 2,456-tri authentic stock `BMWM3GTRE46` BBS deep-dish race wheels, interior, windows, headlights, taillights, and Brembo brakes) alongside the gritty Rockport 2005 Industrial Overpass & Safehouse Dockyard structures (wet asphalt, concrete viaduct piers & elevated deck, corrugated steel warehouse loading dock with hanging sodium pendant worklamps, W-beam steel guardrail, and instanced cobra-head sodium streetlamps — **36 TLAS instances**, **29,516 triangles** total).
+4. **Dynamic TLAS Rebuilds**:
+   - Each wheel/brake mesh records its exact bounding-box `pivotCenter`, enabling per-frame steering (`steerDeg`), spinning (`wheelSpinRad`), chassis body roll/yaw, and infinite scrolling streetlamp poles via `MTLAccelerationStructureCommandEncoder.build(accelerationStructure: tlas, ...)`.
+   - Visibility masks (`0x01` opaque vs `0x02` glass) allow sunlight to pass through clear headlight covers and smoked cabin windows onto the interior rollcage, bucket seat, and recessed Angel-Eye projectors.
 
 ---
 
-## 3. Ray-Traced Lighting & Shading Stages (`RayTracing.metal`)
+## 3. Ray-Traced Lighting, Denoising & Shading Stages (`RayTracing.metal`)
 
-1. **Roberts R2 Quasi-Monte Carlo Sampling**:
-   - Uses a per-pixel Cranley-Patterson shifted R2 low-discrepancy sequence (`alpha = (0.7548776662, 0.5698402910)`) across sub-pixel jitter, sun cone shadows, GGX microfacet reflection rays, clearcoat reflection rays, and cosine-weighted GI rays for fast convergence at 32 SPP.
-2. **Ray-Traced Soft Area Sun Shadows**:
-   - `shadowRT.accept_any_intersection(true)` traces cone-jittered rays (`sampleCone`) toward the sun disc, producing true contact-hardening shadows under the tires and widebody skirts with soft penumbras at distance.
-3. **Ray-Traced Specular Reflections (RTR)**:
-   - **Wet Asphalt Puddles**: Domain-warped `fbm2D` puddle masks vary surface roughness from `0.018` (mirror puddles) to `0.54` (damp rough asphalt). GGX importance-sampled reflection rays intersect actual 3D car triangles, glowing headlights/taillights, alloy rims, and Rockport neon/concrete towers.
-   - **Dual-Lobe Metallic Clearcoat Car Paint**: Combines analytical BMW M3 GTR silver (`#C7CFD9`) + cobalt blue racing livery (`evaluateBMWLivery`) + subtle micro-flake perturbation with a secondary low-roughness (`0.03`) IOR 1.5 clearcoat reflection ray capturing car self-reflections and environment highlights.
-4. **RTAO & 1-Bounce RTGI**:
-   - Cosine-weighted hemisphere bounce rays (`max_distance = 24.0`) compute distance-attenuated ambient occlusion and inject real secondary bounce radiance from sunlit asphalt, glowing xenon/taillight emitters, and neon architectural strips.
-5. **Glass Fresnel Reflection + Transmission**:
-   - Glass hits evaluate Schlick Fresnel (`IOR = 1.52`), trace a secondary reflection ray off the windshield/headlight cover, and trace a continuation transmission ray through the glass onto the interior rollcage/bucket seat or xenon projector housing.
-6. **HDR Post-Processing & Split Comparison**:
-   - `RGBA32Float` progressive accumulation → half-resolution bright-pass bloom threshold (`bloomThresholdKernel`) → 2-pass separable 9-tap Gaussian blur (`bloomBlurKernel`) → ACES Filmic tone mapping + subtle vignette + sRGB encode (`compositeKernel`).
-   - `--compare-out` renders a split comparison frame with an RT-Off raster-style baseline on the left half (`x < width/2`) and full M5 Pro Hardware Ray Tracing on the right half (`x > width/2`).
+1. **Physically-Based Nishita Atmosphere + Moody East Coast Autumn Storm Clouds**:
+   - Single-scattering Rayleigh + Mie atmospheric raymarch with Henyey-Greenstein solar aureole, 6-layer 3D fBM dramatic East Coast late-autumn storm clouds, soft atmospheric horizon haze, and gritty Rockport industrial lighting.
+2. **Heitz GGX VNDF Sampling & Firefly Clamping**:
+   - Uses Cranley-Patterson shifted Roberts R2 quasi-Monte Carlo sequences (`alpha = (0.7548776662, 0.5698402910)`) paired with **GGX VNDF** importance sampling (`sampleGGXVNDF`), finite sun/moon disc clearcoat roughness flooring, single-counted analytical sun/moon speculars (`includeSunDisc = false` on secondary glossy rays), and secondary radiance clamping (`6.5` GI / `9.0–10.0` glossy reflection) to eliminate fireflies.
+3. **GPU Edge-Preserving À-Trous Joint-Bilateral Denoiser (`denoiseAtrousKernel`)**:
+   - `raytraceKernel` emits demodulated diffuse (`accumDiffTex`) and specular (`accumSpecTex`) accumulation buffers alongside progressive `gAlbedoTex`, `gEmissiveTex`, `gNormalRoughTex`, and `gDepthTex`.
+   - `denoiseAtrousKernel` executes **4 passes** (step sizes `1, 2, 4, 8`) with a 5×5 B3-spline kernel weighted by surface normal dot (`pow(max(dot(nP, nQ), 0), 48)`), depth similarity, luminance difference, and roughness-aware specular radius scaling (preserving mirror-sharp clearcoat and wet puddle reflections).
+   - `remodulateKernel` combines `denoisedDiff * gAlbedo + denoisedSpec + gEmissive`, feeding half-res bloom (`bloomThresholdKernel` + `bloomBlurKernel`) and ACES Filmic grading (`compositeKernel`).
+4. **Authentic UV-Mapped NFSMW 2005 Hero Materials & Gritty Rockport Industrial Overpass**:
+   - **Real PS2 UV-Mapped Hero Livery & Badges**: Loads local runtime-extracted `BMWM3GTRE46_PSRTEST_MASK` (edge-sharpened 2048×2048), `BMWM3GTRE46_BADGING` (BMW roundel emblem, M3 trunk badge, amber side markers, hood pins), `BMWM3GTRE46_MISC` (BMW kidney grille, honeycomb air dam, hood louver vents, M3 side fender gills, fuel cap, crimson "brembo" calipers), `KIT00_HEADL` (authentic BMW E46 twin projector headlights + fluted amber turn signals), `KIT00_BRAKE` (authentic E46 M3 LED taillights), `TIRE` (stock BMW M3 GTR deep-dish BBS race wheels), and `INTERIOR` (red racing bucket seat & rollcage), with clean offline procedural fallbacks for `--synthetic`.
+   - **Gritty Rockport Overpass & Industrial Safehouse Dockyard**: Real ImageIO-loaded CC0 4K/2K wet asphalt & weathered concrete maps, formwork-seamed viaduct piers & overhead highway deck, corrugated weathered steel warehouse loading dock with hanging warm tungsten-sodium pendant worklamps, steel W-beam guardrail, and glowing raised amber/white road cat's-eyes.
 
 ---
 
-## 4. Measured Apple M5 Pro Benchmarks (1920×1080 @ 32 SPP)
+## 4. Measured Apple M5 Pro Benchmarks (1920×1080 @ 64 SPP, À-Trous 4-Pass)
 
-Observed directly on **Apple M5 Pro (20-core GPU, Metal 4)** against `build/metal_wave3/scene/scene.json` (**24 BLASes**, **7,996 triangles**):
+Observed directly on **Apple M5 Pro (20-core GPU, Metal 4)** against authentic UV-mapped `build/flywheel/hq_m3_gtr/scene.json` (**36 TLAS instances**, **29,516 triangles**):
 
-| Output | Resolution & SPP | Measured GPU Render Time |
+| Output | Mode & Settings | Measured GPU Render Time |
 | :--- | :--- | :--- |
-| `build/metal_rt_wave3/rt_bmw_m3_gtr_golden_hour.png` | 1920×1080 @ 32 SPP | **0.34 s** |
-| `build/metal_rt_wave3/rt_comparison_split.png` | 1920×1080 @ 32 SPP (split) | **0.25 s** |
-| `build/metal_rt_wave3/rt_bmw_m3_gtr_night_neon.png` | 1920×1080 @ 32 SPP | **0.36 s** |
-
----
-
-## 5. Offline CI & Self-Contained Scene Modes
-
-- **Primary (`scene.json`)**: Loads all visible extracted BMW M3 GTR E46 + Enkei wheel meshes from `build/metal_wave3/scene/scene.json` and CC0 4K wet asphalt / carbon fiber textures if present.
-- **Direct OBJ (`--scene build/obj_preview`)**: Directly parses raw PS2 Z-up OBJs from `build/obj_preview/`, converts `(-y_ps2, z_ps2 + 0.131551, x_ps2)` into Y-up meters, computes smooth area-weighted vertex normals, and places all 4 wheels at the wheel-arch coordinates.
-- **Offline CI (`--synthetic`)**: Generates a clean procedural widebody coupe + rear wing + 4 wheels + headlights/taillights + Rockport plaza without requiring an ISO or extracted `build/` assets.
+| `build/metal_rt_wave4/rt_bmw_m3_gtr_golden_hour.png` | 1920×1080 @ 64 SPP (`atrous4`) | **1.47 s** |
+| `build/metal_rt_wave4/rt_comparison_split.png` | 1920×1080 @ 64 SPP (split RT-Off / RT-On) | **1.01 s** |
+| `build/metal_rt_wave4/rt_bmw_m3_gtr_night_rain.png` | 1920×1080 @ 64 SPP (`night_neon`, `atrous4`) | **1.45 s** |
+| `build/metal_rt_wave4/rt_bmw_m3_gtr_drive_demo.png` | 1920×1080 @ 64 SPP (`--drive-demo --speed-kmh 165 --steer-deg 10`) | **1.62 s** |
+| `build/metal_rt_wave4/rt_bmw_m3_gtr_daylight.png` | 1920×1080 @ 64 SPP (`daylight`, `atrous4`) | **1.46 s** |

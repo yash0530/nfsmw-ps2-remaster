@@ -125,3 +125,16 @@ patch=0,EE,003DE778,word,3C013C88
 author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
 description=Enables EA's hidden built-in 2-VBlank limiter (0x0054B5D8=1) in eDisplayFrame() for perfectly even 30 FPS frame pacing on lower-end hardware.
 patch=0,EE,0054B5D8,word,00000001
+
+[Real-Time Planar Damp-Asphalt Road Reflections (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Unlocks native PS2 planar road reflections during sunlit dry racing in Rain::UpdateAndRender (zero rain curtains/droplets) tuned to 0.65f realistic damp-asphalt sheen with fast 0.5s spawn fade-in.
+patch=0,EE,00407560,word,00000000
+patch=0,EE,005A2C80,word,3F266666
+patch=0,EE,004075A0,word,3C013D4C
+patch=0,EE,004075A4,word,3421CCCD
+
+[High-Detail Car EnvMap and Road Reflection Scenery (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Lowers DrawAScenery reflection-view projected-pixel cull threshold (0x003DB0D4) from 32px to 12px so 2.6x more Rockport skyline buildings and autumn trees render inside car 5-face envmaps and planar road reflections.
+patch=0,EE,003DB0D4,word,2A02000C

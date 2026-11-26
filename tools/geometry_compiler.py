@@ -598,25 +598,28 @@ def build_triangle_strips(
     return all_batches
 
 
-def _choose_integer_bases(
+def _compute_vu1_strip_bounds_and_bases(
     verts: Sequence[Tuple[float, float, float]], scale: float
-) -> List[float]:
-    """Choose integer coordinate bases so `(v - base) / scale` fits cleanly in int16."""
-    max_span = 32760 * scale
-    bases: List[float] = []
-    for ax in range(3):
-        vals = [v[ax] for v in verts]
-        vmin, vmax = min(vals), max(vals)
-        if vmin >= -max_span and vmax <= max_span:
-            bases.append(0.0)
-        else:
-            mid = round(0.5 * (vmin + vmax))
-            if (vmin - mid) < -max_span or (vmax - mid) > max_span:
-                raise ValueError(
-                    f"Strip axis {ax} span [{vmin:.4f}, {vmax:.4f}] exceeds int16 range at scale={scale}"
-                )
-            bases.append(float(mid))
-    return bases
+) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], List[float]]:
+    """Compute float32 strip AABB `(vec2, vec3)` and exact PS2 VU1 integer bases.
+
+    Retail SLUS-21351 VU1 microprogram (`.vutext` `0x0f48..0x1028`) reconstructs
+    every compressed int16 vertex position strictly from `vec2` at `2(TOPS)` via:
+      LQ.xyzw   vf8, 2(vi12)      ; vf8 = vec2 (float32)
+      FTOI0.xyzw vf8, vf8         ; trunc toward zero
+      ITOF0.xyzw vf8, vf8         ; float(trunc(vec2))
+      SUBw.xyz  vf8, vf8, vf0     ; vf8.xyz = float(trunc(vec2)) - 1.0
+      MULi / ADD{x,y,z}           ; pos = q * scale + vf8.xyz
+
+    Quantizing against any other base (such as 0.0) shifts strips by 1-3 meters on
+    real PS2/PCSX2 VU1 hardware.
+    """
+    vmins = [min(v[ax] for v in verts) for ax in range(3)]
+    vmaxs = [max(v[ax] for v in verts) for ax in range(3)]
+    vec2 = tuple(struct.unpack("<f", struct.pack("<f", vmin - 0.01))[0] for vmin in vmins)
+    vec3 = tuple(struct.unpack("<f", struct.pack("<f", vmax + 0.01))[0] for vmax in vmaxs)
+    bases = [float(int(v2) - 1) for v2 in vec2]
+    return (vec2[0], vec2[1], vec2[2]), (vec3[0], vec3[1], vec3[2]), bases
 
 
 def pack_vif_strip(
@@ -625,6 +628,7 @@ def pack_vif_strip(
     uvs: Sequence[Tuple[float, float]],
     adcs: Sequence[int],
     scale: float = DEFAULT_SCALE,
+    light_material_index: int = 0,
 ) -> bytes:
     """Encode one PS2 VU1/VIF strip DMA packet buffer (16-byte qword aligned)."""
     nv = len(verts)
@@ -633,30 +637,36 @@ def pack_vif_strip(
     if len(normals) != nv or len(uvs) != nv or len(adcs) != nv:
         raise ValueError("verts, normals, uvs, and adcs must have equal length")
 
-    bases = _choose_integer_bases(verts, scale)
-    xs_q = [max(-32768, min(32767, round((v[0] - bases[0]) / scale))) for v in verts]
-    ys_q = [max(-32768, min(32767, round((v[1] - bases[1]) / scale))) for v in verts]
-    zs_q = [max(-32768, min(32767, round((v[2] - bases[2]) / scale))) for v in verts]
+    vec2, vec3, bases = _compute_vu1_strip_bounds_and_bases(verts, scale)
 
-    vec2 = (
-        bases[0] + min(xs_q) * scale - 0.01,
-        bases[1] + min(ys_q) * scale - 0.01,
-        bases[2] + min(zs_q) * scale - 0.01,
-    )
-    vec3 = (
-        bases[0] + max(xs_q) * scale + 0.01,
-        bases[1] + max(ys_q) * scale + 0.01,
-        bases[2] + max(zs_q) * scale + 0.01,
-    )
+    def _quantize_axis(ax: int) -> List[int]:
+        b = bases[ax]
+        out_q: List[int] = []
+        for v in verts:
+            q = round((v[ax] - b) / scale)
+            if q < -32768 or q > 32767:
+                raise ValueError(
+                    f"Strip axis {ax} vertex {v[ax]:.4f} (vec2={vec2[ax]:.4f}, base={b:.1f}, q={q}) "
+                    f"exceeds PS2 VU1 signed int16 range at scale={scale}"
+                )
+            out_q.append(q)
+        return out_q
+
+    xs_q = _quantize_axis(0)
+    ys_q = _quantize_axis(1)
+    zs_q = _quantize_axis(2)
 
     v1_0, v1_2, v1_3 = solve_vu_adc_seeds(adcs)
     v1_1 = struct.unpack("<I", struct.pack("<f", scale))[0]
+    # .vutext 0x0590..0x0610: bit 2 (0x04) = compressed int16 pos; bit 4 (0x10) = 0.0002m vs 1/256m
+    hdr_b2 = 0x07 if abs(scale - (1.0 / 256.0)) <= 1e-7 else 0x17
+    hdr_b3 = (light_material_index * 4) & 0xFF
 
     buf = bytearray()
 
-    # 1. addr 0x00: strip header [nv, (nv - 1) // 4, 0x17, 0x04]
+    # 1. addr 0x00: strip header [nv, (nv - 1) // 4, hdr_b2, lm * 4]
     buf += struct.pack("<I", 0x6E018000)
-    buf += struct.pack("<4B", nv, (nv - 1) // 4, 0x17, 0x04)
+    buf += struct.pack("<4B", nv, (nv - 1) // 4, hdr_b2, hdr_b3)
 
     # 2. addr 0x01: v1[0..3] (LFSR seeds + scale)
     buf += struct.pack("<I", 0x6C01C001)
@@ -778,6 +788,7 @@ def build_mesh_container(
     plat_version: int = 32,
     plat_strip_flags: int = 0x4180,
     max_strip_verts: int = MAX_STRIP_VERTS,
+    auto_coarse_scale: bool = False,
 ) -> Tuple[bytes, int, int, int, int]:
     """Compile a CompiledMesh into a `0x80134100` PS2 VU1/VIF Mesh Container.
 
@@ -789,6 +800,24 @@ def build_mesh_container(
     batches = build_triangle_strips(
         mesh.triangles, group_meta=mesh.group_meta, max_strip_verts=max_strip_verts
     )
+
+    effective_scale = scale
+    if auto_coarse_scale and effective_scale < (1.0 / 256.0):
+        for batch in batches:
+            b_verts = [mesh.vertices[i] for i in batch.indices]
+            _v2, _v3, bases = _compute_vu1_strip_bounds_and_bases(b_verts, effective_scale)
+            overflow = False
+            for v in b_verts:
+                for ax in range(3):
+                    q = round((v[ax] - bases[ax]) / effective_scale)
+                    if q < -32768 or q > 32767:
+                        overflow = True
+                        break
+                if overflow:
+                    break
+            if overflow:
+                effective_scale = 1.0 / 256.0
+                break
 
     strip_entries = bytearray()
     vif_buf = bytearray()
@@ -802,7 +831,14 @@ def build_mesh_container(
         b_verts = [mesh.vertices[i] for i in batch.indices]
         b_norms = [mesh.normals[i] for i in batch.indices]
         b_uvs = [mesh.uvs[i] for i in batch.indices]
-        pkt = pack_vif_strip(b_verts, b_norms, b_uvs, batch.adcs, scale=scale)
+        pkt = pack_vif_strip(
+            b_verts,
+            b_norms,
+            b_uvs,
+            batch.adcs,
+            scale=effective_scale,
+            light_material_index=batch.lm,
+        )
         qsz = len(pkt) // 16
         if qoff > MAX_QOFF:
             raise ValueError(
@@ -880,6 +916,7 @@ def build_solid_pack_from_template(
     scale: float = DEFAULT_SCALE,
     max_strip_verts: int = MAX_STRIP_VERTS,
     max_solid_bytes: int = DEFAULT_MAX_SOLID_BYTES,
+    auto_coarse_scale: bool = False,
 ) -> Tuple[bytes, CompileStats]:
     """Rebuild an existing `0x80134010` SolidPack with a new CompiledMesh."""
     cid, csz = struct.unpack_from("<II", orig_solid_bytes, 0)
@@ -943,11 +980,14 @@ def build_solid_pack_from_template(
     # Merge original strip_flags & poly_group into mesh.group_meta where not overridden
     merged_meta = dict(orig_group_meta)
     merged_meta.update(mesh.group_meta)
+    valid_tris = [t for t in mesh.triangles if t[0] != t[1] and t[1] != t[2] and t[0] != t[2]]
+    if not valid_tris:
+        raise ValueError(f"SolidPack '{part_name}' has zero non-degenerate triangles")
     compile_mesh = CompiledMesh(
         vertices=mesh.vertices,
         normals=mesh.normals,
         uvs=mesh.uvs,
-        triangles=mesh.triangles,
+        triangles=valid_tris,
         group_meta=merged_meta,
     )
 
@@ -982,6 +1022,7 @@ def build_solid_pack_from_template(
         plat_version=plat_ver,
         plat_strip_flags=plat_strip_flags,
         max_strip_verts=max_strip_verts,
+        auto_coarse_scale=auto_coarse_scale,
     )
     inner += c_mesh
     solid_bytes = _make_bchunk(CHUNK_SOLID_PACK, bytes(inner))
@@ -1114,21 +1155,192 @@ def build_synthetic_geometry_pack(
 
 
 # ---------------------------------------------------------------------------
-# GEOMETRY.BIN Repacker (`replace_solid_in_pack`)
+# PS2 VU1 Hardware Invariant Verifier
 # ---------------------------------------------------------------------------
 
 
-def replace_solid_in_pack(
+def verify_solid_vu1_invariants(
     pack_data: bytes,
-    target_solid_name: str,
-    mesh: CompiledMesh,
+    part: gi.SolidPartInfo,
+    expected_min: Optional[Sequence[float]] = None,
+    expected_max: Optional[Sequence[float]] = None,
+) -> Dict[str, Any]:
+    """Verify every VIF strip in `part` satisfies retail SLUS-21351 VU1 hardware invariants.
+
+    Simulates the exact `.vutext` (`0x0f48..0x1028`) position decode:
+      `base[ax] = float(int(vec2[ax]) - 1)`
+      `pos[ax]  = base[ax] + q[ax] * scale`
+    and verifies:
+      - `bad_tag == 0` (`hdr_tag == 0x6E018000`, `b0 == nv`, `b1 == (nv - 1) // 4`)
+      - `bad_b2 == 0` (`0x17` for `0.0002`m, `0x07` for `1/256`m)
+      - `bad_b3 == 0` (`(lm * 4) & 0xFF`)
+      - `bad_q == 0` (every quantized int16 `q` in `[0, 32767]` and within strip `[vec2, vec3]`)
+      - `vu1_aabb_err`: max abs diff between VU1-reconstructed AABB and `expected_min`/`expected_max`
+        (or `part.aabb_min`/`part.aabb_max` if expected bounds are omitted)
+    """
+    off = part.chunk_offset
+    _, csz = struct.unpack_from("<II", pack_data, off)
+    cur = off + 8
+    end = min(len(pack_data), cur + csz)
+    strips: List[Tuple[Any, ...]] = []
+    vif_start = 0
+    while cur + 8 <= end:
+        scid, scsz = struct.unpack_from("<II", pack_data, cur)
+        if scid == CHUNK_MESH_CONT:
+            mp = cur + 8
+            mend = min(end, mp + scsz)
+            while mp + 8 <= mend:
+                mcid, mcsz = struct.unpack_from("<II", pack_data, mp)
+                po = gi._skip_11_padding(pack_data, mp + 8, min(mend, mp + 8 + mcsz))
+                if mcid == CHUNK_STRIP_TABLE:
+                    so = po
+                    st_end = min(mend, mp + 8 + mcsz)
+                    while so + 16 <= st_end:
+                        strips.append(struct.unpack_from("<HBBfHbbBBbb", pack_data, so))
+                        so += 16
+                elif mcid == CHUNK_VIF_DATA:
+                    vif_start = po
+                mp += 8 + mcsz
+        cur += 8 + scsz
+
+    bad_tag = 0
+    bad_b2 = 0
+    bad_b3 = 0
+    bad_q = 0
+    max_overshoot = 0.0
+    first_scale = 0.0
+    sim_mins = [float("inf")] * 3
+    sim_maxs = [float("-inf")] * 3
+
+    for s in strips:
+        _fl, nv, _np, _md, qoff, _nz, _nt, qsz, _pg, _tx, lm = s
+        sb = pack_data[vif_start + qoff * 16 : vif_start + (qoff + qsz) * 16]
+        if len(sb) < 0x38:
+            bad_tag += 1
+            continue
+        hdr_tag, b0, b1, b2, b3 = struct.unpack_from("<I4B", sb, 0)
+        if hdr_tag != 0x6E018000 or b0 != nv or b1 != (nv - 1) // 4:
+            bad_tag += 1
+
+        scale = struct.unpack_from("<f", sb, 0x10)[0]
+        if first_scale == 0.0:
+            first_scale = scale
+        exp_b2 = 0x07 if abs(scale - (1.0 / 256.0)) <= 1e-7 else 0x17
+        if b2 != exp_b2:
+            bad_b2 += 1
+        if b3 != ((lm * 4) & 0xFF):
+            bad_b3 += 1
+
+        vec2 = struct.unpack_from("<3f", sb, 0x20)
+        vec3 = struct.unpack_from("<3f", sb, 0x2C)
+        vu1_base = [float(int(c) - 1) for c in vec2]
+
+        q_off = 0
+        pos_ints: List[int] = []
+        while q_off + 4 <= len(sb):
+            tag = struct.unpack_from("<I", sb, q_off)[0]
+            cmd = (tag >> 24) & 0xFF
+            num = (tag >> 16) & 0xFF
+            imm = tag & 0xFFFF
+            if cmd == 0:
+                q_off += 4
+                continue
+            if (cmd & 0x60) == 0x60:
+                vn = (cmd >> 2) & 3
+                vl = cmd & 3
+                addr = imm & 0x3FF
+                cnt = 256 if num == 0 else num
+                eb = (32, 16, 8, 16)[vl]
+                tb = (16 if vl == 3 else (vn + 1) * eb) * cnt
+                blen = ((tb + 31) // 32) * 4
+                if 5 <= addr < 0x1D and vl == 1:
+                    pos_ints.extend(struct.unpack(f"<{blen // 2}h", sb[q_off + 4 : q_off + 4 + blen]))
+                q_off += 4 + blen
+            else:
+                q_off += 4
+
+        xs: List[int] = []
+        ys: List[int] = []
+        zs: List[int] = []
+        pi = 0
+        rem = nv
+        while rem > 0 and pi + 3 * min(4, rem) <= len(pos_ints):
+            b = min(4, rem)
+            xs.extend(pos_ints[pi : pi + b])
+            ys.extend(pos_ints[pi + b : pi + 2 * b])
+            zs.extend(pos_ints[pi + 2 * b : pi + 3 * b])
+            pi += 3 * b
+            rem -= b
+
+        if len(xs) != nv:
+            bad_q += max(1, nv - len(xs))
+            continue
+
+        for ax, arr in enumerate((xs, ys, zs)):
+            for val in arr:
+                if val < 0 or val > 32767:
+                    bad_q += 1
+                p_vu1 = vu1_base[ax] + val * scale
+                if p_vu1 < vec2[ax]:
+                    max_overshoot = max(max_overshoot, vec2[ax] - p_vu1)
+                    if vec2[ax] - p_vu1 > 1e-4:
+                        bad_q += 1
+                elif p_vu1 > vec3[ax]:
+                    max_overshoot = max(max_overshoot, p_vu1 - vec3[ax])
+                    if p_vu1 - vec3[ax] > 1e-4:
+                        bad_q += 1
+                if p_vu1 < sim_mins[ax]:
+                    sim_mins[ax] = p_vu1
+                if p_vu1 > sim_maxs[ax]:
+                    sim_maxs[ax] = p_vu1
+
+    ref_min = list(expected_min) if expected_min is not None else list(part.aabb_min)
+    ref_max = list(expected_max) if expected_max is not None else list(part.aabb_max)
+    if strips and sim_mins[0] != float("inf"):
+        vu1_aabb_err = max(
+            max(abs(sim_mins[ax] - ref_min[ax]), abs(sim_maxs[ax] - ref_max[ax]))
+            for ax in range(3)
+        )
+        vu1_esolid_aabb_err = max(
+            max(abs(sim_mins[ax] - part.aabb_min[ax]), abs(sim_maxs[ax] - part.aabb_max[ax]))
+            for ax in range(3)
+        )
+    else:
+        vu1_aabb_err = 0.0
+        vu1_esolid_aabb_err = 0.0
+
+    return {
+        "solid_name": part.name,
+        "strip_count": len(strips),
+        "scale": first_scale,
+        "bad_tag": bad_tag,
+        "bad_b2": bad_b2,
+        "bad_b3": bad_b3,
+        "bad_q": bad_q,
+        "vu1_aabb_err": round(vu1_aabb_err, 6),
+        "vu1_esolid_aabb_err": round(vu1_esolid_aabb_err, 6),
+        "vu1_strip_overshoot": round(max_overshoot, 6),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GEOMETRY.BIN Repacker (`replace_solids_in_pack` / `replace_solid_in_pack`)
+# ---------------------------------------------------------------------------
+
+
+def replace_solids_in_pack(
+    pack_data: bytes,
+    replacements: Dict[str, CompiledMesh],
     *,
     scale: float = DEFAULT_SCALE,
     max_strip_verts: int = MAX_STRIP_VERTS,
     max_solid_bytes: int = DEFAULT_MAX_SOLID_BYTES,
     max_pack_bytes: int = DEFAULT_MAX_PACK_BYTES,
-) -> Tuple[bytes, CompileStats]:
-    """Replace one named `0x80134010` solid in a GeometryPack, keeping all others byte-intact."""
+    auto_coarse_scale: bool = False,
+) -> Tuple[bytes, Dict[str, CompileStats]]:
+    """Replace one or more named `0x80134010` solids in a GeometryPack, keeping all others byte-intact."""
+    if not replacements:
+        raise ValueError("replacements must be non-empty")
     if len(pack_data) < 16:
         raise ValueError("Geometry pack too small")
     root_id, root_sz = struct.unpack_from("<II", pack_data, 0)
@@ -1177,21 +1389,28 @@ def replace_solid_in_pack(
     if not found_info or not solids:
         raise ValueError("Invalid GeometryPack: missing 0x80134001 or 0x80134010 solids")
 
-    match_indices = [i for i, (_, nm, _) in enumerate(solids) if nm == target_solid_name]
-    if not match_indices:
-        raise KeyError(f"Solid '{target_solid_name}' not found in GeometryPack")
-    if len(match_indices) > 1:
-        raise ValueError(f"Multiple solids named '{target_solid_name}' in GeometryPack")
-    target_idx = match_indices[0]
+    name_to_indices: Dict[str, List[int]] = defaultdict(list)
+    for i, (_, nm, _) in enumerate(solids):
+        name_to_indices[nm].append(i)
 
-    new_solid_bytes, stats = build_solid_pack_from_template(
-        solids[target_idx][2],
-        mesh,
-        scale=scale,
-        max_strip_verts=max_strip_verts,
-        max_solid_bytes=max_solid_bytes,
-    )
-    solids[target_idx] = (solids[target_idx][0], solids[target_idx][1], new_solid_bytes)
+    stats_by_name: Dict[str, CompileStats] = {}
+    for target_solid_name, mesh in replacements.items():
+        match_indices = name_to_indices.get(target_solid_name, [])
+        if not match_indices:
+            raise KeyError(f"Solid '{target_solid_name}' not found in GeometryPack")
+        if len(match_indices) > 1:
+            raise ValueError(f"Multiple solids named '{target_solid_name}' in GeometryPack")
+        target_idx = match_indices[0]
+        new_solid_bytes, st = build_solid_pack_from_template(
+            solids[target_idx][2],
+            mesh,
+            scale=scale,
+            max_strip_verts=max_strip_verts,
+            max_solid_bytes=max_solid_bytes,
+            auto_coarse_scale=auto_coarse_scale,
+        )
+        solids[target_idx] = (solids[target_idx][0], solids[target_idx][1], new_solid_bytes)
+        stats_by_name[target_solid_name] = st
 
     # Detect whether 0x00134002+0x68 stores total file size (all 91 CARS\* packs do)
     hdr02_tracks_file_size = False
@@ -1274,8 +1493,33 @@ def replace_solid_in_pack(
 
     root_payload = bytes(prefix_bytes) + new_info_chunk + bytes(body_after_info)
     out_bytes = _make_bchunk(CHUNK_GEOM_PACK, root_payload) + tail_bytes
-    stats.pack_bytes = len(out_bytes)
-    return out_bytes, stats
+    for st in stats_by_name.values():
+        st.pack_bytes = len(out_bytes)
+    return out_bytes, stats_by_name
+
+
+def replace_solid_in_pack(
+    pack_data: bytes,
+    target_solid_name: str,
+    mesh: CompiledMesh,
+    *,
+    scale: float = DEFAULT_SCALE,
+    max_strip_verts: int = MAX_STRIP_VERTS,
+    max_solid_bytes: int = DEFAULT_MAX_SOLID_BYTES,
+    max_pack_bytes: int = DEFAULT_MAX_PACK_BYTES,
+    auto_coarse_scale: bool = False,
+) -> Tuple[bytes, CompileStats]:
+    """Replace one named `0x80134010` solid in a GeometryPack, keeping all others byte-intact."""
+    out_bytes, stats_map = replace_solids_in_pack(
+        pack_data,
+        {target_solid_name: mesh},
+        scale=scale,
+        max_strip_verts=max_strip_verts,
+        max_solid_bytes=max_solid_bytes,
+        max_pack_bytes=max_pack_bytes,
+        auto_coarse_scale=auto_coarse_scale,
+    )
+    return out_bytes, stats_map[target_solid_name]
 
 
 # ---------------------------------------------------------------------------

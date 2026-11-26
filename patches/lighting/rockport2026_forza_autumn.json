@@ -1,0 +1,1201 @@
+{
+  "schema_version": 1,
+  "id": "rockport2026_forza_autumn",
+  "name": "Rockport 2026 Forza Horizon Autumn Golden Hour Lighting",
+  "description": "Forza Horizon-inspired luminous late-afternoon autumn golden hour for GLOBAL\\GLOBALB.LZC: tunes ALL 5 SunInfos profiles (SUNSET, MIDDAY, PARKLAND, PROTOTYPE, E3DEMO) with low warm rim-light solar elevation and crisp peach-gold shafts, lifts wet-asphalt specular response on ROAD, and enriches chrome, aluminum, glass, carbon, and metallic car clearcoat bounce across 28 LightMaterials without muddy olive/brown crushing. Verified byte-exact against untouched SLUS-21351 and packs in-place inside GLOBALMEMORYFILE.BIN.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\GLOBALB.LZC",
+    "uncompressed_bytes": 871900,
+    "companion_memfile": "GLOBAL\\GLOBALMEMORYFILE.BIN"
+  },
+  "patches": [
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "Position",
+      "expected_offset": "0x000abbf0",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        1700.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        1250.0
+      ],
+      "note": "Low late-afternoon autumn rim-light solar elevation"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abbfc",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        1700.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        1250.0
+      ],
+      "note": "Elongated autumn golden-hour car shadows"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc10",
+      "expected_orig": 1.0,
+      "new_value": 1.38,
+      "note": "Luminous golden-hour solar core"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Size",
+      "expected_offset": "0x000abc14",
+      "expected_orig": 60.0,
+      "new_value": 76.0,
+      "note": "Glowing late-afternoon solar disc"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abc20",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        240,
+        192,
+        128
+      ],
+      "note": "Crisp warm sunlit gold-white core"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc34",
+      "expected_orig": 0.5,
+      "new_value": 0.68,
+      "note": "Rich luminous autumn horizon corona"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Size",
+      "expected_offset": "0x000abc38",
+      "expected_orig": 320.0,
+      "new_value": 450.0,
+      "note": "Broad luminous horizon atmospheric scatter"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abc44",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        255,
+        184,
+        98,
+        128
+      ],
+      "note": "Clean sunlit amber-peach scatter replacing olive [130,110,25]"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc58",
+      "expected_orig": 0.7,
+      "new_value": 0.82,
+      "note": "Crisp golden autumn crepuscular beams"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Size",
+      "expected_offset": "0x000abc5c",
+      "expected_orig": 800.0,
+      "new_value": 940.0,
+      "note": "Extended horizon sun shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abc68",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        255,
+        200,
+        134,
+        128
+      ],
+      "note": "Luminous peach-gold major rays"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abc7c",
+      "expected_orig": 0.32,
+      "new_value": 0.44,
+      "note": "Balanced warm cross-flare shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Size",
+      "expected_offset": "0x000abc80",
+      "expected_orig": 800.0,
+      "new_value": 900.0,
+      "note": "Wide secondary golden shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "SUNSET",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abc8c",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        255,
+        188,
+        122,
+        128
+      ],
+      "note": "Clean apricot-gold cross shafts"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "Position",
+      "expected_offset": "0x000abf20",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        1250.0
+      ],
+      "note": "Apply Forza autumn late-afternoon angle to MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abf2c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        1250.0
+      ],
+      "note": "Sync MIDDAY car shadows to autumn golden-hour vector"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf40",
+      "expected_orig": 1.0,
+      "new_value": 1.38,
+      "note": "Luminous golden solar core in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Size",
+      "expected_offset": "0x000abf44",
+      "expected_orig": 60.0,
+      "new_value": 76.0,
+      "note": "Glowing solar disc size in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abf50",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        240,
+        192,
+        128
+      ],
+      "note": "Warm sunlit gold-white core in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf64",
+      "expected_orig": 0.5,
+      "new_value": 0.68,
+      "note": "Rich autumn corona in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Size",
+      "expected_offset": "0x000abf68",
+      "expected_orig": 320.0,
+      "new_value": 450.0,
+      "note": "Wide autumn horizon halo in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abf74",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        255,
+        184,
+        98,
+        128
+      ],
+      "note": "Clean amber-peach corona in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abf88",
+      "expected_orig": 0.7,
+      "new_value": 0.82,
+      "note": "Golden sunbeams in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Size",
+      "expected_offset": "0x000abf8c",
+      "expected_orig": 800.0,
+      "new_value": 940.0,
+      "note": "Extended golden sun shafts in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abf98",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        255,
+        200,
+        134,
+        128
+      ],
+      "note": "Peach-gold major shafts in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "IntensityScale",
+      "expected_offset": "0x000abfac",
+      "expected_orig": 0.32,
+      "new_value": 0.44,
+      "note": "Secondary warm shafts in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Size",
+      "expected_offset": "0x000abfb0",
+      "expected_orig": 800.0,
+      "new_value": 900.0,
+      "note": "Wide secondary shafts in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "MIDDAY",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abfbc",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        255,
+        188,
+        122,
+        128
+      ],
+      "note": "Apricot-gold secondary shafts in MIDDAY"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PARKLAND",
+      "field": "Position",
+      "expected_offset": "0x000abae0",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        2400.0
+      ],
+      "new_value": [
+        5050.0,
+        -1200.0,
+        1450.0
+      ],
+      "note": "Align L2RA SunTrack PARKLAND vector with autumn golden hour"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PARKLAND",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abaec",
+      "expected_orig": [
+        4500.0,
+        -300.0,
+        2400.0
+      ],
+      "new_value": [
+        5050.0,
+        -1200.0,
+        1450.0
+      ],
+      "note": "Sync PARKLAND car shadow direction to low autumn sun"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PROTOTYPE",
+      "field": "Position",
+      "expected_offset": "0x000abd00",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        1250.0
+      ],
+      "note": "Align PROTOTYPE sun vector with Forza autumn golden hour"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "PROTOTYPE",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abd0c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        1250.0
+      ],
+      "note": "Align PROTOTYPE shadow vector with Forza autumn golden hour"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "Position",
+      "expected_offset": "0x000abe10",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        1250.0
+      ],
+      "note": "Align E3DEMO sun vector with Forza autumn golden hour"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "CarShadowPosition",
+      "expected_offset": "0x000abe1c",
+      "expected_orig": [
+        5300.0,
+        -3550.0,
+        3000.0
+      ],
+      "new_value": [
+        5250.0,
+        -1450.0,
+        1250.0
+      ],
+      "note": "Align E3DEMO shadow vector with Forza autumn golden hour"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 0,
+      "member": "Colour",
+      "expected_offset": "0x000abe40",
+      "expected_orig": [
+        255,
+        200,
+        100,
+        128
+      ],
+      "new_value": [
+        255,
+        240,
+        192,
+        128
+      ],
+      "note": "Match E3DEMO solar core to autumn gold-white"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 1,
+      "member": "Colour",
+      "expected_offset": "0x000abe64",
+      "expected_orig": [
+        130,
+        110,
+        25,
+        128
+      ],
+      "new_value": [
+        255,
+        184,
+        98,
+        128
+      ],
+      "note": "Match E3DEMO corona to luminous amber-peach"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 2,
+      "member": "Colour",
+      "expected_offset": "0x000abe88",
+      "expected_orig": [
+        159,
+        122,
+        75,
+        128
+      ],
+      "new_value": [
+        255,
+        200,
+        134,
+        128
+      ],
+      "note": "Match E3DEMO major rays to peach-gold"
+    },
+    {
+      "section": "SunInfos",
+      "profile": "E3DEMO",
+      "field": "SunLayers",
+      "index": 3,
+      "member": "Colour",
+      "expected_offset": "0x000abeac",
+      "expected_orig": [
+        166,
+        119,
+        72,
+        128
+      ],
+      "new_value": [
+        255,
+        188,
+        122,
+        128
+      ],
+      "note": "Match E3DEMO secondary rays to apricot-gold"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x000047bc",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        1.03,
+        0.96,
+        0.9
+      ],
+      "note": "Lifted slate-warm autumn tarmac shadow diffuse (no brown crush)"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMaxScale",
+      "expected_offset": "0x000047c8",
+      "expected_orig": 1.0,
+      "new_value": 1.14,
+      "note": "Boost grazing late-afternoon sunlight across asphalt"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x000047cc",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        1.08,
+        0.98,
+        0.88
+      ],
+      "note": "Rich golden sunlit road bounce"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularPower",
+      "expected_offset": "0x000047e0",
+      "expected_orig": 1.523,
+      "new_value": 2.45,
+      "note": "Tight glossy wet-asphalt specular streak along road ribbons"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ROAD",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x000047e8",
+      "expected_orig": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.08,
+        0.96,
+        0.84
+      ],
+      "note": "Warm golden grazing specular on damp autumn asphalt"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WHEELBLUR",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000541c",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        1.0,
+        0.94,
+        0.88
+      ],
+      "note": "Clean slightly warm wheel motion blur"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WHEELBLUR",
+      "field": "DiffuseMaxRGB",
+      "expected_offset": "0x0000542c",
+      "expected_orig": [
+        0.9,
+        0.57,
+        0.56
+      ],
+      "new_value": [
+        1.0,
+        0.94,
+        0.88
+      ],
+      "note": "Prevent dark brown crush on spinning wheels"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00004868",
+      "expected_orig": 0.1,
+      "new_value": 0.22,
+      "note": "Lift tire sidewall shadow detail under low autumn sun"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "RUBBER",
+      "field": "SpecularMaxScale",
+      "expected_offset": "0x000048a4",
+      "expected_orig": 0.1,
+      "new_value": 0.18,
+      "note": "Subtle warm rim sheen on performance tire rubber"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "DiffuseMinRGB",
+      "expected_offset": "0x0000003c",
+      "expected_orig": [
+        0.7,
+        0.7,
+        0.7
+      ],
+      "new_value": [
+        0.84,
+        0.82,
+        0.8
+      ],
+      "note": "Warm bright machined aluminum response"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000088",
+      "expected_orig": 0.001,
+      "new_value": 0.72,
+      "note": "Catch warm horizon light on brushed aluminum"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "ALUMINUM",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000098",
+      "expected_orig": 0.001,
+      "new_value": 0.38,
+      "note": "Facing horizon bounce on aluminum"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000c14",
+      "expected_orig": 0.0,
+      "new_value": 0.55,
+      "note": "Bright golden horizon glints on chrome trim"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00000c18",
+      "expected_orig": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.08,
+        0.96,
+        0.84
+      ],
+      "note": "Warm sunlit specular edge on chrome"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00000c38",
+      "expected_orig": 2.0,
+      "new_value": 2.6,
+      "note": "Vibrant autumn horizon mirror reflection on chrome"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGCHROME",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x000026e4",
+      "expected_orig": 0.0,
+      "new_value": 0.5,
+      "note": "Golden rim glints on chrome magnesium wheels"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGCHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002708",
+      "expected_orig": 2.0,
+      "new_value": 2.5,
+      "note": "Strong horizon reflection on chrome mag wheels"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "MAGSILVER",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00002868",
+      "expected_orig": 2.0,
+      "new_value": 2.35,
+      "note": "Warm golden sky reflection on stock silver rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004ee8",
+      "expected_orig": 1.5,
+      "new_value": 2.1,
+      "note": "Luminous golden-hour rim reflections"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00004f98",
+      "expected_orig": 1.5,
+      "new_value": 2.3,
+      "note": "High-contrast autumn reflection on chrome rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004fa8",
+      "expected_orig": 1.5,
+      "new_value": 2.05,
+      "note": "Consistent golden mirror reflection on chrome rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "USER_RIMS_CHROME",
+      "field": "EnvmapMaxRGB",
+      "expected_offset": "0x00004fac",
+      "expected_orig": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.06,
+        0.96,
+        0.86
+      ],
+      "note": "Warm golden horizon tint on chrome rims"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00000198",
+      "expected_orig": 0.5,
+      "new_value": 0.65,
+      "note": "Keep brake rotors readable under low-angle sun"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKEDISC",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x000001c4",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Warm metallic glints on brake discs"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x000005e8",
+      "expected_orig": [
+        1.0,
+        0.9,
+        0.85
+      ],
+      "new_value": [
+        1.06,
+        0.98,
+        0.9
+      ],
+      "note": "Warm clearcoat glint across carbon weave"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00000618",
+      "expected_orig": 0.1,
+      "new_value": 0.36,
+      "note": "Glossy golden horizon reflection on carbon fiber"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "CARBONFIBER2",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000006c8",
+      "expected_orig": 0.1,
+      "new_value": 0.36,
+      "note": "Match secondary carbon fiber clearcoat reflection"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00005654",
+      "expected_orig": 0.0,
+      "new_value": 0.38,
+      "note": "Crisp sunset specular highlight on windshield glass"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00005658",
+      "expected_orig": [
+        1.1,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.08,
+        0.98,
+        0.88
+      ],
+      "note": "Golden horizon glass sheen without harsh red clip"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDSHIELD",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00005688",
+      "expected_orig": 0.5,
+      "new_value": 0.88,
+      "note": "Dramatic Forza autumn sky reflection on windshields"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "WINDOWMASK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x000055d8",
+      "expected_orig": 0.5,
+      "new_value": 0.82,
+      "note": "Cohesive sky reflection across side glass"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "HEADLIGHTGLASS",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00002374",
+      "expected_orig": 0.0,
+      "new_value": 0.45,
+      "note": "Bright sunset glint on headlight housings"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "BRAKELIGHTGLASS",
+      "field": "SpecularMinScale",
+      "expected_offset": "0x00000324",
+      "expected_orig": 0.0,
+      "new_value": 0.4,
+      "note": "Glossy autumn reflection on taillight lenses"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "TRAFFIC",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00004ad8",
+      "expected_orig": 0.0,
+      "new_value": 0.28,
+      "note": "Warm late-afternoon sky bounce on traffic cars"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002ef8",
+      "expected_orig": 0.75,
+      "new_value": 0.9,
+      "note": "Luminous silver body shadows under low autumn sun"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00002f28",
+      "expected_orig": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.08,
+        0.97,
+        0.86
+      ],
+      "note": "Warm golden rim specular on metallic silver"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002f58",
+      "expected_orig": 0.2,
+      "new_value": 0.45,
+      "note": "Rich golden-hour clearcoat reflection on silver"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTSILVER",
+      "field": "EnvmapMaxRGB",
+      "expected_offset": "0x00002f5c",
+      "expected_orig": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.06,
+        0.96,
+        0.86
+      ],
+      "note": "Cohesive warm horizon bounce on silver"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002b88",
+      "expected_orig": 0.6,
+      "new_value": 0.78,
+      "note": "Keep metallic blue vibrant against warm autumn light"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLUE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002be8",
+      "expected_orig": 0.2,
+      "new_value": 0.42,
+      "note": "Warm-vs-cool sky contrast on metallic blue"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002e48",
+      "expected_orig": 0.6,
+      "new_value": 0.78,
+      "note": "Rich glowing autumn crimson on metallic red"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "SpecularMinRGB",
+      "expected_offset": "0x00002e78",
+      "expected_orig": [
+        1.0,
+        0.5,
+        0.5
+      ],
+      "new_value": [
+        1.06,
+        0.76,
+        0.6
+      ],
+      "note": "Peach-gold specular highlight on red metallic"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTRED",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002ea8",
+      "expected_orig": 0.3,
+      "new_value": 0.48,
+      "note": "Glossy sunset horizon reflection on metallic red"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTBLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00002b38",
+      "expected_orig": 0.3,
+      "new_value": 0.52,
+      "note": "Deep warm sky reflection on metallic obsidian"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTGOLD",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002c38",
+      "expected_orig": 0.5,
+      "new_value": 0.7,
+      "note": "Luminous shaded gold metallic paint"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "METPAINTYELLOW",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00002fa8",
+      "expected_orig": 0.4,
+      "new_value": 0.68,
+      "note": "Vibrant late-afternoon metallic yellow"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "EnvmapMinScale",
+      "expected_offset": "0x00003af8",
+      "expected_orig": 3.0,
+      "new_value": 3.5,
+      "note": "Crisp golden rim separation on gloss black"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003b08",
+      "expected_orig": 0.3,
+      "new_value": 0.56,
+      "note": "Rich horizon reflection across gloss black"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTBLACK",
+      "field": "EnvmapMaxRGB",
+      "expected_offset": "0x00003b0c",
+      "expected_orig": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        1.06,
+        0.95,
+        0.84
+      ],
+      "note": "Subtle warm clearcoat glow on black"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "DiffuseMinScale",
+      "expected_offset": "0x00003f78",
+      "expected_orig": 0.75,
+      "new_value": 0.86,
+      "note": "Clean warm-white shadows without muddy yellow cast"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTWHITE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003fd8",
+      "expected_orig": 0.3,
+      "new_value": 0.46,
+      "note": "Glossy horizon clearcoat reflection on white"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTRED",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003f28",
+      "expected_orig": 0.3,
+      "new_value": 0.46,
+      "note": "Rich sunset reflection on gloss red"
+    },
+    {
+      "section": "LightMaterials",
+      "material": "REGPAINTORANGE",
+      "field": "EnvmapMaxScale",
+      "expected_offset": "0x00003dc8",
+      "expected_orig": 0.2,
+      "new_value": 0.44,
+      "note": "Luminous autumn sunset sheen on gloss orange"
+    }
+  ]
+}

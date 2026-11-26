@@ -764,9 +764,13 @@ class TestVltCliAndRepoRecipes(unittest.TestCase):
         vlt_dir = REPO_ROOT / "patches" / "vlt"
         expected_files = [
             "modern_camera.json",
+            "forza_hero_camera.json",
             "modern_handling_tuning.json",
+            "full_roster_handling.json",
             "pursuit_and_traffic.json",
             "modern_visual_look.json",
+            "gt7_visual_look.json",
+            "forza_ultra_look.json",
         ]
         for fname in expected_files:
             fpath = vlt_dir / fname
@@ -854,6 +858,96 @@ class TestLiveReadOnlyISO(unittest.TestCase):
             db2.find_collection("visuallook", "default").fields["ColourBloomTint"].value,
             [0.96, 0.94, 0.9, 1.0],
         )
+
+    def test_live_v05_gt7_visual_look_full_stack_zero_overlaps(self) -> None:
+        assert LOCAL_ISO is not None
+        arc = PS2NFSMWArchive(LOCAL_ISO)
+        attr_raw = arc.read_entry(arc.find(r"GLOBAL\ATTRIBUTES.BIN"))
+        recipes = [
+            json.loads((REPO_ROOT / "patches" / "vlt" / name).read_text(encoding="utf-8"))
+            for name in (
+                "modern_camera.json",
+                "modern_handling_tuning.json",
+                "full_roster_handling.json",
+                "pursuit_and_traffic.json",
+                "gt7_visual_look.json",
+            )
+        ]
+        patched, audit = vlt_ps2.apply_vlt_recipes(attr_raw, recipes)
+        self.assertEqual(len(patched), len(attr_raw))
+        self.assertEqual(len(audit), 368)
+
+        db2 = vlt_ps2.VpakDatabase(patched)
+        self.assertEqual(
+            db2.find_collection("visuallook", "default").fields["ColourBloomTint"].value,
+            [0.97, 0.98, 1.0, 1.0],
+        )
+        self.assertAlmostEqual(
+            db2.find_collection("visuallook", "default").fields["Desaturation"].value,
+            0.02,
+            places=4,
+        )
+        self.assertAlmostEqual(
+            db2.find_collection("visuallook", "extreme_uves").fields["BlackBloomIntensity"].value,
+            0.12,
+            places=4,
+        )
+        self.assertAlmostEqual(
+            db2.find_collection("visuallook", "copcam").fields["ColourBloomIntensity"].value,
+            0.22,
+            places=4,
+        )
+        # Ensure dead visualrgbtweaker class (0 EE xrefs on SLUS_213.51) is not patched
+        self.assertTrue(all(p["class"] != "visualrgbtweaker" for r in recipes for p in r["patches"]))
+
+    def test_live_forza_ultra_full_stack_zero_overlaps(self) -> None:
+        assert LOCAL_ISO is not None
+        arc = PS2NFSMWArchive(LOCAL_ISO)
+        attr_raw = arc.read_entry(arc.find(r"GLOBAL\ATTRIBUTES.BIN"))
+        recipes = [
+            json.loads((REPO_ROOT / "patches" / "vlt" / name).read_text(encoding="utf-8"))
+            for name in (
+                "forza_hero_camera.json",
+                "modern_handling_tuning.json",
+                "full_roster_handling.json",
+                "pursuit_and_traffic.json",
+                "forza_ultra_look.json",
+            )
+        ]
+        patched, audit = vlt_ps2.apply_vlt_recipes(attr_raw, recipes)
+        self.assertEqual(len(patched), len(attr_raw))
+        self.assertEqual(len(audit), 374)
+
+        db2 = vlt_ps2.VpakDatabase(patched)
+        self.assertEqual(
+            db2.find_collection("visuallook", "default").fields["ColourBloomTint"].value,
+            [1.0, 0.89, 0.72, 1.0],
+        )
+        self.assertAlmostEqual(
+            db2.find_collection("camerainfo", "close").fields["HEIGHT"].value[0],
+            1.34,
+            places=4,
+        )
+        self.assertAlmostEqual(
+            db2.find_collection("camerainfo", "close").fields["FOV"].value[1],
+            94.0,
+            places=4,
+        )
+        self.assertEqual(
+            db2.find_collection("light_flares_cg", "sun_flare").fields["colour"].value,
+            [0.72, 0.66, 0.54, 0.72],
+        )
+        self.assertAlmostEqual(
+            db2.find_collection("visuallook", "default").fields["ColourBloomIntensity"].value,
+            0.12,
+            places=4,
+        )
+        self.assertAlmostEqual(
+            db2.find_collection("visuallook", "default").fields["BlackBloomIntensity"].value,
+            0.10,
+            places=4,
+        )
+        self.assertTrue(all(p["class"] != "visualrgbtweaker" for r in recipes for p in r["patches"]))
 
 
 if __name__ == "__main__":

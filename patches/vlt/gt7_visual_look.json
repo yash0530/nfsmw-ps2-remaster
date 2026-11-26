@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "id": "gt7_visual_look",
+  "name": "Rockport 2026 GT7 Crisp VisualLook (VLT)",
+  "description": "Flagship v0.5 visual grading overhaul inside GLOBAL\\ATTRIBUTES.BIN: rebalances ALL 5 visuallook nodes (default, sunset, uves, extreme_uves, copcam) for crisp GT7-style contrast, controlled neutral-white highlight bloom, lifted midtones/shadows, and vivid natural color. Verified byte-exact against untouched SLUS-21351 GLOBAL\\ATTRIBUTES.BIN with zero overlap against other VLT recipes.",
+  "target": {
+    "game": "SLUS-21351",
+    "virtual_path": "GLOBAL\\ATTRIBUTES.BIN",
+    "vault": "db"
+  },
+  "patches": [
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x000457b0",
+      "expected_orig": [
+        0.87,
+        0.68,
+        0.04,
+        1.0
+      ],
+      "new_value": [
+        0.97,
+        0.98,
+        1.0,
+        1.0
+      ],
+      "note": "Crisp GT7 neutral-cool daylight bloom tint replacing heavy 2005 amber [0.87,0.68,0.04]"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x000457c0",
+      "expected_orig": 0.32,
+      "new_value": 0.16,
+      "note": "Controlled modern highlight bloom with crisp specular preservation"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "Desaturation",
+      "expected_offset": "0x000457c4",
+      "expected_orig": 0.25,
+      "new_value": 0.02,
+      "note": "Restore vivid natural car paint, foliage, and sky color fidelity"
+    },
+    {
+      "class": "visuallook",
+      "node": "default",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x000457cc",
+      "expected_orig": 0.38,
+      "new_value": 0.1,
+      "note": "Lift midtones and prevent shadow crushing on modern 4K displays"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x000456d0",
+      "expected_orig": [
+        1.0,
+        0.44,
+        0.05,
+        1.0
+      ],
+      "new_value": [
+        1.0,
+        0.8,
+        0.62,
+        1.0
+      ],
+      "note": "Luminous warm sunset bloom without clipped orange washout"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x000456e0",
+      "expected_orig": 0.3,
+      "new_value": 0.18,
+      "note": "Refined late-afternoon highlight bloom"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "Desaturation",
+      "expected_offset": "0x000456e4",
+      "expected_orig": 0.25,
+      "new_value": 0.04,
+      "note": "Vibrant sunset sky and metallic paint contrast"
+    },
+    {
+      "class": "visuallook",
+      "node": "sunset",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x000456ec",
+      "expected_orig": 0.34,
+      "new_value": 0.12,
+      "note": "Clean lifted shadow readability during golden hour"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x00045510",
+      "expected_orig": [
+        0.5,
+        0.81,
+        1.0,
+        1.0
+      ],
+      "new_value": [
+        0.76,
+        0.9,
+        1.0,
+        1.0
+      ],
+      "note": "Crisp azure high-heat overdrive bloom tint"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x00045520",
+      "expected_orig": 0.47,
+      "new_value": 0.2,
+      "note": "Clean controlled pursuit overdrive highlight bloom"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "Desaturation",
+      "expected_offset": "0x00045524",
+      "expected_orig": 0.25,
+      "new_value": 0.06,
+      "note": "Preserve crisp color separation during intense chases"
+    },
+    {
+      "class": "visuallook",
+      "node": "uves",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x0004552c",
+      "expected_orig": 0.34,
+      "new_value": 0.12,
+      "note": "Keep shaded alleys and cop cruisers readable at high heat"
+    },
+    {
+      "class": "visuallook",
+      "node": "extreme_uves",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x000455f0",
+      "expected_orig": [
+        0.99,
+        0.77,
+        0.2,
+        0.99
+      ],
+      "new_value": [
+        0.96,
+        0.97,
+        1.0,
+        0.99
+      ],
+      "note": "Eliminate residual yellow bloom cast during extreme pursuit states"
+    },
+    {
+      "class": "visuallook",
+      "node": "extreme_uves",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x00045600",
+      "expected_orig": 0.28,
+      "new_value": 0.18,
+      "note": "Controlled highlight bloom in extreme_uves state"
+    },
+    {
+      "class": "visuallook",
+      "node": "extreme_uves",
+      "field": "Desaturation",
+      "expected_offset": "0x00045604",
+      "expected_orig": 0.2,
+      "new_value": 0.06,
+      "note": "Keep vivid natural color clarity in extreme pursuit states"
+    },
+    {
+      "class": "visuallook",
+      "node": "extreme_uves",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x0004560c",
+      "expected_orig": 0.34,
+      "new_value": 0.12,
+      "note": "Clean shadow clarity in extreme pursuit states"
+    },
+    {
+      "class": "visuallook",
+      "node": "copcam",
+      "field": "ColourBloomTint",
+      "expected_offset": "0x00045890",
+      "expected_orig": [
+        0.37,
+        0.42,
+        0.49,
+        0.99
+      ],
+      "new_value": [
+        0.78,
+        0.84,
+        0.92,
+        0.99
+      ],
+      "note": "Clean cool broadcast tint for pursuit/cop camera angles"
+    },
+    {
+      "class": "visuallook",
+      "node": "copcam",
+      "field": "ColourBloomIntensity",
+      "expected_offset": "0x000458a0",
+      "expected_orig": 0.65,
+      "new_value": 0.22,
+      "note": "Reduce excessive 0.65 cop-cam bloom washout"
+    },
+    {
+      "class": "visuallook",
+      "node": "copcam",
+      "field": "BlackBloomIntensity",
+      "expected_offset": "0x000458ac",
+      "expected_orig": 0.39,
+      "new_value": 0.14,
+      "note": "Maintain shadow detail on cop camera views"
+    }
+  ]
+}

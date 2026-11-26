@@ -282,14 +282,10 @@ def _unpack_vif_strip(
         idx += 3 * b
         rem -= b
 
-    bases: List[float] = []
-    for ax, qs in enumerate((xs, ys, zs)):
-        if not qs:
-            bases.append(0.0)
-            continue
-        off_raw = (vec2[ax] + 0.01) - min(qs) * scale
-        off_int = round(off_raw)
-        bases.append(float(off_int) if abs(off_raw - off_int) <= 0.005 else off_raw)
+    # Exact PS2 VU1 hardware position base (SLUS_213.51 .vutext 0x0f48..0x1028):
+    #   LQ.xyzw vf8, 2(vi12) -> FTOI0 vf8 -> ITOF0 vf8 -> SUBw.xyz vf8, vf8, vf0
+    #   base[ax] = float(int(vec2[ax]) - 1)
+    bases = [float(int(vec2[ax]) - 1) for ax in range(3)]
 
     verts = [
         (bases[0] + x * scale, bases[1] + y * scale, bases[2] + z * scale)

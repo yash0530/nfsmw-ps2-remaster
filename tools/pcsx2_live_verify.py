@@ -681,7 +681,10 @@ def _wait_for_complete_png(path: Path, timeout_sec: float = 8.0) -> bool:
                     return True
             last_size = sz
         time.sleep(0.4)
-    return path.is_file() and path.stat().st_size > 0
+    if path.is_file() and path.stat().st_size > 0:
+        info = analyze_screenshot(path)
+        return bool(info.get("width", 0) > 0 and not info.get("error"))
+    return False
 
 
 def attempt_pcsx2_f8_snapshot(
@@ -753,9 +756,13 @@ def attempt_pcsx2_f8_snapshot(
             (snaps_dir / name for name in new_files),
             key=lambda p: p.stat().st_mtime,
         )
-        shutil.copy2(newest, out_copy_path)
-        img_info = analyze_screenshot(out_copy_path)
-        result["captured"] = bool(img_info.get("width", 0) > 0 and not img_info.get("error"))
+        img_info = analyze_screenshot(newest)
+        is_valid = bool(img_info.get("width", 0) > 0 and not img_info.get("error"))
+        if is_valid:
+            shutil.copy2(newest, out_copy_path)
+            img_info = analyze_screenshot(out_copy_path)
+            is_valid = bool(img_info.get("width", 0) > 0 and not img_info.get("error"))
+        result["captured"] = is_valid
         result["source_snap"] = str(newest)
         result["image"] = img_info
 
@@ -1036,14 +1043,18 @@ def verify_live_pcsx2(
         new_snaps = sorted(after_snaps - before_snaps)
         if new_snaps and not any(c.get("method") == "pcsx2_f8_snaps" and c.get("captured") for c in captures):
             newest = max((snaps_dir / n for n in new_snaps), key=lambda p: p.stat().st_mtime)
-            _wait_for_complete_png(newest, timeout_sec=5.0)
-            dst = out_dir / "capture_pcsx2_f8_late.png"
-            shutil.copy2(newest, dst)
-            img_info = analyze_screenshot(dst)
+            if _wait_for_complete_png(newest, timeout_sec=5.0):
+                dst = out_dir / "capture_pcsx2_f8_late.png"
+                shutil.copy2(newest, dst)
+                img_info = analyze_screenshot(dst)
+                is_valid = bool(img_info.get("width", 0) > 0 and not img_info.get("error"))
+            else:
+                img_info = analyze_screenshot(newest)
+                is_valid = False
             captures.append(
                 {
                     "method": "pcsx2_f8_snaps_late",
-                    "captured": bool(img_info.get("width", 0) > 0 and not img_info.get("error")),
+                    "captured": is_valid,
                     "source_snap": str(newest),
                     "image": img_info,
                 }
