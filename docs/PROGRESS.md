@@ -9,4 +9,4 @@
 | `v2.4` | Measured VLT Handling/Pursuit Polish & Save Proof | Done | Authentic VLT + Save Proof · 59.66 FPS · User QA | `v2.4.0` |
 | `v2.5` | Sculpted 3D Relief & Baked AO World/Car Textures | Done | 5,859 Sculpted 3D DDS · 59.33 FPS · User QA | `v2.5.0` |
 | `v2.6` | True-Limit 3D Car Geometry + Glossy Clearcoat/Shadow Lighting | Done | 24 3D Cars (+162K tris) + Clearcoat · 59.20 FPS · User QA | `v2.6.0` |
-| `v2.7` | Real PS2 World Vertex-AO / 3D Hemisphere Shading (`STREAML2RA`) | In Progress | Geometry-aware building/curb contact AO + sun contrast · User QA | — |
+| `v2.7` | Real PS2 World Vertex-AO / 3D Hemisphere Shading (`STREAML2RA`) | Done | 2.95M-Vert World AO (841 sect) · 59.38 FPS · User QA | `v2.7.0` |
