@@ -244,14 +244,16 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     private var smoothedFrameSec: Double = 1.0 / 60.0
     var forceSyntheticMode: Bool = false
 
-    // Authentic NFSMW 2005 Gameplay Subsystems (VLT Physics + Ginsu/ABKC Audio + Traffic/Pursuit AI)
+    // Authentic NFSMW 2005 Gameplay Subsystems (VLT Physics + Ginsu/ABKC Audio + Traffic/Pursuit AI + Events/WorldMap)
     let physicsEngine: RTPhysicsEngine
     let audioEngine: RTAudioEngine
     let gameWorld: RTGameWorld
+    let eventManager: RTEventManager
     var aiEnabled: Bool = true
     var benchmarkNosForced: Bool = false
     var benchmarkSpeedbreakerForced: Bool = false
     var benchmarkPursuitHeat: Int? = nil
+    var benchmarkAutoSteerToEvent: Bool = false
 
     // v1.1.0 EA TRAX Soundtrack Banner & Upward Sky-Ray Acoustic Tunnel Occlusion
     private(set) var rawSkyOcclusion: Float = 0.0
@@ -290,10 +292,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     private let dummyWorldTB: MTLBuffer
     private let dummyWorldTex: MTLTexture
 
-    // Reserved Hour 1-3 ABI buffers (Buffer Slots 11, 12, 13)
+    // Reserved Hour 1-3 + v1.2.0 ABI buffers (Buffer Slots 11, 12, 13, 16)
     private var worldLightsBuffer: MTLBuffer!
     private var worldLightGridBuffer: MTLBuffer!
     private var dynamicFXBuffer: MTLBuffer!
+    private var eventWorldFXBuffer: MTLBuffer!
+    private var fallbackWorldMapTex: MTLTexture!
 
     // Unified TLAS (car BLASes + optional .rkpt world BLASes)
     private var blasList: [MTLAccelerationStructure] = []
@@ -486,6 +490,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         self.physicsEngine = RTPhysicsEngine(carKey: scene.canonicalCarName)
         self.audioEngine = RTAudioEngine(headless: headless)
         self.gameWorld = RTGameWorld()
+        self.eventManager = RTEventManager(landmarks: world?.landmarks ?? [])
         let dummies = RTWorldLoader.makeDummyWorldBuffers(device: device)
         self.dummyWorldVB = dummies.0
         self.dummyWorldIB = dummies.1
@@ -508,7 +513,9 @@ final class RTRenderer: NSObject, MTKViewDelegate {
               let aiPout = device.makeBuffer(length: RTGameWorld.maxAISlots * MemoryLayout<RTAIRoadProbeOutput>.stride, options: .storageModeShared),
               let wlBuf = device.makeBuffer(length: MemoryLayout<RTWorldLightGPU>.stride, options: .storageModeShared),
               let wlgBuf = device.makeBuffer(length: 256, options: .storageModeShared),
-              let dfxBuf = device.makeBuffer(length: MemoryLayout<RTDynamicFXGPU>.stride, options: .storageModeShared) else {
+              let dfxBuf = device.makeBuffer(length: MemoryLayout<RTDynamicFXGPU>.stride, options: .storageModeShared),
+              let evFxBuf = device.makeBuffer(length: RTEventWorldFX.byteSize, options: .storageModeShared),
+              let fbMapTex = RTEventManager.makeFallbackWorldMapTexture(device: device) else {
             throw NSError(domain: "RTRenderer", code: 102, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate physics/ABI buffers"])
         }
         precondition(MemoryLayout<RTWorldLightGPU>.stride == 32, "RTWorldLightGPU stride must be 32 bytes")
@@ -517,6 +524,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         RTHudExtUniforms.assertLayout()
         RTMinimapBuffer.assertLayout()
         RTMusicBannerUniforms.assertLayout()
+        RTEventWorldFX.assertLayout()
+        RTEventHudUniforms.assertLayout()
         self.physicsInBuffer = pin
         self.physicsOutBuffer = pout
         self.aiRoadProbeInBuffer = aiPin
@@ -525,6 +534,10 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         self.worldLightsBuffer = wlBuf
         self.worldLightGridBuffer = wlgBuf
         self.dynamicFXBuffer = dfxBuf
+        self.eventWorldFXBuffer = evFxBuf
+        self.fallbackWorldMapTex = fbMapTex
+        var initEvFX = RTEventWorldFX.inactive()
+        memcpy(evFxBuf.contents(), &initEvFX, RTEventWorldFX.byteSize)
         memset(aiPin.contents(), 0, RTGameWorld.maxAISlots * MemoryLayout<RTAIRoadProbeInput>.stride)
         let aiOutInit = aiPout.contents().bindMemory(to: RTAIRoadProbeOutput.self, capacity: RTGameWorld.maxAISlots)
         for i in 0..<RTGameWorld.maxAISlots {
@@ -573,6 +586,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                     )
                 }
                 self.gameWorld.setRoadGraph(nodes: nodes, segments: segs)
+                _ = self.eventManager.bakeWorldMapTexture(
+                    device: device,
+                    roadNodes: w.roadNodes,
+                    roadSegments: w.roadSegments,
+                    landmarks: w.landmarks
+                )
             }
         }
         self.physicsEngine.reset(position: carWorldPosition, headingRad: carHeadingRad)
@@ -820,6 +839,90 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         activeLandmarkName = label
         let lm = RkptLandmark(name: label, spawnPos: pos, spawnYawRad: yawRad, regionId: 0, flags: 0)
         applyLandmarkPose(lm)
+    }
+
+    // MARK: - v1.2.0 NFSMW Race Events (Sprint / Speedtrap / Blacklist 15 Boss) & World Map
+
+    @discardableResult
+    func startEvent(matching query: String, skipCountdown: Bool = false) -> RTEventStartResult? {
+        guard let res = eventManager.startEvent(matching: query, skipCountdown: skipCountdown) else {
+            return nil
+        }
+        applyEventStartPose(res)
+        return res
+    }
+
+    @discardableResult
+    func startNearestEvent(skipCountdown: Bool = false) -> RTEventStartResult? {
+        guard let res = eventManager.startNearestEvent(to: carWorldPosition, kind: nil, skipCountdown: skipCountdown) else {
+            return nil
+        }
+        applyEventStartPose(res)
+        return res
+    }
+
+    func abortActiveEvent() {
+        eventManager.abortEvent()
+        updateEventWorldFXBuffer()
+        updateMinimapBuffer()
+    }
+
+    private func applyEventStartPose(_ res: RTEventStartResult) {
+        eventManager.closeWorldMap()
+        activeLandmarkName = res.event.district.isEmpty ? res.event.title : res.event.district
+        carWorldPosition = res.startPos
+        carHeadingRad = res.startYawRad
+        speedKmh = 0.0
+        steerDeg = 0.0
+        carYawRad = 0.0
+        carPitchRad = 0.0
+        carRollRad = 0.0
+        physicsEngine.reset(position: carWorldPosition, headingRad: carHeadingRad)
+        try? rebuildTLAS(commandBuffer: nil, forceWorldStream: true)
+        snapCarToWorldRoad()
+        if aiEnabled && !gameWorld.roadGraph.isEmpty {
+            gameWorld.resetNearPlayer(playerPos: carWorldPosition, playerYaw: carHeadingRad, keepPursuit: false)
+            gameWorld.step(dt: 1.0 / 60.0, playerPos: carWorldPosition, playerVel: .zero, playerYaw: carHeadingRad)
+        }
+        eventManager.step(dt: 1.0 / 60.0, playerPos: carWorldPosition, playerVel: .zero, playerYaw: carHeadingRad)
+        snapAIVehiclesToRoad()
+        updateMinimapBuffer()
+        updateDynamicFXBuffer()
+        updateEventWorldFXBuffer()
+        applyCameraMode(.chase)
+        historyResetPending = true
+        resetAccumulation()
+    }
+
+    @discardableResult
+    func toggleWorldMap() -> Bool {
+        let open = eventManager.toggleWorldMap(playerPos: carWorldPosition)
+        if open {
+            throttleHeld = false
+            brakeHeld = false
+            steerLeftHeld = false
+            steerRightHeld = false
+            handbrakeHeld = false
+            nosKeyHeld = false
+            nosShiftHeld = false
+            speedbreakerHeld = false
+        }
+        return open
+    }
+
+    func confirmWorldMapSelection() {
+        let action = eventManager.confirmSelection()
+        switch action {
+        case .none:
+            break
+        case .teleport(let pos, let yaw, let label):
+            teleportToPosition(pos, yawRad: yaw, label: label)
+            print("World Map fast-travel -> \(label)")
+        case .startEvent(let id):
+            if let res = startEvent(matching: id, skipCountdown: false) {
+                print("World Map launched event -> \(res.event.title) [\(res.event.kind.rawValue)]")
+            }
+        }
     }
 
     func resetPlayer() {
@@ -1385,6 +1488,14 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         prevCarBodyXform = bodyNow
     }
 
+    private func effectiveAISlots() -> [RTAIInstanceState] {
+        var slots = gameWorld.aiSlots
+        if eventManager.isBossDuelActive, let boss = eventManager.bossInstanceState, !slots.isEmpty {
+            slots[0] = boss
+        }
+        return slots
+    }
+
     private func updateAIInstanceBuffers() {
         guard aiEnabled, world != nil, let ai = aiVehicles else {
             clearAIInstanceSlots()
@@ -1394,7 +1505,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         let descPtr = instanceDescBuffer.contents().bindMemory(to: MTLAccelerationStructureInstanceDescriptor.self, capacity: maxInstanceCapacity)
         let metaPtr = instanceMetaBuffer.contents().bindMemory(to: RTInstanceMeta.self, capacity: maxInstanceCapacity)
         activeAIInstanceCount = ai.writeAITLASInstances(
-            states: gameWorld.aiSlots,
+            states: effectiveAISlots(),
             baseSlot: aiSlotBase,
             maxSlots: aiSlotCount,
             descriptors: descPtr,
@@ -1496,7 +1607,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         guard aiEnabled, world != nil, let pso = aiRoadProbePSO,
               let enc = commandBuffer.makeComputeCommandEncoder() else { return }
         let inPtr = aiRoadProbeInBuffer.contents().bindMemory(to: RTAIRoadProbeInput.self, capacity: RTGameWorld.maxAISlots)
-        let slots = gameWorld.aiSlots
+        let slots = effectiveAISlots()
         let n = min(slots.count, RTGameWorld.maxAISlots)
         for i in 0..<n {
             let u = slots[i]
@@ -1538,6 +1649,9 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             }
         }
         gameWorld.applyRoadProbeHeights(heights, dt: dt, snapImmediate: snapImmediate)
+        if eventManager.isBossDuelActive && !heights.isEmpty {
+            eventManager.applyBossRoadProbeHeight(heights[0], dt: dt, snapImmediate: snapImmediate)
+        }
     }
 
     func snapAIVehiclesToRoad() {
@@ -1829,6 +1943,11 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         memcpy(dynamicFXBuffer.contents(), &fx, MemoryLayout<RTDynamicFXGPU>.stride)
     }
 
+    private func updateEventWorldFXBuffer() {
+        var evFX = eventManager.currentWorldFX(simTime: simTimeSec)
+        memcpy(eventWorldFXBuffer.contents(), &evFX, RTEventWorldFX.byteSize)
+    }
+
     private func updateMinimapBuffer() {
         if world != nil && !gameWorld.roadGraph.isEmpty {
             minimapBuffer = gameWorld.packMinimap(
@@ -1836,6 +1955,37 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                 playerYaw: carHeadingRad,
                 mapRangeM: 175.0
             )
+            if eventManager.isEventActiveOrCountdown {
+                let evFX = eventManager.currentWorldFX(simTime: simTimeSec)
+                let range: Float = max(1.0, minimapBuffer.mapRangeM)
+                let cy = cos(carHeadingRad)
+                let sy = sin(carHeadingRad)
+                func project(_ wp: SIMD3<Float>) -> SIMD2<Float> {
+                    let dx = wp.x - carWorldPosition.x
+                    let dz = wp.z - carWorldPosition.z
+                    let rx = (dx * cy - dz * sy) / range
+                    let fy = (dx * sy + dz * cy) / range
+                    let len = sqrt(rx * rx + fy * fy)
+                    if len > 0.94 {
+                        return SIMD2<Float>(rx / len * 0.94, fy / len * 0.94)
+                    }
+                    return SIMD2<Float>(rx, fy)
+                }
+                var bCount = Int(minimapBuffer.blipCount)
+                if evFX.fxParams.x > 0.5 {
+                    let gp = project(SIMD3<Float>(evFX.gatePosRadius.x, evFX.gatePosRadius.y, evFX.gatePosRadius.z))
+                    let idx = min(bCount, RTMinimapBuffer.maxBlips - 1)
+                    minimapBuffer.setBlip(idx, SIMD4<Float>(gp.x, gp.y, 3.0, simTimeSec))
+                    bCount = min(RTMinimapBuffer.maxBlips, idx + 1)
+                }
+                if eventManager.isBossDuelActive, let boss = eventManager.bossInstanceState {
+                    let bp = project(boss.worldPosition)
+                    let idx = min(bCount, RTMinimapBuffer.maxBlips - 1)
+                    minimapBuffer.setBlip(idx, SIMD4<Float>(bp.x, bp.y, 2.0, simTimeSec))
+                    bCount = min(RTMinimapBuffer.maxBlips, idx + 1)
+                }
+                minimapBuffer.blipCount = UInt32(bCount)
+            }
             return
         }
         minimapBuffer.clear()
@@ -1904,6 +2054,51 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         return banner
     }
 
+    private func makeEventHudUniforms() -> RTEventHudUniforms {
+        var u = RTEventHudUniforms()
+        let hs = eventManager.currentHudState(playerPos: carWorldPosition)
+        u.mode = hs.mode
+        u.state = hs.state
+        u.cpIndex = hs.cpTotal > 0 ? UInt32(min(Int(hs.cpIndex) + 1, Int(hs.cpTotal))) : 0
+        u.cpTotal = hs.cpTotal
+        u.elapsedSec = hs.elapsedSec
+        u.currentScore = hs.currentScore
+        u.targetScore = hs.targetScore
+        u.bossGapM = hs.bossGapM
+        u.playerRank = max(1, hs.rank)
+        u.bossRank = max(1, hs.bossRank)
+        u.nextGateDistM = hs.nextGateDistM
+
+        var flags: UInt32 = 0
+        if hs.mode != 0 && hs.state != 0 { flags |= RTEventHudFlagBits.eventActive }
+        if hs.worldMapOpen { flags |= RTEventHudFlagBits.worldMapOpen }
+        if !hs.mapMarkers.isEmpty { flags |= RTEventHudFlagBits.hasSelectedMarker }
+        if hs.radarFlash > 0.05 { flags |= RTEventHudFlagBits.radarFlash }
+        u.flags = flags
+
+        let pUV = eventManager.worldXZToMapUV(SIMD2<Float>(carWorldPosition.x, carWorldPosition.z))
+        let mCount = min(hs.mapMarkers.count, RTEventHudUniforms.maxMarkers)
+        u.mapViewParams = SIMD4<Float>(hs.mapCenterNorm.x, hs.mapCenterNorm.y, hs.mapZoom, carHeadingRad)
+        u.playerMapPos = SIMD4<Float>(pUV.x, pUV.y, Float(hs.selectedMarkerIndex), Float(mCount))
+
+        for i in 0..<mCount {
+            let mk = hs.mapMarkers[i]
+            u.setMarker(i, SIMD4<Float>(mk.normUV.x, mk.normUV.y, Float(mk.kind), Float(mk.rank)))
+        }
+        let pts = hs.gpsRoutePointsNorm
+        let segs = min(max(0, pts.count - 1), RTEventHudUniforms.maxGpsSegments)
+        for i in 0..<segs {
+            u.setGpsSegment(i, SIMD4<Float>(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y))
+        }
+        u.gpsSegCount = UInt32(segs)
+
+        u.setEventTitle(hs.eventTitle)
+        let bossBanner = hs.bossCarName.isEmpty ? hs.bossName : "\(hs.bossName) - \(hs.bossCarName)"
+        u.setBossName(bossBanner)
+        u.setSelectedCard(title: hs.selectedMarkerTitle, subtitle: hs.selectedMarkerSubtitle)
+        return u
+    }
+
     private static func halton(_ index: UInt32, base: UInt32) -> Float {
         var f: Float = 1.0
         var r: Float = 0.0
@@ -1938,7 +2133,11 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         let flakeStrength = lookdevConfig.flake_strength ?? 0.0052
         let bloomThresh = lookdevConfig.bloom_threshold ?? p.bloomThreshold
         let bloomInt = lookdevConfig.bloom_intensity ?? p.bloomIntensity
-        let headsOn = lookdevConfig.headlights_on ?? p.headlightsOn
+        var headsOn = lookdevConfig.headlights_on ?? p.headlightsOn
+        // #91 P2-1 Bonus: Auto-enable player xenon headlight beams whenever skyOcclusion > 0.50 (underground tunnels!)
+        if smoothedSkyOcclusion > 0.50 {
+            headsOn = max(headsOn, 1.0 + smoothedSkyOcclusion)
+        }
         let vignette = lookdevConfig.vignette ?? 0.12
         let contrast = lookdevConfig.contrast ?? 1.03
         let saturation = lookdevConfig.saturation ?? 1.08
@@ -2052,6 +2251,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.setBuffer(instanceMetaBuffer, offset: 0, index: 5)
         enc.setBuffer(scene.materialBuffer, offset: 0, index: 6)
         updateDynamicFXBuffer()
+        updateEventWorldFXBuffer()
         enc.setBuffer(world?.vertexBuffer ?? dummyWorldVB, offset: 0, index: 7)
         enc.setBuffer(world?.indexBuffer ?? dummyWorldIB, offset: 0, index: 8)
         enc.setBuffer(world?.materialBuffer ?? dummyWorldMB, offset: 0, index: 9)
@@ -2060,6 +2260,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.setBuffer(worldStreamer?.lightGridBuffer ?? worldLightGridBuffer, offset: 0, index: 12)
         enc.setBuffer(dynamicFXBuffer, offset: 0, index: 13)
         enc.setBuffer(aiVehicles?.sceneDataBuffer ?? aiSceneDataFallbackBuffer, offset: 0, index: 14)
+        enc.setBuffer(eventWorldFXBuffer, offset: 0, index: 16)
         if world?.hasResidentBLASes == true {
             enc.useResources(carBlasList, usage: .read)
             aiVehicles?.useResources(on: enc)
@@ -2102,14 +2303,18 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         var hudExt = makeHudExtUniforms()
         var mm = minimapBuffer
         var musicBanner = makeMusicBannerUniforms()
+        var evHud = makeEventHudUniforms()
         enc.setComputePipelineState(hudOverlayPSO)
         enc.setTexture(inputTexture, index: 0)
         enc.setTexture(outputTexture, index: 1)
+        enc.setTexture(eventManager.worldMapTexture ?? fallbackWorldMapTex, index: 2)
+        enc.setSamplerState(linearSampler, index: 0)
         enc.setBytes(&uniforms, length: MemoryLayout<RTFrameUniforms>.stride, index: 0)
         enc.setBytes(&srgbFlag, length: MemoryLayout<UInt32>.stride, index: 1)
         enc.setBytes(&hudExt, length: RTHudExtUniforms.byteSize, index: 2)
         enc.setBytes(&mm, length: RTMinimapBuffer.byteSize, index: 3)
         enc.setBytes(&musicBanner, length: RTMusicBannerUniforms.byteSize, index: 4)
+        enc.setBytes(&evHud, length: RTEventHudUniforms.byteSize, index: 5)
         dispatch2D(encoder: enc, pso: hudOverlayPSO, width: outW, height: outH)
         enc.endEncoding()
     }
@@ -2331,14 +2536,18 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             var hudExt = makeHudExtUniforms()
             var mm = minimapBuffer
             var musicBanner = makeMusicBannerUniforms()
+            var evHud = makeEventHudUniforms()
             enc.setComputePipelineState(hudOverlayPSO)
             enc.setTexture(ldrScratch, index: 0)
             enc.setTexture(outputTexture, index: 1)
+            enc.setTexture(eventManager.worldMapTexture ?? fallbackWorldMapTex, index: 2)
+            enc.setSamplerState(linearSampler, index: 0)
             enc.setBytes(&uniforms, length: MemoryLayout<RTFrameUniforms>.stride, index: 0)
             enc.setBytes(&hudSrgbFlag, length: MemoryLayout<UInt32>.stride, index: 1)
             enc.setBytes(&hudExt, length: RTHudExtUniforms.byteSize, index: 2)
             enc.setBytes(&mm, length: RTMinimapBuffer.byteSize, index: 3)
             enc.setBytes(&musicBanner, length: RTMusicBannerUniforms.byteSize, index: 4)
+            enc.setBytes(&evHud, length: RTEventHudUniforms.byteSize, index: 5)
             dispatch2D(encoder: enc, pso: hudOverlayPSO, width: outW, height: outH)
         }
         enc.endEncoding()
@@ -2469,8 +2678,11 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             throw NSError(domain: "RTRenderer", code: 112, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate drive-bench output texture"])
         }
 
-        throttleHeld = true
-        let initialSpeed = max(speedKmh, benchmarkNosForced ? 165.0 : 115.0)
+        if eventManager.isEventActiveOrCountdown {
+            benchmarkAutoSteerToEvent = true
+        }
+        throttleHeld = !eventManager.isWorldMapOpen
+        let initialSpeed = eventManager.isWorldMapOpen ? 0.0 : max(speedKmh, benchmarkNosForced ? 165.0 : 115.0)
         physicsEngine.configurePose(
             speedKmh: initialSpeed,
             steerDeg: 0.0,
@@ -2656,7 +2868,58 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     }
 
     func stepDrivePhysics(dt: Float) -> Bool {
-        let steerInput: Float = (steerLeftHeld ? 1.0 : 0.0) + (steerRightHeld ? -1.0 : 0.0)
+        if eventManager.isWorldMapOpen {
+            return false
+        }
+        var steerInput: Float = (steerLeftHeld ? 1.0 : 0.0) + (steerRightHeld ? -1.0 : 0.0)
+        if benchmarkAutoSteerToEvent && eventManager.isEventActiveOrCountdown && steerInput == 0.0 {
+            // Follow event road route with continuous segment interpolation ~26m ahead so curves stay cleanly centered!
+            var aimPos: SIMD3<Float>? = nil
+            if let ev = eventManager.activeEvent, ev.routeWaypoints.count >= 2 {
+                var bestSeg = 0
+                var bestT: Float = 0.0
+                var bestD2: Float = .greatestFiniteMagnitude
+                let pXZ = SIMD2<Float>(carWorldPosition.x, carWorldPosition.z)
+                for wi in 0..<(ev.routeWaypoints.count - 1) {
+                    let a = SIMD2<Float>(ev.routeWaypoints[wi].pos.x, ev.routeWaypoints[wi].pos.z)
+                    let b = SIMD2<Float>(ev.routeWaypoints[wi + 1].pos.x, ev.routeWaypoints[wi + 1].pos.z)
+                    let ab = b - a
+                    let lenSq = max(1e-4, simd_dot(ab, ab))
+                    let t = max(0.0, min(1.0, simd_dot(pXZ - a, ab) / lenSq))
+                    let proj = a + ab * t
+                    let d2 = simd_length_squared(pXZ - proj)
+                    if d2 < bestD2 { bestD2 = d2; bestSeg = wi; bestT = t }
+                }
+                let segDist = max(0.01, ev.routeWaypoints[bestSeg + 1].cumDistM - ev.routeWaypoints[bestSeg].cumDistM)
+                let curCum = ev.routeWaypoints[bestSeg].cumDistM + segDist * bestT
+                let targetCum = curCum + 26.0
+                var lookSeg = bestSeg
+                while lookSeg + 1 < ev.routeWaypoints.count - 1 && ev.routeWaypoints[lookSeg + 1].cumDistM < targetCum {
+                    lookSeg += 1
+                }
+                let l0 = ev.routeWaypoints[lookSeg]
+                let l1 = ev.routeWaypoints[min(lookSeg + 1, ev.routeWaypoints.count - 1)]
+                let span = max(0.01, l1.cumDistM - l0.cumDistM)
+                let frac = max(0.0, min(1.0, (targetCum - l0.cumDistM) / span))
+                aimPos = simd_mix(l0.pos, l1.pos, SIMD3<Float>(repeating: frac))
+            } else {
+                let fx = eventManager.currentWorldFX(simTime: simTimeSec)
+                if fx.fxParams.x > 0.5 {
+                    aimPos = SIMD3<Float>(fx.gatePosRadius.x, fx.gatePosRadius.y, fx.gatePosRadius.z)
+                }
+            }
+            if let tgt = aimPos {
+                let targetXZ = SIMD2<Float>(tgt.x - carWorldPosition.x, tgt.z - carWorldPosition.z)
+                if simd_length(targetXZ) > 3.0 {
+                    let targetYaw = atan2(targetXZ.x, targetXZ.y)
+                    var dYaw = targetYaw - carHeadingRad
+                    while dYaw > .pi { dYaw -= 2.0 * .pi }
+                    while dYaw < -.pi { dYaw += 2.0 * .pi }
+                    // RTPhysics: positive steerInput yields positive yawRate (increases headingRad)
+                    steerInput = max(-0.75, min(0.75, dYaw * 1.45))
+                }
+            }
+        }
         let input = RTDriveInput(
             throttle: throttleHeld ? 1.0 : 0.0,
             brake: brakeHeld ? 1.0 : 0.0,
@@ -2712,6 +2975,14 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                     impactIntensity: gameWorld.playerCollisionIntensity
                 )
             }
+        }
+        if world != nil && eventManager.isEventActiveOrCountdown {
+            eventManager.step(
+                dt: simDt,
+                playerPos: physicsEngine.state.worldPosition,
+                playerVel: physicsEngine.state.velocityWorld,
+                playerYaw: physicsEngine.state.headingRad
+            )
         }
 
         let st = physicsEngine.state

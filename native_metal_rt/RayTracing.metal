@@ -157,6 +157,16 @@ struct RTDynamicFX {
 };
 static_assert(sizeof(RTDynamicFX) == 176, "RTDynamicFX must match locked 176-byte contract");
 
+// Locked v1.2.0 Event Gate & Holographic Chevron ABI (Buffer Slot 16; Slot 15 reserved for v1.3 RTVFXBuffer)
+struct RTEventWorldFX {
+    float4 gatePosRadius;  // xyz = active checkpoint/speedtrap world pos, w = gate half-width (m)
+    float4 gateDirKind;    // xyz = gate forward unit dir, w = kind (0=sprint amber, 1=speedtrap cyan, 2=boss crimson-gold)
+    float4 nextPosRadius;  // xyz = next gate world pos, w = next radius (0 = none/finish)
+    float4 fxParams;       // x = gateActive (0/1), y = isSpeedtrap (0/1), z = radarFlash (0..1), w = simTimeSec
+    float4 chevrons[4];    // xyz = floating road chevron world pos, w = yawRad (<= -100 inactive)
+};
+static_assert(sizeof(RTEventWorldFX) == 128, "RTEventWorldFX must match locked 128-byte ABI");
+
 // Locked Hour 3 AI Vehicle RT ABI (Buffer Slot 14 + aiRoadProbeKernel)
 struct RTAIVertex {
     packed_float3 position;
@@ -2415,7 +2425,8 @@ static void evaluateLocalAreaLightsSplit(
 ) {
     outDiffIrrad = float3(0.0f);
     outSpec = float3(0.0f);
-    float headScale = u.skyGround.w;
+    float tunnelHead = clamp(u.skyGround.w - 1.0f, 0.0f, 1.0f);
+    float headScale = min(u.skyGround.w, 1.0f);
     float yaw = u.carDynParams.z;
     float cy = cos(yaw), sy = sin(yaw);
 
@@ -2425,8 +2436,9 @@ static void evaluateLocalAreaLightsSplit(
 
     float3 carOrigin = u.carWorldPos.xyz;
     float isNight = smoothstep(0.036f, 0.015f, u.skyZenith.r);
-    // Gate road headlight projection strictly on dusk/night so Daylight & Golden Hour have ZERO chalky white smear on foreground asphalt!
-    float roadBeamGain = mix(0.0f, 1.0f, isNight);
+    // Gate road headlight projection strictly on dusk/night OR underground tunnels (skyOcc > 0.50 -> tunnelHead > 0)
+    // so open Daylight & Golden Hour have ZERO chalky white smear while Bayshore tunnel lights up dramatically!
+    float roadBeamGain = max(mix(0.0f, 1.0f, isNight), tunnelHead * 1.25f);
     float fZ = (abs(dynFX.carMetrics.x) > 0.2f) ? (dynFX.carMetrics.x + 0.56f) : 2.02f;
     float rZ = (abs(dynFX.carMetrics.y) > 0.2f) ? (dynFX.carMetrics.y - 0.68f) : -2.06f;
     float3 carLights[4] = {
@@ -2780,6 +2792,189 @@ static float3 evaluateSecondaryHitRadiance(
 }
 
 // ---------------------------------------------------------------------------
+// v1.2.0 Analytical 3D NFSMW Checkpoint / Speedtrap / Boss Gates & Chevrons
+// Zero TLAS churn (< 0.15 ms GPU); evaluated on primary rays + wet-road reflections.
+// ---------------------------------------------------------------------------
+
+static inline float3 evaluateEventGateFX(
+    float3 rayOrigin,
+    float3 rayDir,
+    float maxT,
+    constant RTEventWorldFX& evFX,
+    bool isReflection,
+    thread float& outReactive
+) {
+    outReactive = 0.0f;
+    if (evFX.fxParams.x < 0.5f) return float3(0.0f);
+
+    float3 gatePos = evFX.gatePosRadius.xyz;
+    float halfW = clamp(evFX.gatePosRadius.w, 5.5f, 11.5f);
+    float3 fwdRaw = float3(evFX.gateDirKind.x, 0.0f, evFX.gateDirKind.z);
+    float fwdLenSq = dot(fwdRaw, fwdRaw);
+    float3 fwd = (fwdLenSq > 1e-5f) ? (fwdRaw * rsqrt(fwdLenSq)) : float3(0.0f, 0.0f, 1.0f);
+    float3 right = float3(fwd.z, 0.0f, -fwd.x);
+    int kind = int(evFX.gateDirKind.w + 0.5f);
+    float simT = evFX.fxParams.w;
+
+    // Authentic NFSMW 2005 event palettes: 0=Sprint Amber-Gold, 1=Speedtrap Electric Cyan, 2=Blacklist Crimson-Gold
+    float3 primaryCol   = float3(1.00f, 0.62f, 0.08f);
+    float3 secondaryCol = float3(1.00f, 0.90f, 0.42f);
+    if (kind == 1) {
+        primaryCol   = float3(0.06f, 0.86f, 1.00f);
+        secondaryCol = float3(0.70f, 0.98f, 1.00f);
+    } else if (kind == 2) {
+        primaryCol   = float3(1.00f, 0.14f, 0.08f);
+        secondaryCol = float3(1.00f, 0.76f, 0.14f);
+    }
+
+    float3 accum = float3(0.0f);
+
+    // 1. Active Gate Bounding-Sphere Early-Out & Twin Vertical Volumetric Light Pillars
+    float3 toGate = gatePos + float3(0.0f, 4.0f, 0.0f) - rayOrigin;
+    float tGateCenter = dot(toGate, rayDir);
+    if (tGateCenter > -16.0f && tGateCenter < min(maxT + 14.0f, 380.0f)) {
+        float distFade = smoothstep(380.0f, 22.0f, max(tGateCenter, 0.0f));
+        float3 closestCenter = rayOrigin + rayDir * max(tGateCenter, 0.0f);
+        if (length(closestCenter - (gatePos + float3(0.0f, 4.0f, 0.0f))) < halfW + 9.0f) {
+            // Twin Left & Right Volumetric Light Towers (height 8.4m)
+            for (int side = -1; side <= 1; side += 2) {
+                float3 pBase = gatePos + right * (float(side) * halfW);
+                float3 uSeg = float3(0.0f, 1.0f, 0.0f);
+                float3 w0 = rayOrigin - pBase;
+                float b = dot(rayDir, uSeg);
+                float d = dot(rayDir, w0);
+                float e = dot(uSeg, w0);
+                float denom = max(1.0f - b * b, 1e-4f);
+                float sSeg = clamp((e - b * d) / denom, 0.0f, 8.4f);
+                float3 segPt = pBase + float3(0.0f, sSeg, 0.0f);
+                float tRay = clamp(dot(segPt - rayOrigin, rayDir), 0.25f, min(maxT + 0.4f, 360.0f));
+                if (tRay < maxT + 0.35f) {
+                    float distSeg = length((rayOrigin + rayDir * tRay) - segPt);
+                    float core = exp(-distSeg * distSeg * 14.0f);
+                    float halo = exp(-distSeg * distSeg * 1.6f) * 0.28f;
+                    float yGrad = smoothstep(8.4f, 6.2f, sSeg) * smoothstep(-0.1f, 0.4f, sSeg);
+                    float pulseBand = 0.78f + 0.28f * sin(sSeg * 2.8f - simT * 6.5f);
+                    float3 towerCol = mix(primaryCol, secondaryCol, core * 0.65f);
+                    accum += towerCol * (core * 2.6f + halo) * yGrad * pulseBand * distFade;
+                }
+            }
+
+            // 2. Holographic Arch Plane (Overhead Chevron Banner + Road Laser Strip + Side Energy Curtains)
+            float denomPl = dot(rayDir, fwd);
+            if (abs(denomPl) > 1e-4f) {
+                float tPl = dot(gatePos - rayOrigin, fwd) / denomPl;
+                if (tPl > 0.4f && tPl < min(maxT + 0.25f, 340.0f)) {
+                    float3 hitP = rayOrigin + rayDir * tPl;
+                    float3 rel = hitP - gatePos;
+                    float lx = dot(rel, right);
+                    float ly = rel.y;
+                    float absX = abs(lx);
+                    if (absX <= halfW + 0.45f && ly >= -0.15f && ly <= 7.8f) {
+                        // A) Overhead Holographic Banner Ribbon (ly: 4.9 .. 6.7m)
+                        if (ly >= 4.7f && ly <= 6.9f && absX <= halfW) {
+                            float topRail = exp(-pow((ly - 6.65f) * 9.5f, 2.0f));
+                            float botRail = exp(-pow((ly - 4.95f) * 9.5f, 2.0f));
+                            float inBand = smoothstep(4.85f, 5.05f, ly) * smoothstep(6.75f, 6.55f, ly);
+                            float cyB = (ly - 5.80f) / 0.85f;
+                            float chevPhase = fract((absX * 0.42f - abs(cyB) * 0.52f) - simT * 1.6f);
+                            float chev = smoothstep(0.14f, 0.24f, chevPhase) * smoothstep(0.62f, 0.50f, chevPhase) * inBand;
+                            float scan = 0.75f + 0.25f * sin(ly * 38.0f + simT * 12.0f);
+                            float3 archCol = mix(primaryCol, secondaryCol, chev * 0.85f);
+                            accum += archCol * ((topRail + botRail) * 2.4f + chev * 1.45f + inBand * 0.22f) * scan * distFade;
+                            if (kind == 1) {
+                                float dPod = length(float2(absX - (halfW - 1.35f), ly - 5.80f));
+                                float podGlow = exp(-dPod * dPod * 9.0f) * (0.75f + 0.25f * sin(simT * 14.0f));
+                                accum += float3(1.1f, 1.3f, 1.5f) * podGlow * 2.2f * distFade;
+                            }
+                        }
+
+                        // B) Translucent Side Energy Curtains framing the road edges
+                        if (ly >= 0.0f && ly <= 6.7f && absX >= halfW - 1.8f && absX <= halfW) {
+                            float edgeProx = smoothstep(halfW - 1.8f, halfW, absX);
+                            float hFade = smoothstep(6.7f, 4.8f, ly) * smoothstep(0.0f, 0.5f, ly);
+                            float scan = 0.72f + 0.28f * sin(ly * 10.0f - simT * 8.0f);
+                            accum += primaryCol * edgeProx * edgeProx * hFade * scan * 0.75f * distFade;
+                        }
+
+                        // C) Speedtrap Translucent Laser Grid Curtain across road
+                        if (kind == 1 && ly >= 0.0f && ly <= 5.0f && absX < halfW - 0.1f) {
+                            float vLines = pow(max(0.0f, cos(lx * 3.14159f * 0.85f)), 24.0f);
+                            float hSweep = exp(-pow(fract(ly * 0.25f - simT * 0.9f) - 0.5f, 2.0f) * 90.0f);
+                            float curbFade = smoothstep(5.0f, 0.2f, ly);
+                            accum += primaryCol * (vLines * 0.22f + hSweep * 0.34f) * curbFade * distFade;
+                        }
+
+                        // D) Razor-sharp Glowing Road Threshold Laser Strip
+                        if (ly >= -0.10f && ly <= 0.42f && absX <= halfW) {
+                            float strip = exp(-pow((ly - 0.10f) * 11.0f, 2.0f));
+                            float dash = 0.65f + 0.35f * cos(lx * 2.6f);
+                            accum += secondaryCol * strip * dash * 1.85f * distFade;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Distant Next-Checkpoint Vertical Horizon Sky Beacon
+    if (!isReflection && evFX.nextPosRadius.w > 0.5f) {
+        float3 nPos = evFX.nextPosRadius.xyz;
+        float3 uSeg = float3(0.0f, 1.0f, 0.0f);
+        float3 w0 = rayOrigin - nPos;
+        float b = dot(rayDir, uSeg);
+        float d = dot(rayDir, w0);
+        float e = dot(uSeg, w0);
+        float denom = max(1.0f - b * b, 1e-4f);
+        float sSeg = clamp((e - b * d) / denom, 0.0f, 34.0f);
+        float3 segPt = nPos + float3(0.0f, sSeg, 0.0f);
+        float tRay = dot(segPt - rayOrigin, rayDir);
+        if (tRay > 18.0f && tRay < min(maxT + 0.5f, 520.0f)) {
+            float distSeg = length((rayOrigin + rayDir * tRay) - segPt);
+            float beam = exp(-distSeg * distSeg * 0.9f) * smoothstep(34.0f, 4.0f, sSeg) * smoothstep(520.0f, 40.0f, tRay);
+            accum += primaryCol * beam * 0.52f;
+        }
+    }
+
+    // 4. Up to 4 Floating Holographic Road Direction Chevrons (primary rays only)
+    if (!isReflection) {
+        for (int k = 0; k < 4; ++k) {
+            float4 ch = evFX.chevrons[k];
+            if (ch.w <= -90.0f) continue;
+            float3 cPos = ch.xyz + float3(0.0f, 1.65f + 0.16f * sin(simT * 3.8f + float(k) * 1.1f), 0.0f);
+            float3 toC = cPos - rayOrigin;
+            float tC = dot(toC, rayDir);
+            if (tC > 2.5f && tC < min(maxT + 0.2f, 220.0f)) {
+                float cyC = cos(ch.w), syC = sin(ch.w);
+                float3 cFwd = float3(syC, 0.0f, cyC);
+                float3 cRight = float3(cyC, 0.0f, -syC);
+                float dPl = dot(rayDir, cFwd);
+                if (abs(dPl) > 0.05f) {
+                    float tPl = dot(cPos - rayOrigin, cFwd) / dPl;
+                    if (tPl > 2.5f && tPl < min(maxT + 0.2f, 220.0f)) {
+                        float3 rel = (rayOrigin + rayDir * tPl) - cPos;
+                        float cx = dot(rel, cRight);
+                        float cy = rel.y;
+                        if (abs(cx) < 1.55f && abs(cy) < 0.95f) {
+                            float arm = abs((cy + 0.22f) + abs(cx) * 0.62f - 0.52f);
+                            float chMask = smoothstep(0.18f, 0.05f, arm) * smoothstep(1.35f, 1.05f, abs(cx));
+                            float wave = 0.62f + 0.38f * sin(simT * 6.0f - float(k) * 1.4f);
+                            float fade = smoothstep(220.0f, 18.0f, tPl) * smoothstep(3.5f, 10.0f, tPl);
+                            accum += mix(primaryCol, secondaryCol, 0.55f) * chMask * wave * fade * 1.9f;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    float mag = length(accum);
+    if (mag > 0.01f) {
+        outReactive = min(0.95f, mag * 0.75f);
+    }
+    return min(accum, float3(7.5f));
+}
+
+// ---------------------------------------------------------------------------
 // Primary Hardware Ray Tracing Kernel (Outputs Demodulated Buffers + G-Buffer)
 // ---------------------------------------------------------------------------
 
@@ -2825,7 +3020,8 @@ kernel void raytraceKernel(
     device const RTWorldLight* worldLights [[buffer(11)]],
     device const ushort* worldLightGrid [[buffer(12)]],
     constant RTDynamicFX& dynFX [[buffer(13)]],
-    constant RTAISceneData& aiScene [[buffer(14)]]
+    constant RTAISceneData& aiScene [[buffer(14)]],
+    constant RTEventWorldFX& eventFX [[buffer(16)]]
 ) {
     // worldLights & worldLightGrid & dynFX actively drive real 4,309-light O(1) lookup, cop strobes, NOS & rain!
     uint width = uint(u.rtParams.x);
@@ -3222,6 +3418,11 @@ kernel void raytraceKernel(
                                 worldLights, worldLightGrid, dynFX, repeatSamp, u, xiShad, true
                             );
                         }
+                        if (eventFX.fxParams.x > 0.5f && s.matID == MAT_WET_ASPHALT) {
+                            float reflGateReact = 0.0f;
+                            float reflMaxT = ch.hit ? ch.distance : 180.0f;
+                            ccSpecRefl += evaluateEventGateFX(cr.origin, cr.direction, reflMaxT, eventFX, true, reflGateReact) * 0.72f;
+                        }
                         ccSpecRefl = min(ccSpecRefl, float3(10.0f));
                     }
                 }
@@ -3377,45 +3578,45 @@ kernel void raytraceKernel(
             outSpecRad += rainCol * min(rainStreak, 0.24f) * effectiveRain;
             gReactiveVal = max(gReactiveVal, 0.65f);
         }
+    }
 
-        // Volumetric Dual Xenon Headlight Fog Cones (strictly night-rain gated -> ZERO daytime chalk leak!)
-        if (rainNightGate > 0.45f && u.skyGround.w > 0.30f) {
-            float yaw = u.carDynParams.z;
-            float cy = cos(yaw), sy = sin(yaw);
-            float fZ = (abs(dynFX.carMetrics.x) > 0.2f) ? (dynFX.carMetrics.x + 0.55f) : 2.02f;
-            float3 fwdAxis = normalize(float3(sy, -0.14f, cy));
-            float3 carO = u.carWorldPos.xyz;
-            float3 hL = carO + float3(-0.62f * cy + fZ * sy, 0.60f, 0.62f * sy + fZ * cy);
-            float3 hR = carO + float3( 0.62f * cy + fZ * sy, 0.60f, -0.62f * sy + fZ * cy);
-            float volBeam = 0.0f;
-            float maxT = min(gDepth, 24.0f);
-            if (maxT > 1.0f) {
-                for (int sIdx = 0; sIdx < 4; ++sIdx) {
-                    float tSample = mix(1.2f, maxT, (float(sIdx) + 0.5f) * 0.25f);
-                    float3 pW = rayOrigin + rayDir * tSample;
-                    for (int side = 0; side < 2; ++side) {
-                        float3 src = (side == 0) ? hL : hR;
-                        float3 rel = pW - src;
-                        float along = dot(rel, fwdAxis);
-                        if (along > 0.25f && along < 18.0f) {
-                            float3 perp = rel - fwdAxis * along;
-                            float coneR = 0.20f + along * 0.26f;
-                            float rNorm = length(perp) / coneR;
-                            float radial = exp(-rNorm * rNorm * 2.8f);
-                            float falloff = smoothstep(18.0f, 0.5f, along) * smoothstep(0.15f, 1.2f, along);
-                            volBeam += radial * falloff * 0.022f;
-                        }
+    // Volumetric Dual Xenon Headlight Fog Cones (night-rain OR dark underground tunnels -> ZERO daytime chalk leak!)
+    float tunnelHeadBeam = clamp(u.skyGround.w - 1.0f, 0.0f, 1.0f);
+    if (hasRkptWorld && ((rainNightGate > 0.45f && effectiveRain > 0.30f && u.skyGround.w > 0.30f) || tunnelHeadBeam > 0.25f)) {
+        float beamVis = max(rainNightGate * effectiveRain * min(u.skyGround.w, 1.0f), tunnelHeadBeam * 0.72f);
+        float yaw = u.carDynParams.z;
+        float cy = cos(yaw), sy = sin(yaw);
+        float fZ = (abs(dynFX.carMetrics.x) > 0.2f) ? (dynFX.carMetrics.x + 0.55f) : 2.02f;
+        float3 fwdAxis = normalize(float3(sy, -0.14f, cy));
+        float3 carO = u.carWorldPos.xyz;
+        float3 hL = carO + float3(-0.62f * cy + fZ * sy, 0.60f, 0.62f * sy + fZ * cy);
+        float3 hR = carO + float3( 0.62f * cy + fZ * sy, 0.60f, -0.62f * sy + fZ * cy);
+        float volBeam = 0.0f;
+        float maxT = min(gDepth, 24.0f);
+        if (maxT > 1.0f) {
+            for (int sIdx = 0; sIdx < 4; ++sIdx) {
+                float tSample = mix(1.2f, maxT, (float(sIdx) + 0.5f) * 0.25f);
+                float3 pW = rayOrigin + rayDir * tSample;
+                for (int side = 0; side < 2; ++side) {
+                    float3 src = (side == 0) ? hL : hR;
+                    float3 rel = pW - src;
+                    float along = dot(rel, fwdAxis);
+                    if (along > 0.25f && along < 18.0f) {
+                        float3 perp = rel - fwdAxis * along;
+                        float coneR = 0.20f + along * 0.26f;
+                        float rNorm = length(perp) / coneR;
+                        float radial = exp(-rNorm * rNorm * 2.8f);
+                        float falloff = smoothstep(18.0f, 0.5f, along) * smoothstep(0.15f, 1.2f, along);
+                        volBeam += radial * falloff * 0.022f;
                     }
                 }
             }
-            if (volBeam > 0.001f) {
-                float3 beamTint = float3(0.76f, 0.88f, 1.05f) * (u.skyGround.w * rainNightGate * effectiveRain);
-                outSpecRad += beamTint * min(volBeam, 0.22f);
-                gReactiveVal = max(gReactiveVal, 0.55f);
-            }
         }
-
-        // Wet-lens screen droplets deferred to post-denoise refraction (removes flat pre-denoise gray ring artifacts).
+        if (volBeam > 0.001f) {
+            float3 beamTint = float3(0.76f, 0.88f, 1.05f) * beamVis;
+            outSpecRad += beamTint * min(volBeam, 0.22f);
+            gReactiveVal = max(gReactiveVal, 0.55f);
+        }
     }
 
     // Multi-Sample Volumetric Dual NOS Exhaust Plasma Cones (RTDynamicFX.nosParams.x > 0.02)
@@ -3480,6 +3681,26 @@ kernel void raytraceKernel(
                     gReactiveVal = max(gReactiveVal, 0.94f);
                 }
             }
+        }
+    }
+
+    // Analytical 3D NFSMW Event Checkpoint / Speedtrap / Blacklist Boss Gates + Floating Chevrons (RTEventWorldFX[16])
+    if (eventFX.fxParams.x > 0.5f) {
+        float gateReact = 0.0f;
+        float3 gateGlow = evaluateEventGateFX(rayOrigin, rayDir, gDepth, eventFX, false, gateReact);
+        if (gateReact > 0.001f) {
+            outSpecRad += gateGlow;
+            gReactiveVal = max(gReactiveVal, gateReact);
+        }
+        // Subtle Speedtrap radar camera flash pulse on trap crossing (perimeter strobe only; zero center washout)
+        if (eventFX.fxParams.z > 0.01f) {
+            float flashAmt = clamp(eventFX.fxParams.z, 0.0f, 1.0f);
+            float radEdge = length(pxNorm - float2(0.5f, 0.52f));
+            float edgeRing = smoothstep(0.34f, 0.92f, radEdge);
+            float topStrobe = smoothstep(0.45f, 0.0f, pxNorm.y) * 0.45f;
+            float flashGlow = flashAmt * flashAmt * (edgeRing * 0.85f + topStrobe);
+            outSpecRad += float3(0.55f, 0.88f, 1.05f) * flashGlow * 0.24f;
+            gReactiveVal = max(gReactiveVal, flashAmt * 0.85f);
         }
     }
 

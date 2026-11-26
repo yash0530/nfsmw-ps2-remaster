@@ -16,14 +16,15 @@ ROCKPORT_FULL_RKPT := build/rockport_world/rockport_full.rkpt
 ROCKPORT_GAMEPLAY_VLT := build/gameplay_pack/vlt_vehicles.json
 ROCKPORT_ARGS ?=
 
-.PHONY: help export-rockport-full export-music-pack build-rockport play-rockport play-pursuit bench-rockport status profiles verify test lint audit inspect zdir vlt lighting audio geometry tpk-extract build build-v0.2 build-v0.3 build-v0.4 build-v0.5 enhance-world pine-drive video-qa export-world metal-rt-world setup-pcsx2 cc0-search hud-pack build-dds caves decomp-bridge metal-rt live-verify
+.PHONY: help export-rockport-full export-music-pack export-events-pack build-rockport play-rockport play-pursuit bench-rockport status profiles verify test lint audit inspect zdir vlt lighting audio geometry tpk-extract build build-v0.2 build-v0.3 build-v0.4 build-v0.5 enhance-world pine-drive video-qa export-world metal-rt-world setup-pcsx2 cc0-search hud-pack build-dds caves decomp-bridge metal-rt live-verify
 
 help:
-	@echo "NFSMW: Rockport 2026 — Native Apple Silicon Metal 4 RT + Open-Source PS2 Suite (v1.1.0)"
+	@echo "NFSMW: Rockport 2026 — Native Apple Silicon Metal 4 RT + Open-Source PS2 Suite (v1.2.0)"
 	@echo ""
 	@echo "Play & Benchmark (Native Metal 4 RT — Full Rockport Island):"
-	@echo "  make export-rockport-full - Export full 718-section BC7 Rockport island + VLT/Audio/AI + EA TRAX music pack (requires NFSMW_ISO)"
+	@echo "  make export-rockport-full - Export full 718-section BC7 Rockport island + VLT/Audio/AI + Events + EA TRAX pack (requires NFSMW_ISO)"
 	@echo "  make export-music-pack    - Export authentic 26 EA TRAX + 14 interactive pursuit/race score tracks -> build/music_pack (requires NFSMW_ISO)"
+	@echo "  make export-events-pack   - Export authentic 15 Blacklist Boss Duels, 18 Sprints & 10 Speedtraps -> build/gameplay_pack/events.json (requires NFSMW_ISO)"
 	@echo "  make build-rockport       - Compile native Apple Silicon Metal 4 RT engine -> build/metal_rt_v06/RockportMetalRT"
 	@echo "  make play-rockport        - Export/build if needed and launch full-island Rockport 2026 @ 120 FPS Frame-Gen"
 	@echo "  make play-pursuit         - Launch straight into an active Heat 3 Rosewood police pursuit @ 120 FPS Frame-Gen"
@@ -67,6 +68,7 @@ export-rockport-full:
 	fi; \
 	$(PYTHON) tools/export_rockport_world.py --district rockport_full --version 2 --bc7 --iso "$$ISO_PATH" --out-dir build/rockport_world && \
 	$(PYTHON) tools/export_gameplay_pack.py --iso "$$ISO_PATH" --out build/gameplay_pack && \
+	$(PYTHON) tools/export_events_pack.py --iso "$$ISO_PATH" --rkpt build/rockport_world/rockport_full.rkpt --out build/gameplay_pack/events.json && \
 	if command -v afconvert >/dev/null 2>&1; then \
 		$(PYTHON) tools/export_music_pack.py --iso "$$ISO_PATH" --out build/music_pack; \
 	else \
@@ -82,6 +84,16 @@ export-music-pack:
 		exit 1; \
 	fi; \
 	$(PYTHON) tools/export_music_pack.py --iso "$$ISO_PATH" --out build/music_pack
+
+export-events-pack:
+	@ISO_PATH="$(ISO)"; \
+	if [ -z "$$ISO_PATH" ] || [ ! -f "$$ISO_PATH" ]; then \
+		echo "ERROR: Legal PS2 NFSMW Black Edition (SLUS-21351) ISO not found." >&2; \
+		echo "  Checked: $$ISO_PATH" >&2; \
+		echo "  Set NFSMW_ISO=/path/to/Need\\ for\\ Speed\\ -\\ Most\\ Wanted\\ -\\ Black\\ Edition.iso and re-run." >&2; \
+		exit 1; \
+	fi; \
+	$(PYTHON) tools/export_events_pack.py --iso "$$ISO_PATH" --rkpt "$(ROCKPORT_FULL_RKPT)" --out build/gameplay_pack/events.json
 
 build-rockport:
 	$(MAKE) -C native_metal_rt OUT_DIR="$(ROCKPORT_RT_DIR)"

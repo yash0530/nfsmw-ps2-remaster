@@ -3,12 +3,15 @@
 // Concatenated after RayTracing.metal at runtime before device.makeLibrary(source:)
 // so HUD digits & minimap NEVER warp under MTLFXFrameInterpolator (zero #include).
 //
-// Locked Buffer Slots (per #40 / #41 + v1.1.0 EA TRAX extension):
+// Locked Buffer & Texture Slots (per #40 / #41 + v1.1.0 EA TRAX + v1.2.0 Events/WorldMap):
+//   texture(0) = inLdrTex (read), texture(1) = outTex (write), texture(2) = worldMapTex (sample)
+//   sampler(0) = linearSamp
 //   buffer(0) = RTFrameUniforms       (unchanged base contract)
 //   buffer(1) = uint encodeSRGB       (unchanged base contract)
 //   buffer(2) = RTHudExtUniforms      (64 bytes, 16B aligned)
 //   buffer(3) = RTMinimapBuffer       (1,936 bytes <= 2 KB, 16B aligned)
 //   buffer(4) = RTMusicBannerUniforms (112 bytes <= 128 B, 16B aligned)
+//   buffer(5) = RTEventHudUniforms    (864 bytes <= 1 KB, 16B aligned)
 // ---------------------------------------------------------------------------
 
 struct RTHudExtUniforms {
@@ -66,6 +69,47 @@ static constant uint MUSIC_FLAG_VISIBLE       = 1u << 0;
 static constant uint MUSIC_FLAG_MUTED         = 1u << 1;
 static constant uint MUSIC_FLAG_PURSUIT_SCORE = 1u << 2;
 static constant uint MUSIC_FLAG_TUNNEL_REVERB = 1u << 3;
+
+struct RTEventHudUniforms {
+    uint  mode;                 // 0=none, 1=sprint, 2=speedtrap, 3=boss
+    uint  state;                // 0=idle, 1=countdown, 2=active, 3=win, 4=lose
+    uint  cpIndex;              // 1-based current cp / trap
+    uint  cpTotal;
+
+    float elapsedSec;
+    float currentScore;         // speedtrap cumulative km/h
+    float targetScore;          // speedtrap target km/h
+    float bossGapM;             // >0 player ahead, <0 boss ahead
+
+    uint  playerRank;           // 1 or 2
+    uint  bossRank;             // 1..15
+    uint  flags;                // bit0=eventActive, bit1=worldMapOpen, bit2=hasSelected, bit3=radarFlash
+    float nextGateDistM;
+
+    float4 mapViewParams;       // xy=centerNorm, z=zoom, w=playerHeadingRad
+    float4 playerMapPos;        // xy=playerNorm, z=selectedIdx, w=markerCount
+    float4 mapMarkers[24];      // xy=normPos, z=type [0=landmark,1=sprint,2=speedtrap,3=boss], w=bossRank
+    float4 gpsRoute[16];        // xy=normStart, zw=normEnd
+
+    uint  eventTitleLen;
+    uint  bossNameLen;
+    uint  selectedTitleLen;
+    uint  selectedSubLen;
+
+    uint  eventTitleChars[8];   // 32 ASCII bytes
+    uint  bossNameChars[6];     // 24 ASCII bytes
+    uint  selectedTitleChars[8];// 32 ASCII bytes
+    uint  selectedSubChars[8];  // 32 ASCII bytes
+
+    uint  gpsSegCount;
+    uint  pad0;
+};
+static_assert(sizeof(RTEventHudUniforms) == 864, "RTEventHudUniforms must be 864 bytes (<= 1 KB, 16B aligned)");
+
+static constant uint EVENT_HUD_FLAG_ACTIVE       = 1u << 0;
+static constant uint EVENT_HUD_FLAG_WORLD_MAP    = 1u << 1;
+static constant uint EVENT_HUD_FLAG_HAS_SELECTED = 1u << 2;
+static constant uint EVENT_HUD_FLAG_RADAR_FLASH  = 1u << 3;
 
 static constant uint HUD_FLAG_VISIBLE        = 1u << 0;
 static constant uint HUD_FLAG_FRAMEGEN_ON    = 1u << 1;
@@ -958,6 +1002,535 @@ static inline float3 compositeEATraxBanner(
     return mix(outCol, bg, cardMask);
 }
 
+// Helper to render up to 5-digit unsigned integer in 5x7 font (returns coverage)
+static inline float evalUint5x7(float2 relPx, float2 originPx, float cellPx, float stridePx, uint val, uint minDigits) {
+    uint digs[5];
+    uint n = 0u;
+    uint v = min(val, 99999u);
+    do {
+        digs[n++] = 48u + (v % 10u);
+        v /= 10u;
+    } while (v > 0u && n < 5u);
+    while (n < min(minDigits, 5u)) {
+        digs[n++] = 48u;
+    }
+    uint rev[5];
+    for (uint i = 0u; i < n; ++i) rev[i] = digs[n - 1u - i];
+    return evalLiteral7(relPx, originPx, cellPx, stridePx, rev, n);
+}
+
+// Helper to render MM:SS.T timer in 5x7 font
+static inline float evalTimer5x7(float2 relPx, float2 originPx, float cellPx, float stridePx, float sec) {
+    float s = max(sec, 0.0f);
+    uint totalTenths = uint(s * 10.0f);
+    uint tenths = totalTenths % 10u;
+    uint totalSec = totalTenths / 10u;
+    uint mins = min(totalSec / 60u, 99u);
+    uint secs = totalSec % 60u;
+    const uint buf[7] = {
+        48u + (mins / 10u), 48u + (mins % 10u), 58u,
+        48u + (secs / 10u), 48u + (secs % 10u), 46u,
+        48u + tenths
+    };
+    return evalLiteral7(relPx, originPx, cellPx, stridePx, buf, 7u);
+}
+
+// ---------------------------------------------------------------------------
+// Widget 6: Top-Center Active NFSMW Event HUD Strip (Sprint / Speedtrap / Blacklist Boss)
+// ---------------------------------------------------------------------------
+
+static inline float3 compositeEventHudStrip(
+    float3 baseCol,
+    float2 px,
+    float2 res,
+    constant RTHudExtUniforms& ext,
+    constant RTEventHudUniforms& ev
+) {
+    if ((ev.flags & EVENT_HUD_FLAG_ACTIVE) == 0u || ev.mode == 0u) return baseCol;
+
+    float scale = res.y / 1080.0f;
+    bool pursuitOn = (ext.heatLevel > 0.5f) || ((ext.hudFlags & HUD_FLAG_PURSUIT_ACTIVE) != 0u);
+    float centerY = pursuitOn ? 104.0f : 44.0f;
+    float2 center = float2(res.x * 0.5f, centerY * scale);
+    float2 rel = (px - center) / scale; // virtual 1080p coords centered on strip
+
+    const float halfW = 248.0f;
+    const float halfH = 28.0f;
+    // Allow extra vertical room below strip for victory/finish banner when finished
+    bool finished = (ev.state == 3u || ev.state == 4u);
+    if (abs(rel.x) > halfW + 14.0f || rel.y < -(halfH + 12.0f) || rel.y > (finished ? 76.0f : (halfH + 12.0f))) {
+        return baseCol;
+    }
+
+    float3 accent = float3(1.00f, 0.70f, 0.12f); // Sprint Gold
+    if (ev.mode == 2u) accent = float3(0.10f, 0.88f, 1.00f); // Speedtrap Cyan
+    else if (ev.mode == 3u) accent = float3(1.00f, 0.22f, 0.14f); // Blacklist Crimson-Gold
+
+    float3 outCol = baseCol;
+    float dBox = sdRoundedBoxHUD(rel, float2(halfW, halfH), 8.0f);
+    if (dBox <= 10.0f) {
+        float shadow = smoothstep(10.0f, 0.0f, dBox) * 0.34f * step(0.0f, dBox);
+        outCol *= (1.0f - shadow);
+        float mask = smoothstep(1.2f, -0.8f, dBox);
+        if (mask > 0.001f) {
+            float3 bg = mix(baseCol * 0.22f, float3(0.028f, 0.032f, 0.044f), 0.84f);
+            float border = smoothstep(1.5f, 0.3f, abs(dBox));
+            bg = mix(bg, mix(float3(0.40f, 0.44f, 0.52f), accent, 0.55f), border * 0.78f);
+
+            // Top 2.5px glowing event accent bar
+            if (rel.y < -halfH + 3.2f) {
+                float3 topCol = (ev.mode == 3u) ? mix(accent, float3(1.00f, 0.76f, 0.14f), smoothstep(-halfW, halfW, rel.x)) : accent;
+                bg = mix(bg, topCol, 0.94f);
+            }
+
+            // Local origin inside card [0..496, 0..56]
+            float2 cRel = rel + float2(halfW, halfH);
+
+            // Row 1 Left: Mode Pill Badge
+            float pillHalfW = (ev.mode == 2u) ? 46.0f : 38.0f;
+            float2 pillC = float2(14.0f + pillHalfW, 16.5f);
+            float dPill = sdRoundedBoxHUD(cRel - pillC, float2(pillHalfW, 8.0f), 3.5f);
+            float pM = smoothstep(1.0f, -0.6f, dPill);
+            if (pM > 0.001f) {
+                bg = mix(bg, accent, pM * 0.96f);
+                float txt = 0.0f;
+                if (ev.mode == 1u) {
+                    const uint kSpr[6] = { 83u,80u,82u,73u,78u,84u }; // SPRINT
+                    txt = evalLiteral7(cRel, float2(27.0f, 11.7f), 1.35f, 8.2f, kSpr, 6u);
+                } else if (ev.mode == 2u) {
+                    const uint kSt[9] = { 83u,80u,69u,69u,68u,84u,82u,65u,80u }; // SPEEDTRAP
+                    txt = evalLiteral7(cRel, float2(23.5f, 11.8f), 1.30f, 8.0f, kSt, 9u);
+                } else {
+                    // "BL #15"
+                    uint rk = clamp(ev.bossRank, 1u, 15u);
+                    const uint kBl[6] = { 66u,76u,32u,35u, 48u + (rk / 10u), 48u + (rk % 10u) };
+                    txt = evalLiteral7(cRel, float2(25.5f, 11.7f), 1.35f, 8.2f, kBl, 6u);
+                }
+                float3 pillInk = (ev.mode == 3u) ? float3(0.98f, 0.99f, 1.00f) : float3(0.03f, 0.035f, 0.045f);
+                bg = mix(bg, pillInk, txt * pM);
+            }
+
+            // Row 1 Center: Event Title (or Boss Name in Boss Duel)
+            float titleX = 24.0f + pillHalfW * 2.0f;
+            if (ev.mode == 3u && ev.bossNameLen > 0u) {
+                float tFg = evalPackedString5x7(cRel, float2(titleX, 11.2f), 1.55f, 9.6f, ev.bossNameChars, ev.bossNameLen, 24u);
+                bg = mix(bg, float3(1.00f, 0.90f, 0.62f), tFg);
+            } else {
+                float tFg = evalPackedString5x7(cRel, float2(titleX, 11.2f), 1.55f, 9.6f, ev.eventTitleChars, ev.eventTitleLen, 26u);
+                bg = mix(bg, float3(0.96f, 0.98f, 1.00f), tFg);
+            }
+
+            // Row 1 Right: CP / TRAP Counter ("CP 03/12" or "TR 2/5")
+            if (ev.cpTotal > 0u) {
+                uint cur = clamp(ev.cpIndex, 1u, 99u);
+                uint tot = clamp(ev.cpTotal, 1u, 99u);
+                const uint kCp[8] = {
+                    (ev.mode == 2u) ? 84u : 67u, (ev.mode == 2u) ? 82u : 80u, 32u,
+                    48u + (cur / 10u), 48u + (cur % 10u), 47u,
+                    48u + (tot / 10u), 48u + (tot % 10u)
+                };
+                float cpFg = evalLiteral7(cRel, float2(408.0f, 11.2f), 1.50f, 9.4f, kCp, 8u);
+                bg = mix(bg, accent, cpFg);
+            }
+
+            // Row 2 (y: 33..46): Mode-specific Live Telemetry
+            if (ev.mode == 2u) {
+                // Speedtrap: cumulative KM/H + target + cyan progress bar
+                float curSpd = max(ev.currentScore, 0.0f);
+                float tgtSpd = max(ev.targetScore, 1.0f);
+                const uint kTot[3] = { 84u,79u,84u }; // TOT
+                bg = mix(bg, float3(0.68f, 0.78f, 0.86f), evalLiteral7(cRel, float2(16.0f, 34.5f), 1.45f, 8.8f, kTot, 3u));
+                bg = mix(bg, float3(0.28f, 0.96f, 1.00f), evalUint5x7(cRel, float2(52.0f, 33.5f), 1.70f, 10.2f, uint(curSpd + 0.5f), 1u));
+                const uint kSlash[1] = { 47u };
+                bg = mix(bg, float3(0.62f, 0.70f, 0.78f), evalLiteral7(cRel, float2(104.0f, 34.5f), 1.50f, 8.8f, kSlash, 1u));
+                bg = mix(bg, float3(0.92f, 0.96f, 1.00f), evalUint5x7(cRel, float2(118.0f, 34.5f), 1.50f, 9.2f, uint(tgtSpd + 0.5f), 1u));
+                const uint kKmh[3] = { 75u,77u,72u };
+                bg = mix(bg, float3(0.64f, 0.76f, 0.86f), evalLiteral7(cRel, float2(164.0f, 34.5f), 1.40f, 8.6f, kKmh, 3u));
+
+                // Progress bar (x: 212..392, y: 36..44)
+                if (cRel.x >= 212.0f && cRel.x <= 392.0f && cRel.y >= 36.0f && cRel.y <= 44.0f) {
+                    float uP = (cRel.x - 212.0f) / 180.0f;
+                    float fill = clamp(curSpd / tgtSpd, 0.0f, 1.0f);
+                    float3 barC = (uP <= fill) ? mix(float3(0.06f, 0.74f, 1.00f), float3(0.55f, 1.00f, 1.00f), uP) : float3(0.10f, 0.14f, 0.20f);
+                    bg = mix(bg, barC, 0.94f);
+                }
+                bg = mix(bg, float3(0.92f, 0.96f, 1.00f), evalTimer5x7(cRel, float2(414.0f, 34.5f), 1.50f, 9.4f, ev.elapsedSec));
+            } else if (ev.mode == 3u) {
+                // Blacklist Boss Duel: 1ST/2ND badge + Gap (+42M / -18M) + Next Gate + Timer
+                bool first = (ev.playerRank <= 1u);
+                float3 rkCol = first ? float3(1.00f, 0.78f, 0.16f) : float3(1.00f, 0.24f, 0.16f);
+                const uint k1st[3] = { 49u,83u,84u };
+                const uint k2nd[3] = { 50u,78u,68u };
+                bg = mix(bg, rkCol, evalLiteral7(cRel, float2(18.0f, 33.0f), 1.75f, 10.6f, first ? k1st : k2nd, 3u));
+
+                const uint kGap[3] = { 71u,65u,80u }; // GAP
+                bg = mix(bg, float3(0.68f, 0.74f, 0.80f), evalLiteral7(cRel, float2(74.0f, 34.5f), 1.40f, 8.6f, kGap, 3u));
+                const uint kSign[1] = { (ev.bossGapM >= 0.0f) ? 43u : 45u }; // + or -
+                bg = mix(bg, rkCol, evalLiteral7(cRel, float2(110.0f, 34.0f), 1.55f, 9.2f, kSign, 1u));
+                uint absGap = uint(abs(ev.bossGapM) + 0.5f);
+                bg = mix(bg, rkCol, evalUint5x7(cRel, float2(122.0f, 34.0f), 1.55f, 9.4f, absGap, 1u));
+                const uint kM[1] = { 77u }; // M
+                bg = mix(bg, float3(0.76f, 0.80f, 0.86f), evalLiteral7(cRel, float2(162.0f, 34.5f), 1.40f, 8.6f, kM, 1u));
+
+                // Next gate dist
+                const uint kNxt[4] = { 71u,65u,84u,69u }; // GATE
+                bg = mix(bg, float3(0.68f, 0.74f, 0.80f), evalLiteral7(cRel, float2(214.0f, 34.5f), 1.40f, 8.6f, kNxt, 4u));
+                bg = mix(bg, float3(0.98f, 0.99f, 1.00f), evalUint5x7(cRel, float2(258.0f, 34.0f), 1.55f, 9.4f, uint(max(ev.nextGateDistM, 0.0f) + 0.5f), 1u));
+                bg = mix(bg, float3(0.76f, 0.80f, 0.86f), evalLiteral7(cRel, float2(304.0f, 34.5f), 1.40f, 8.6f, kM, 1u));
+
+                bg = mix(bg, float3(0.95f, 0.97f, 1.00f), evalTimer5x7(cRel, float2(414.0f, 34.0f), 1.55f, 9.4f, ev.elapsedSec));
+            } else {
+                // Sprint: Timer + Next Gate Distance
+                const uint kTim[4] = { 84u,73u,77u,69u }; // TIME
+                bg = mix(bg, float3(0.70f, 0.76f, 0.82f), evalLiteral7(cRel, float2(18.0f, 34.5f), 1.45f, 8.8f, kTim, 4u));
+                bg = mix(bg, float3(0.98f, 0.99f, 1.00f), evalTimer5x7(cRel, float2(64.0f, 33.5f), 1.70f, 10.2f, ev.elapsedSec));
+                const uint kNxt[4] = { 78u,69u,88u,84u }; // NEXT
+                bg = mix(bg, float3(0.70f, 0.76f, 0.82f), evalLiteral7(cRel, float2(246.0f, 34.5f), 1.45f, 8.8f, kNxt, 4u));
+                bg = mix(bg, accent, evalUint5x7(cRel, float2(292.0f, 33.5f), 1.70f, 10.2f, uint(max(ev.nextGateDistM, 0.0f) + 0.5f), 1u));
+                const uint kM[1] = { 77u };
+                bg = mix(bg, float3(0.78f, 0.82f, 0.88f), evalLiteral7(cRel, float2(342.0f, 34.5f), 1.45f, 8.8f, kM, 1u));
+            }
+
+            outCol = mix(outCol, bg, mask);
+        }
+    }
+
+    // Optional Finish / Victory / Defeat Pill directly beneath strip
+    if (finished) {
+        float2 fRel = rel - float2(0.0f, 48.0f);
+        float dFin = sdRoundedBoxHUD(fRel, float2(158.0f, 16.0f), 6.0f);
+        float fM = smoothstep(1.0f, -0.6f, dFin);
+        if (fM > 0.001f) {
+            bool won = (ev.state == 3u);
+            float3 fCol = won ? float3(1.00f, 0.78f, 0.16f) : float3(1.00f, 0.22f, 0.16f);
+            float3 fBg = mix(float3(0.04f, 0.045f, 0.06f), fCol * 0.24f, 0.55f);
+            fBg = mix(fBg, fCol, smoothstep(1.4f, 0.2f, abs(dFin)) * 0.90f);
+            float2 fc = fRel + float2(158.0f, 16.0f);
+            if (won) {
+                const uint kWin[14] = { 69u,86u,69u,78u,84u,32u,67u,79u,77u,80u,76u,69u,84u,69u }; // EVENT COMPLETE
+                fBg = mix(fBg, fCol, evalLiteral7(fc, float2(68.0f, 9.5f), 1.75f, 11.2f, kWin, 14u));
+            } else {
+                const uint kLos[12] = { 69u,86u,69u,78u,84u,32u,70u,65u,73u,76u,69u,68u }; // EVENT FAILED
+                fBg = mix(fBg, fCol, evalLiteral7(fc, float2(80.0f, 9.5f), 1.75f, 11.2f, kLos, 12u));
+            }
+            outCol = mix(outCol, fBg, fM * 0.95f);
+        }
+    }
+
+    return outCol;
+}
+
+// ---------------------------------------------------------------------------
+// Widget 7: Interactive O(1) Full-Island Rockport World Map Overlay (`M` toggle)
+// Samples pre-baked 1024x1024 6,538-segment road map texture in O(1) + crisp SDF UI.
+// ---------------------------------------------------------------------------
+
+static inline float3 compositeWorldMapOverlay(
+    float3 baseCol,
+    float2 px,
+    float2 res,
+    constant RTHudExtUniforms& ext,
+    constant RTEventHudUniforms& ev,
+    texture2d<float, access::sample> worldMapTex,
+    sampler linearSamp
+) {
+    if ((ev.flags & EVENT_HUD_FLAG_WORLD_MAP) == 0u) return baseCol;
+
+    float scale = res.y / 1080.0f;
+    float2 vPx = px / scale; // virtual 1080p coords [0..1920, 0..1080]
+
+    // Smooth dark tactical backdrop dimming live RT Rockport underneath
+    float3 outCol = baseCol * 0.22f + float3(0.012f, 0.018f, 0.028f);
+
+    // Centered World Map Frame: x=[280..1640] (1360w), y=[128..952] (824h)
+    const float2 frameOrg = float2(280.0f, 128.0f);
+    const float2 frameSz  = float2(1360.0f, 824.0f);
+    float2 fRel = vPx - frameOrg;
+    float dFrame = sdRoundedBoxHUD(fRel - frameSz * 0.5f, frameSz * 0.5f, 12.0f);
+
+    if (dFrame > 16.0f) return outCol;
+    float fShadow = smoothstep(16.0f, 0.0f, dFrame) * 0.45f * step(0.0f, dFrame);
+    outCol *= (1.0f - fShadow);
+
+    float frameMask = smoothstep(1.2f, -0.8f, dFrame);
+    if (frameMask <= 0.001f) return outCol;
+
+    float3 card = float3(0.026f, 0.034f, 0.048f);
+    float fBorder = smoothstep(1.8f, 0.4f, abs(dFrame));
+    card = mix(card, float3(0.42f, 0.48f, 0.58f), fBorder * 0.72f);
+
+    // Header Bar (y: 0..56)
+    if (fRel.y < 56.0f) {
+        card = float3(0.036f, 0.044f, 0.062f);
+        if (fRel.y < 3.5f) card = float3(1.00f, 0.72f, 0.14f);
+        // [WORLD MAP] Gold Pill
+        float dWp = sdRoundedBoxHUD(fRel - float2(86.0f, 29.0f), float2(64.0f, 12.0f), 4.5f);
+        float wpM = smoothstep(1.0f, -0.6f, dWp);
+        if (wpM > 0.001f) {
+            card = mix(card, float3(1.00f, 0.72f, 0.14f), wpM);
+            const uint kWm[9] = { 87u,79u,82u,76u,68u,32u,77u,65u,80u }; // WORLD MAP
+            card = mix(card, float3(0.03f, 0.035f, 0.045f), evalLiteral7(fRel, float2(37.0f, 22.8f), 1.75f, 10.8f, kWm, 9u) * wpM);
+        }
+        const uint kCity[13] = { 82u,79u,67u,75u,80u,79u,82u,84u,32u,67u,73u,84u,89u }; // ROCKPORT CITY
+        card = mix(card, float3(0.96f, 0.98f, 1.00f), evalLiteral7(fRel, float2(170.0f, 21.0f), 2.15f, 13.0f, kCity, 13u));
+
+        const uint kStats[18] = { 54u,53u,51u,56u,32u,82u,79u,65u,68u,83u,32u,45u,32u,50u,50u,57u,75u,77u }; // 6538 ROADS - 229KM
+        card = mix(card, float3(0.62f, 0.74f, 0.88f), evalLiteral7(fRel, float2(968.0f, 23.0f), 1.60f, 9.8f, kStats, 18u));
+
+        // Zoom readout "1.0X"
+        float zm = clamp(ev.mapViewParams.z, 1.0f, 4.5f);
+        uint z10 = uint(zm * 10.0f + 0.5f);
+        const uint kZm[4] = { 48u + (z10 / 10u), 46u, 48u + (z10 % 10u), 88u };
+        card = mix(card, float3(1.00f, 0.76f, 0.22f), evalLiteral7(fRel, float2(1292.0f, 22.0f), 1.80f, 11.0f, kZm, 4u));
+    }
+
+    // Main Interactive Map Viewport: x=[20..970] (950w), y=[68..758] (690h)
+    const float2 vpOrg = float2(20.0f, 68.0f);
+    const float2 vpSz  = float2(950.0f, 690.0f);
+    float2 vpRel = fRel - vpOrg;
+    float dVp = sdRoundedBoxHUD(vpRel - vpSz * 0.5f, vpSz * 0.5f, 8.0f);
+    if (dVp <= 2.0f) {
+        float vpMask = smoothstep(1.0f, -0.6f, dVp);
+        float2 vpUV = vpRel / vpSz;
+        float zoom = clamp(ev.mapViewParams.z, 1.0f, 4.5f);
+        float2 mapCenter = ev.mapViewParams.xy;
+        // Aspect-preserving square world map projection
+        float vpAspect = vpSz.x / vpSz.y;
+        float2 centered = (vpUV - 0.5f) * float2(vpAspect, 1.0f) / zoom;
+        float2 mapUV = centered + mapCenter;
+
+        float3 mCol = float3(0.018f, 0.032f, 0.052f); // Deep Rockport Bay navy outside land
+        if (mapUV.x >= 0.0f && mapUV.x <= 1.0f && mapUV.y >= 0.0f && mapUV.y <= 1.0f) {
+            // O(1) pre-baked 1024x1024 full-island 6,538-segment road texture!
+            mCol = worldMapTex.sample(linearSamp, mapUV, level(0.0f)).rgb;
+        }
+
+        // Subtle tactical coordinate grid
+        float2 gF = abs(fract(mapUV * 8.0f) - 0.5f);
+        float gridLine = smoothstep(0.012f, 0.002f, min(gF.x, gF.y));
+        mCol += float3(0.08f, 0.14f, 0.22f) * gridLine * 0.28f;
+
+        // Convert any normalized map coordinate [0..1] into viewport pixel coords
+        float pxPerMap = vpSz.y * zoom;
+
+        // 1. Glowing GPS Route Polyline (up to 16 segments)
+        uint gpsN = min(ev.gpsSegCount, 16u);
+        if (gpsN > 0u) {
+            float minGpsPx = 1e5f;
+            for (uint i = 0u; i < gpsN; ++i) {
+                float4 seg = ev.gpsRoute[i];
+                if (seg.x < -0.5f) continue;
+                float2 p0 = (seg.xy - mapCenter) * pxPerMap + vpSz * 0.5f;
+                float2 p1 = (seg.zw - mapCenter) * pxPerMap + vpSz * 0.5f;
+                minGpsPx = min(minGpsPx, sdSegmentHUD(vpRel, p0, p1));
+            }
+            float3 gpsCol = (ev.mode == 2u) ? float3(0.14f, 0.90f, 1.00f)
+                          : ((ev.mode == 3u) ? float3(1.00f, 0.26f, 0.14f) : float3(1.00f, 0.74f, 0.14f));
+            mCol += gpsCol * smoothstep(9.0f, 1.5f, minGpsPx) * 0.45f;
+            mCol = mix(mCol, mix(gpsCol, float3(1.0f), 0.35f), smoothstep(3.2f, 1.4f, minGpsPx) * 0.95f);
+        }
+
+        // 2. Interactive Event & Landmark Markers (up to 24)
+        uint mCount = min(uint(ev.playerMapPos.w + 0.5f), 24u);
+        int selIdx = int(ev.playerMapPos.z + 0.5f);
+        for (uint i = 0u; i < mCount; ++i) {
+            float4 mk = ev.mapMarkers[i];
+            float2 mPx = (mk.xy - mapCenter) * pxPerMap + vpSz * 0.5f;
+            float2 d = vpRel - mPx;
+            float dist = length(d);
+            if (dist > 28.0f) continue;
+
+            int mType = int(mk.z + 0.5f);
+            float3 mkCol = float3(0.92f, 0.95f, 1.00f); // 0 = Landmark White
+            if (mType == 1) mkCol = float3(1.00f, 0.74f, 0.14f);      // 1 = Sprint Gold
+            else if (mType == 2) mkCol = float3(0.10f, 0.88f, 1.00f); // 2 = Speedtrap Cyan
+            else if (mType == 3) mkCol = float3(1.00f, 0.20f, 0.12f); // 3 = Blacklist Boss Crimson
+
+            bool isSel = (int(i) == selIdx);
+            float iconR = isSel ? 9.5f : 6.5f;
+            float halo = smoothstep(iconR * 2.4f, iconR * 0.6f, dist) * (isSel ? 0.55f : 0.24f);
+            mCol += mkCol * halo;
+
+            if (mType == 0) {
+                // Landmark diamond
+                float diam = (abs(d.x) + abs(d.y)) - iconR;
+                mCol = mix(mCol, float3(0.02f, 0.03f, 0.05f), smoothstep(2.4f, 0.6f, diam) * 0.85f);
+                mCol = mix(mCol, mkCol, smoothstep(0.8f, -0.8f, diam));
+            } else if (mType == 2) {
+                // Speedtrap radar square
+                float sq = sdRoundedBoxHUD(d, float2(iconR * 0.82f), 2.0f);
+                mCol = mix(mCol, float3(0.02f, 0.03f, 0.05f), smoothstep(2.2f, 0.4f, sq) * 0.85f);
+                mCol = mix(mCol, mkCol, smoothstep(0.8f, -0.8f, sq));
+            } else if (mType == 3) {
+                // Blacklist Boss crimson shield + gold core
+                float circ = dist - iconR;
+                mCol = mix(mCol, float3(0.02f, 0.02f, 0.03f), smoothstep(2.4f, 0.6f, circ) * 0.90f);
+                mCol = mix(mCol, mkCol, smoothstep(0.8f, -0.8f, circ));
+                mCol = mix(mCol, float3(1.00f, 0.82f, 0.20f), smoothstep(iconR * 0.48f, iconR * 0.30f, dist));
+            } else {
+                // Sprint gold chevron ring
+                float circ = dist - iconR;
+                mCol = mix(mCol, float3(0.02f, 0.03f, 0.04f), smoothstep(2.2f, 0.4f, circ) * 0.85f);
+                mCol = mix(mCol, mkCol, smoothstep(0.8f, -0.8f, circ));
+                mCol = mix(mCol, float3(0.06f, 0.07f, 0.09f), smoothstep(iconR * 0.44f, iconR * 0.28f, dist));
+            }
+
+            if (isSel) {
+                float pulseR = 14.5f + 2.5f * sin(ext.simTimeSec * 7.0f);
+                float ring = smoothstep(2.0f, 0.4f, abs(dist - pulseR));
+                mCol = mix(mCol, float3(1.00f, 0.96f, 0.78f), ring * 0.95f);
+            }
+        }
+
+        // 3. Pulsing Player Arrow on Map
+        {
+            float2 pPx = (ev.playerMapPos.xy - mapCenter) * pxPerMap + vpSz * 0.5f;
+            float2 d = vpRel - pPx;
+            if (length(d) < 22.0f) {
+                // Rotate into player heading (+Z world -> -Y on map or +Y depending on bake; align with heading)
+                float yaw = ev.mapViewParams.w;
+                float cy = cos(yaw), sy = sin(yaw);
+                float2 rp = float2(d.x * cy - d.y * sy, d.x * sy + d.y * cy);
+                float pTri = sdTriangleHUD(rp, float2(0.0f, -11.0f), float2(-7.5f, 8.5f), float2(7.5f, 8.5f));
+                mCol = mix(mCol, float3(0.02f, 0.02f, 0.04f), smoothstep(2.6f, 0.6f, pTri) * 0.90f);
+                mCol = mix(mCol, float3(0.32f, 1.00f, 0.56f), smoothstep(0.8f, -0.8f, pTri));
+            }
+        }
+
+        // Top-Right North Compass Pill inside Viewport
+        {
+            float2 nC = float2(vpSz.x - 28.0f, 26.0f);
+            float dN = length(vpRel - nC) - 15.0f;
+            float nM = smoothstep(1.0f, -0.6f, dN);
+            if (nM > 0.001f) {
+                mCol = mix(mCol, float3(0.03f, 0.04f, 0.06f), nM * 0.85f);
+                mCol = mix(mCol, float3(1.00f, 0.72f, 0.14f), smoothstep(1.3f, 0.2f, abs(dN)) * 0.85f);
+                const uint kN[1] = { 78u };
+                mCol = mix(mCol, float3(1.00f, 0.78f, 0.24f), evalLiteral7(vpRel, nC - float2(4.2f, 5.8f), 1.65f, 10.0f, kN, 1u));
+            }
+        }
+
+        float vpBorder = smoothstep(1.8f, 0.3f, abs(dVp));
+        mCol = mix(mCol, float3(0.36f, 0.44f, 0.56f), vpBorder * 0.75f);
+        card = mix(card, mCol, vpMask);
+    }
+
+    // Right Inspector Sidebar: x=[988..1340] (352w), y=[68..758] (690h)
+    if (fRel.x >= 986.0f && fRel.x <= 1342.0f && fRel.y >= 66.0f && fRel.y <= 760.0f) {
+        float2 sRel = fRel - float2(988.0f, 68.0f); // [0..352, 0..690]
+
+        // Card A: Selected Event / Landmark Inspector (y: 0..270)
+        float dSel = sdRoundedBoxHUD(sRel - float2(176.0f, 135.0f), float2(176.0f, 135.0f), 8.0f);
+        if (dSel <= 1.5f) {
+            float sM = smoothstep(1.0f, -0.6f, dSel);
+            float3 sBg = float3(0.034f, 0.044f, 0.062f);
+            int selIdx = clamp(int(ev.playerMapPos.z + 0.5f), 0, 23);
+            int selType = int(ev.mapMarkers[selIdx].z + 0.5f);
+            float3 selAccent = (selType == 3) ? float3(1.00f, 0.22f, 0.14f)
+                             : ((selType == 2) ? float3(0.10f, 0.88f, 1.00f)
+                             : ((selType == 1) ? float3(1.00f, 0.72f, 0.14f) : float3(0.86f, 0.92f, 1.00f)));
+            sBg = mix(sBg, selAccent, smoothstep(1.5f, 0.3f, abs(dSel)) * 0.65f);
+            if (sRel.y < 3.5f) sBg = selAccent;
+
+            // Selected Type Pill
+            float dTp = sdRoundedBoxHUD(sRel - float2(96.0f, 30.0f), float2(78.0f, 11.0f), 4.0f);
+            float tpM = smoothstep(1.0f, -0.6f, dTp);
+            if (tpM > 0.001f) {
+                sBg = mix(sBg, selAccent, tpM);
+                float tt = 0.0f;
+                if (selType == 3) {
+                    const uint kT[14] = { 66u,76u,65u,67u,75u,76u,73u,83u,84u,32u,68u,85u,69u,76u }; // BLACKLIST DUEL
+                    tt = evalLiteral7(sRel, float2(27.0f, 24.5f), 1.45f, 9.2f, kT, 14u);
+                } else if (selType == 2) {
+                    const uint kT[9] = { 83u,80u,69u,69u,68u,84u,82u,65u,80u }; // SPEEDTRAP
+                    tt = evalLiteral7(sRel, float2(48.0f, 24.5f), 1.55f, 9.8f, kT, 9u);
+                } else if (selType == 1) {
+                    const uint kT[11] = { 83u,80u,82u,73u,78u,84u,32u,82u,65u,67u,69u }; // SPRINT RACE
+                    tt = evalLiteral7(sRel, float2(40.0f, 24.5f), 1.50f, 9.5f, kT, 11u);
+                } else {
+                    const uint kT[8] = { 76u,65u,78u,68u,77u,65u,82u,75u }; // LANDMARK
+                    tt = evalLiteral7(sRel, float2(52.0f, 24.5f), 1.55f, 9.8f, kT, 8u);
+                }
+                float3 selInk = (selType == 3) ? float3(0.98f, 0.99f, 1.00f) : float3(0.03f, 0.035f, 0.045f);
+                sBg = mix(sBg, selInk, tt * tpM);
+            }
+
+            // Selected Title & Subtitle
+            sBg = mix(sBg, float3(0.98f, 0.99f, 1.00f), evalPackedString5x7(sRel, float2(18.0f, 64.0f), 1.85f, 11.2f, ev.selectedTitleChars, ev.selectedTitleLen, 28u));
+            sBg = mix(sBg, float3(0.76f, 0.84f, 0.94f), evalPackedString5x7(sRel, float2(18.0f, 98.0f), 1.50f, 9.4f, ev.selectedSubChars, ev.selectedSubLen, 32u));
+
+            // Glowing Action Button: [ENTER] LAUNCH / FAST TRAVEL
+            float dBtn = sdRoundedBoxHUD(sRel - float2(176.0f, 224.0f), float2(154.0f, 20.0f), 6.0f);
+            float bM = smoothstep(1.0f, -0.6f, dBtn);
+            if (bM > 0.001f) {
+                sBg = mix(sBg, selAccent * 0.24f, bM);
+                sBg = mix(sBg, selAccent, smoothstep(1.5f, 0.3f, abs(dBtn)) * 0.92f);
+                if (selType == 0) {
+                    const uint kGo[19] = { 91u,69u,78u,84u,69u,82u,93u,32u,70u,65u,83u,84u,32u,84u,82u,65u,86u,69u,76u }; // [ENTER] FAST TRAVEL
+                    sBg = mix(sBg, selAccent, evalLiteral7(sRel, float2(79.0f, 217.5f), 1.65f, 10.2f, kGo, 19u) * bM);
+                } else {
+                    const uint kGo[20] = { 91u,69u,78u,84u,69u,82u,93u,32u,76u,65u,85u,78u,67u,72u,32u,69u,86u,69u,78u,84u }; // [ENTER] LAUNCH EVENT
+                    sBg = mix(sBg, selAccent, evalLiteral7(sRel, float2(74.0f, 217.5f), 1.65f, 10.2f, kGo, 20u) * bM);
+                }
+            }
+            card = mix(card, sBg, sM);
+        }
+
+        // Card B: Tactical Legend Panel (y: 290..690)
+        float dLeg = sdRoundedBoxHUD(sRel - float2(176.0f, 490.0f), float2(176.0f, 200.0f), 8.0f);
+        if (dLeg <= 1.5f) {
+            float lM = smoothstep(1.0f, -0.6f, dLeg);
+            float3 lBg = float3(0.032f, 0.040f, 0.056f);
+            lBg = mix(lBg, float3(0.32f, 0.38f, 0.48f), smoothstep(1.5f, 0.3f, abs(dLeg)) * 0.65f);
+
+            const uint kHdr[10] = { 77u,65u,80u,32u,76u,69u,71u,69u,78u,68u }; // MAP LEGEND
+            lBg = mix(lBg, float3(1.00f, 0.74f, 0.16f), evalLiteral7(sRel, float2(18.0f, 312.0f), 1.75f, 10.8f, kHdr, 10u));
+
+            // 5 Legend Rows (y: 364, 418, 472, 526, 580)
+            const float3 rowCols[5] = {
+                float3(1.00f, 0.20f, 0.12f), // Blacklist Boss
+                float3(0.10f, 0.88f, 1.00f), // Speedtrap
+                float3(1.00f, 0.74f, 0.14f), // Sprint
+                float3(0.92f, 0.95f, 1.00f), // Landmark
+                float3(0.32f, 1.00f, 0.56f)  // Player
+            };
+            for (int r = 0; r < 5; ++r) {
+                float ry = 368.0f + float(r) * 52.0f;
+                float dDot = length(sRel - float2(30.0f, ry)) - 7.5f;
+                lBg = mix(lBg, rowCols[r], smoothstep(0.8f, -0.8f, dDot));
+            }
+            const uint kL0[17] = { 66u,76u,65u,67u,75u,76u,73u,83u,84u,32u,49u,53u,32u,66u,79u,83u,83u }; // BLACKLIST 15 BOSS
+            const uint kL1[15] = { 83u,80u,69u,69u,68u,84u,82u,65u,80u,32u,82u,65u,68u,65u,82u };       // SPEEDTRAP RADAR
+            const uint kL2[17] = { 67u,72u,69u,67u,75u,80u,79u,73u,78u,84u,32u,83u,80u,82u,73u,78u,84u }; // CHECKPOINT SPRINT
+            const uint kL3[17] = { 68u,73u,83u,84u,82u,73u,67u,84u,32u,76u,65u,78u,68u,77u,65u,82u,75u }; // DISTRICT LANDMARK
+            const uint kL4[15] = { 80u,76u,65u,89u,69u,82u,32u,80u,79u,83u,73u,84u,73u,79u,78u };         // PLAYER POSITION
+            lBg = mix(lBg, float3(0.90f, 0.93f, 0.98f), evalLiteral7(sRel, float2(52.0f, 362.0f), 1.55f, 9.6f, kL0, 17u));
+            lBg = mix(lBg, float3(0.90f, 0.93f, 0.98f), evalLiteral7(sRel, float2(52.0f, 414.0f), 1.55f, 9.6f, kL1, 15u));
+            lBg = mix(lBg, float3(0.90f, 0.93f, 0.98f), evalLiteral7(sRel, float2(52.0f, 466.0f), 1.55f, 9.6f, kL2, 17u));
+            lBg = mix(lBg, float3(0.90f, 0.93f, 0.98f), evalLiteral7(sRel, float2(52.0f, 518.0f), 1.55f, 9.6f, kL3, 17u));
+            lBg = mix(lBg, float3(0.90f, 0.93f, 0.98f), evalLiteral7(sRel, float2(52.0f, 570.0f), 1.55f, 9.6f, kL4, 15u));
+            card = mix(card, lBg, lM);
+        }
+    }
+
+    // Bottom Control Hint Bar (y: 772..814)
+    if (fRel.y >= 770.0f) {
+        const uint kF1[10] = { 91u,87u,65u,83u,68u,93u,32u,80u,65u,78u };                                     // [WASD] PAN
+        const uint kF2[10] = { 91u,43u,47u,45u,93u,32u,90u,79u,79u,77u };                                     // [+/-] ZOOM
+        const uint kF3[10] = { 91u,84u,65u,66u,93u,32u,78u,69u,88u,84u };                                     // [TAB] NEXT
+        const uint kF4[10] = { 91u,69u,78u,84u,69u,82u,93u,32u,71u,79u };                                     // [ENTER] GO
+        const uint kF5[13] = { 91u,77u,47u,69u,83u,67u,93u,32u,67u,76u,79u,83u,69u };                         // [M/ESC] CLOSE
+        float3 hintC = float3(0.76f, 0.84f, 0.94f);
+        card = mix(card, hintC, evalLiteral7(fRel, float2(140.0f, 784.0f), 1.65f, 10.2f, kF1, 10u));
+        card = mix(card, hintC, evalLiteral7(fRel, float2(330.0f, 784.0f), 1.65f, 10.2f, kF2, 10u));
+        card = mix(card, hintC, evalLiteral7(fRel, float2(530.0f, 784.0f), 1.65f, 10.2f, kF3, 10u));
+        card = mix(card, float3(1.00f, 0.78f, 0.22f), evalLiteral7(fRel, float2(730.0f, 784.0f), 1.65f, 10.2f, kF4, 10u));
+        card = mix(card, hintC, evalLiteral7(fRel, float2(960.0f, 784.0f), 1.65f, 10.2f, kF5, 13u));
+    }
+
+    return mix(outCol, card, frameMask);
+}
+
 // Preserved public helper name (verified by tests/test_metal_raytracing.py)
 static inline float3 compositeDigitalDrivingHUD(
     float3 baseCol,
@@ -976,16 +1549,19 @@ static inline float3 compositeDigitalDrivingHUD(
 
 // Standalone Post-FrameGen HUD + Presentation Output Kernel
 // Reads perceptual sRGB LDR input (real or MTLFXFrameInterpolator output), composites crisp
-// unwarped NFSMW 2005 SDF HUD + GPU Minimap + sliding EA TRAX Banner, and writes output.
+// unwarped NFSMW 2005 SDF HUD + GPU Minimap + sliding EA TRAX Banner + Race HUD + O(1) World Map.
 kernel void hudOverlayKernel(
     uint2 gid [[thread_position_in_grid]],
     texture2d<float, access::read> inLdrTex [[texture(0)]],
     texture2d<float, access::write> outTex [[texture(1)]],
+    texture2d<float, access::sample> worldMapTex [[texture(2)]],
+    sampler linearSamp [[sampler(0)]],
     constant RTFrameUniforms& u [[buffer(0)]],
     constant uint& encodeSRGB [[buffer(1)]],
     constant RTHudExtUniforms& ext [[buffer(2)]],
     constant RTMinimapBuffer& minimap [[buffer(3)]],
-    constant RTMusicBannerUniforms& music [[buffer(4)]]
+    constant RTMusicBannerUniforms& music [[buffer(4)]],
+    constant RTEventHudUniforms& evHud [[buffer(5)]]
 ) {
     uint w = outTex.get_width();
     uint h = outTex.get_height();
@@ -994,12 +1570,21 @@ kernel void hudOverlayKernel(
     float3 srgb = inLdrTex.read(gid).rgb;
     float2 px = float2(gid) + 0.5f;
     float2 res = float2(float(w), float(h));
-    bool hudVisible = (u.hudParams.x > 0.5f) || ((ext.hudFlags & HUD_FLAG_VISIBLE) != 0u);
-    if (hudVisible) {
-        srgb = compositeDigitalDrivingHUD(srgb, px, res, u, ext, minimap);
-    }
-    if (music.bannerAlpha > 0.001f) {
-        srgb = compositeEATraxBanner(srgb, px, res, ext, music);
+    bool mapOpen = (evHud.flags & EVENT_HUD_FLAG_WORLD_MAP) != 0u;
+
+    if (mapOpen) {
+        srgb = compositeWorldMapOverlay(srgb, px, res, ext, evHud, worldMapTex, linearSamp);
+    } else {
+        bool hudVisible = (u.hudParams.x > 0.5f) || ((ext.hudFlags & HUD_FLAG_VISIBLE) != 0u);
+        if (hudVisible) {
+            srgb = compositeDigitalDrivingHUD(srgb, px, res, u, ext, minimap);
+        }
+        if ((evHud.flags & EVENT_HUD_FLAG_ACTIVE) != 0u) {
+            srgb = compositeEventHudStrip(srgb, px, res, ext, evHud);
+        }
+        if (music.bannerAlpha > 0.001f) {
+            srgb = compositeEATraxBanner(srgb, px, res, ext, music);
+        }
     }
 
     float3 outRGB = (encodeSRGB != 0u) ? srgb : srgbToLinear(srgb);

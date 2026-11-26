@@ -256,3 +256,168 @@ struct RTMusicBannerUniforms {
         title5 = tw[5]; title6 = tw[6]; title7 = tw[7]; title8 = tw[8]; title9 = tw[9]
     }
 }
+
+// MARK: - v1.2.0 3D Event World FX & Post-FrameGen Race HUD / World Map ABI
+
+/// 128-byte 16B-aligned analytical 3D event gate / chevron payload bound at raytraceKernel buffer(16).
+struct RTEventWorldFXGPU {
+    var gatePosRadius: SIMD4<Float> = .zero
+    var gateDirKind: SIMD4<Float> = SIMD4<Float>(0, 0, 1, 0)
+    var nextPosRadius: SIMD4<Float> = .zero
+    var fxParams: SIMD4<Float> = .zero
+    var chevron0: SIMD4<Float> = SIMD4<Float>(0, 0, 0, -100)
+    var chevron1: SIMD4<Float> = SIMD4<Float>(0, 0, 0, -100)
+    var chevron2: SIMD4<Float> = SIMD4<Float>(0, 0, 0, -100)
+    var chevron3: SIMD4<Float> = SIMD4<Float>(0, 0, 0, -100)
+
+    static let byteSize = 128
+
+    static func assertLayout() {
+        precondition(MemoryLayout<RTEventWorldFXGPU>.stride == byteSize,
+                     "RTEventWorldFXGPU stride (\(MemoryLayout<RTEventWorldFXGPU>.stride)) must be \(byteSize) bytes")
+    }
+}
+
+enum RTEventHudFlagBits {
+    static let eventActive: UInt32       = 1 << 0
+    static let worldMapOpen: UInt32      = 1 << 1
+    static let hasSelectedMarker: UInt32 = 1 << 2
+    static let radarFlash: UInt32        = 1 << 3
+}
+
+/// 16-element SIMD4<Float> GPS route block (256 bytes) for O(1) World Map overlay.
+struct RTWorldMapGps16 {
+    var b0 = RTMinimapVec4x8()
+    var b1 = RTMinimapVec4x8()
+}
+
+/// 864-byte (<= 1 KB, 16B-aligned) Race Event HUD & Interactive Full-Island World Map uniform block
+/// bound at hudOverlayKernel buffer(5) alongside baked 1024x1024 worldMapTex at texture(2).
+struct RTEventHudUniforms {
+    // 0..15
+    var mode: UInt32 = 0          // 0=none, 1=sprint, 2=speedtrap, 3=boss
+    var state: UInt32 = 0         // 0=idle, 1=countdown, 2=active, 3=win, 4=lose
+    var cpIndex: UInt32 = 0       // 1-based current checkpoint / trap
+    var cpTotal: UInt32 = 0
+
+    // 16..31
+    var elapsedSec: Float = 0.0
+    var currentScore: Float = 0.0 // speedtrap cumulative km/h
+    var targetScore: Float = 0.0  // speedtrap target km/h
+    var bossGapM: Float = 0.0     // >0 player ahead, <0 boss ahead
+
+    // 32..47
+    var playerRank: UInt32 = 1
+    var bossRank: UInt32 = 15
+    var flags: UInt32 = 0
+    var nextGateDistM: Float = 0.0
+
+    // 48..63
+    var mapViewParams: SIMD4<Float> = SIMD4<Float>(0.5, 0.5, 1.0, 0.0) // xy=centerNorm, z=zoom, w=playerHeadingRad
+
+    // 64..79
+    var playerMapPos: SIMD4<Float> = SIMD4<Float>(0.5, 0.5, 0.0, 0.0)  // xy=normPos, z=selectedIdx, w=markerCount
+
+    // 80..463: 24 interactive markers (384B): xy=normPos, z=type [0=landmark,1=sprint,2=speedtrap,3=boss], w=bossRank
+    var mapMarkers = RTMinimapBlips24()
+
+    // 464..719: 16 GPS route segments (256B): xy=normStart, zw=normEnd
+    var gpsRoute = RTWorldMapGps16()
+
+    // 720..735: string lengths
+    var eventTitleLen: UInt32 = 0
+    var bossNameLen: UInt32 = 0
+    var selectedTitleLen: UInt32 = 0
+    var selectedSubLen: UInt32 = 0
+
+    // 736..767: eventTitleChars[8] (32 chars)
+    var evT0: UInt32 = 0; var evT1: UInt32 = 0; var evT2: UInt32 = 0; var evT3: UInt32 = 0
+    var evT4: UInt32 = 0; var evT5: UInt32 = 0; var evT6: UInt32 = 0; var evT7: UInt32 = 0
+
+    // 768..791: bossNameChars[6] (24 chars)
+    var bn0: UInt32 = 0; var bn1: UInt32 = 0; var bn2: UInt32 = 0
+    var bn3: UInt32 = 0; var bn4: UInt32 = 0; var bn5: UInt32 = 0
+
+    // 792..823: selectedTitleChars[8] (32 chars)
+    var selT0: UInt32 = 0; var selT1: UInt32 = 0; var selT2: UInt32 = 0; var selT3: UInt32 = 0
+    var selT4: UInt32 = 0; var selT5: UInt32 = 0; var selT6: UInt32 = 0; var selT7: UInt32 = 0
+
+    // 824..855: selectedSubChars[8] (32 chars)
+    var selS0: UInt32 = 0; var selS1: UInt32 = 0; var selS2: UInt32 = 0; var selS3: UInt32 = 0
+    var selS4: UInt32 = 0; var selS5: UInt32 = 0; var selS6: UInt32 = 0; var selS7: UInt32 = 0
+
+    // 856..863
+    var gpsSegCount: UInt32 = 0
+    var pad0: UInt32 = 0
+
+    static let byteSize = 864
+    static let maxMarkers = 24
+    static let maxGpsSegments = 16
+
+    static func assertLayout() {
+        precondition(MemoryLayout<RTEventHudUniforms>.stride == byteSize,
+                     "RTEventHudUniforms stride (\(MemoryLayout<RTEventHudUniforms>.stride)) must be \(byteSize) bytes")
+    }
+
+    private static func packAsciiWords(_ text: String, maxLen: Int) -> ([UInt32], UInt32) {
+        let upper = text.uppercased()
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(maxLen)
+        for scalar in upper.unicodeScalars {
+            if bytes.count >= maxLen { break }
+            let v = scalar.value
+            if v >= 0x20 && v <= 0x5F {
+                bytes.append(UInt8(v))
+            } else if v == 0x2018 || v == 0x2019 {
+                bytes.append(0x27)
+            } else if v == 0x2013 || v == 0x2014 {
+                bytes.append(0x2D)
+            } else if v >= 0x61 && v <= 0x7A {
+                bytes.append(UInt8(v - 32))
+            } else {
+                bytes.append(0x20)
+            }
+        }
+        while let last = bytes.last, last == 0x20 { bytes.removeLast() }
+        var words = Array(repeating: UInt32(0), count: maxLen / 4)
+        for i in 0..<bytes.count {
+            words[i >> 2] |= UInt32(bytes[i]) << ((i & 3) * 8)
+        }
+        return (words, UInt32(bytes.count))
+    }
+
+    mutating func setEventTitle(_ s: String) {
+        let (w, n) = Self.packAsciiWords(s, maxLen: 32)
+        eventTitleLen = n
+        evT0 = w[0]; evT1 = w[1]; evT2 = w[2]; evT3 = w[3]; evT4 = w[4]; evT5 = w[5]; evT6 = w[6]; evT7 = w[7]
+    }
+
+    mutating func setBossName(_ s: String) {
+        let (w, n) = Self.packAsciiWords(s, maxLen: 24)
+        bossNameLen = n
+        bn0 = w[0]; bn1 = w[1]; bn2 = w[2]; bn3 = w[3]; bn4 = w[4]; bn5 = w[5]
+    }
+
+    mutating func setSelectedCard(title: String, subtitle: String) {
+        let (tw, tn) = Self.packAsciiWords(title, maxLen: 32)
+        selectedTitleLen = tn
+        selT0 = tw[0]; selT1 = tw[1]; selT2 = tw[2]; selT3 = tw[3]; selT4 = tw[4]; selT5 = tw[5]; selT6 = tw[6]; selT7 = tw[7]
+        let (sw, sn) = Self.packAsciiWords(subtitle, maxLen: 32)
+        selectedSubLen = sn
+        selS0 = sw[0]; selS1 = sw[1]; selS2 = sw[2]; selS3 = sw[3]; selS4 = sw[4]; selS5 = sw[5]; selS6 = sw[6]; selS7 = sw[7]
+    }
+
+    mutating func setMarker(_ index: Int, _ marker: SIMD4<Float>) {
+        guard index >= 0 && index < Self.maxMarkers else { return }
+        withUnsafeMutableBytes(of: &mapMarkers) { raw in
+            raw.bindMemory(to: SIMD4<Float>.self)[index] = marker
+        }
+    }
+
+    mutating func setGpsSegment(_ index: Int, _ seg: SIMD4<Float>) {
+        guard index >= 0 && index < Self.maxGpsSegments else { return }
+        withUnsafeMutableBytes(of: &gpsRoute) { raw in
+            raw.bindMemory(to: SIMD4<Float>.self)[index] = seg
+        }
+    }
+}

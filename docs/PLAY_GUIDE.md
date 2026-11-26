@@ -36,8 +36,9 @@ make play-rockport
 
 | Command | What It Does |
 | :--- | :--- |
-| `make export-rockport-full` | Exports full-island `build/rockport_world/rockport_full.rkpt` (`718` secs, `.rkpt` v2 BC7) + `build/gameplay_pack/` (VLT stats, Ginsu audio, 7 AI archetypes) + `build/music_pack/` (via `export-music-pack`) |
+| `make export-rockport-full` | Exports full-island `build/rockport_world/rockport_full.rkpt` (`718` secs, `.rkpt` v2 BC7) + `build/gameplay_pack/` (VLT stats, Ginsu audio, 7 AI archetypes, events) + `build/music_pack/` |
 | `make export-music-pack` | Decodes 26 licensed **EA TRAX** + 14 pursuit score tracks from `MW_MUSIC.MUS` into gitignored `build/music_pack/` (auto-called by `make export-rockport-full`) |
+| `make export-events-pack` | Decodes 15 Blacklist Boss Duels, 18 Checkpoint Sprints & 10 Speedtraps from `GAMEPLAY.BIN` / `GLOBALB.BUN` into `build/gameplay_pack/events.json` (auto-called by `make export-rockport-full`) |
 | `make build-rockport` | Compiles `native_metal_rt/` into `build/metal_rt_v06/RockportMetalRT` |
 | `make play-rockport` | Ensures build & exports exist and launches full-island Rockport with `--frame-gen on --hud $(ROCKPORT_ARGS)` |
 | `make play-pursuit` | Launches straight into an active **Heat 3 Rosewood Blvd police pursuit** (`--landmark "Rosewood Blvd" --pursuit 3 --frame-gen on --hud $(ROCKPORT_ARGS)`) |
@@ -75,6 +76,8 @@ build/metal_rt_v06/RockportMetalRT \
 | `--no-ai` / `--no-audio` | Enabled by default | Disable AI traffic/cops or live `AVAudioEngine` audio for isolated graphics testing |
 | `--no-music` / `--music-track <idx>` | Enabled / Track `0` | Mute EA TRAX soundtrack or start on a specific decoded `MW_MUSIC.MUS` track index |
 | `--show-trax` | Auto on track change | Keep the post-FI top-left `[EA TRAX]` + `[REVERB]` OLED banner visible (great for captures) |
+| `--event <id\|type>` | Off (`sprint` \| `speedtrap` \| `boss15..boss1`) | Launch straight into a Checkpoint Sprint, Speedtrap, or Blacklist Boss Duel (e.g. `--event boss1`) |
+| `--world-map` | Off (press `M` live) | Open the interactive O(1) 6,538-road full-island Rockport World Map overlay on launch |
 
 ---
 
@@ -91,6 +94,8 @@ Both **PS5 DualSense** and **Xbox Wireless** controllers work out of the box via
 | **NOS Boost** | `Shift` or `Z` | `Cross` / `A` or `R1` / `RB` |
 | **Speedbreaker (0.35× Slow-Mo)** | `X` or `Tab` | `Triangle` / `Y` or `L1` / `LB` |
 | **Instant Police Pursuit (Heat 1→5)** | `F` | — |
+| **Quick-Start Nearest Event / Abort Event** | `E` / `Shift+E` | — |
+| **Interactive Full-Island World Map** | `M` *(Map controls: `WASD`/Arrows pan, `+/-` zoom, `Tab` next marker, `Enter` go/launch, `M`/`Esc` close)* | — |
 | **Cycle Landmark Teleport (6 Districts)** | `V` | — |
 | **Next / Previous Garage Car (40 Cars)** | `G` / `Shift+G` | — |
 | **Cycle Camera (`chase`/`hero`/`street`/`overhead`)** | `C` | — |
@@ -138,6 +143,7 @@ Press **`G`** / **`Shift+G`** in-game or launch with `--car <NAME>` to drive **a
 - **Live PS2 Engine & Siren Audio (`RTAudioEngine.swift`)**: Lock-free `AVAudioEngine` granular PSOLA engine synth decoded from `9` real EA-XAS v0 `Gnsu v20` accel/decel banks (including the **BMW M3 GTR straight-cut gearbox whine**), plus `20` Sony SPU-ADPCM SFX (turbo spool/BOV flutter, drift tire screech, NOS roar/purge, shift backfire pops, Speedbreaker LPF, rain/wind bed, and 3D stereo Doppler police sirens).
 - **EA TRAX Soundtrack & Acoustic Tunnel Reverb (`v1.1.0`)**: Streams all **26 licensed EA TRAX** + **14 interactive pursuit score tracks** decoded from `MW_MUSIC.MUS` / `MW_MUSIC.MPF` (`[`/`]` skip, `U` mute, auto-ducking during Speedbreaker & pursuits) with a post-FI sliding `[EA TRAX]` OLED banner; upward sky-occlusion rays smoothly drive **`AVAudioUnitReverb`** (4% → 42% wet + bass warmth, indicated by `[REVERB]`) inside Bayshore & Rockport tunnels and underpasses.
 - **20 Live AI Traffic & Heat 1–5 Police (`RTGameWorld.swift` + `RTAIVehicleLoader.swift`)**: Up to `16` live traffic cars + `4` pursuing Rockport PD units (`COPMIDSIZE` Heat 1–2 → `COPGTO` Heat 3–4 → `COPSPORT` Heat 5) riding real hills via `aiRoadProbeKernel`, casting blazing alternating **red/blue ray-traced roof lightbar sweeps** across wet streets and your car's clearcoat, tracked on a live post-FI rotating GPU minimap with Heat/Bounty/Evade/Busted HUD.
+- **Race Events, Blacklist 15 Boss Duels & Interactive World Map (`v1.2.0`)**: `15` Blacklist Boss Duels (`Sonny` #15 through `Razor` #1 with signature cars, paint & road-graph race AI), `18` Checkpoint Sprints with 3D glowing chevron arches, `10` Speedtraps with holographic radar laser gates, and an O(1) pre-baked `1024×1024` full-island World Map (`6,538` roads / `229 km`, press `M`) supporting pan, zoom, GPS preview, fast-travel & instant event launch.
 
 ---
 

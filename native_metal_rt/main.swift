@@ -44,6 +44,41 @@ final class RTShowcaseMTKView: MTKView {
     override func keyDown(with event: NSEvent) {
         guard let r = rendererRef else { return }
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+        // Modal Full-Island World Map input guard (never drives car, fires Speedbreaker, or quits app!)
+        if r.eventManager.isWorldMapOpen {
+            let panStep: Float = 0.08
+            switch event.keyCode {
+            case 126: r.eventManager.pan(dx: 0.0, dy: -1.0, dt: panStep); return   // Up
+            case 125: r.eventManager.pan(dx: 0.0, dy:  1.0, dt: panStep); return   // Down
+            case 123: r.eventManager.pan(dx: -1.0, dy: 0.0, dt: panStep); return   // Left
+            case 124: r.eventManager.pan(dx:  1.0, dy: 0.0, dt: panStep); return   // Right
+            case 48:                                                               // Tab: Next/Prev marker
+                let step = event.modifierFlags.contains(.shift) ? -1 : 1
+                r.eventManager.cycleSelectedMarker(step: step)
+                return
+            case 36, 76:                                                           // Enter/Return: Confirm
+                r.confirmWorldMapSelection()
+                onCarChanged?(r.scene.carDisplayName)
+                return
+            case 53:                                                               // Esc: Close Map (DO NOT quit!)
+                r.eventManager.closeWorldMap()
+                return
+            default: break
+            }
+            switch chars {
+            case "w": r.eventManager.pan(dx: 0.0, dy: -1.0, dt: panStep)
+            case "s": r.eventManager.pan(dx: 0.0, dy:  1.0, dt: panStep)
+            case "a": r.eventManager.pan(dx: -1.0, dy: 0.0, dt: panStep)
+            case "d": r.eventManager.pan(dx:  1.0, dy: 0.0, dt: panStep)
+            case "=", "+": r.eventManager.zoom(delta: 0.35)
+            case "-", "_": r.eventManager.zoom(delta: -0.35)
+            case "m", "\u{1b}": r.eventManager.closeWorldMap()
+            default: break
+            }
+            return
+        }
+
         switch event.keyCode {
         case 126: r.throttleHeld = true; return
         case 125: r.brakeHeld = true; return
@@ -122,6 +157,17 @@ final class RTShowcaseMTKView: MTKView {
         case "u":
             let muted = r.toggleMusicMute()
             print("EA TRAX Music: \(muted ? "MUTED" : "ON")")
+        case "m":
+            let open = r.toggleWorldMap()
+            print("World Map: \(open ? "OPEN" : "CLOSED")")
+        case "e":
+            if event.modifierFlags.contains(.shift) {
+                r.abortActiveEvent()
+                print("Event aborted")
+            } else if let res = r.startNearestEvent(skipCountdown: false) {
+                print("Started nearest event -> \(res.event.title) [\(res.event.kind.rawValue)]")
+                onCarChanged?(r.scene.carDisplayName)
+            }
         case "\u{1b}":
             NSApp.terminate(nil)
         default:
@@ -232,6 +278,8 @@ struct RTCLIOptions {
     var noMusic = false
     var musicTrack: Int? = nil
     var showTrax = false
+    var eventQuery: String? = nil
+    var worldMap = false
     var spawnPos: SIMD3<Float>? = nil
     var spawnYawDeg: Float? = nil
     var speedKmh: Float = 145.0
@@ -311,6 +359,10 @@ func parseRTArgs() -> RTCLIOptions {
             if let v = nextVal(), let idx = Int(v) { opts.musicTrack = idx }
         case "--show-trax":
             opts.showTrax = true
+        case "--event":
+            if let v = nextVal() { opts.eventQuery = v }
+        case "--world-map":
+            opts.worldMap = true
         case "--spawn-pos":
             if let v = nextVal() {
                 let parts = v.split(separator: ",").compactMap { Float($0.trimmingCharacters(in: .whitespaces)) }
@@ -384,11 +436,12 @@ func parseRTArgs() -> RTCLIOptions {
             print("""
             RockportMetalRT — NFSMW: Rockport 2026 Apple Silicon Hardware Ray Tracing + MetalFX Engine
             Usage:
-              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--spawn-pos x,y,z] [--spawn-yaw <deg>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
-              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--pursuit] [--hud] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax]
+              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--event <id|sprint|speedtrap|boss15..boss1>] [--world-map] [--spawn-pos x,y,z] [--spawn-yaw <deg>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
+              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--event <id|boss15|speedtrap|sprint>] [--world-map] [--pursuit] [--hud] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax]
             Interactive Controls (Canonical Keymap):
               WASD / Arrows: Drive | Space: Handbrake/Drift | Shift / Z: NOS Boost | X / Tab: Speedbreaker
-              F: Instant Pursuit (Heat 1->5) | V: Cycle Landmark | G / Shift+G: Cycle Garage Car | C: Cycle Camera
+              F: Instant Pursuit (Heat 1->5) | E: Start Nearest Event (Shift+E: Abort) | M: Full-Island World Map
+              V: Cycle Landmark | G / Shift+G: Cycle Garage Car | C: Cycle Camera
               [ / ]: Prev / Next EA TRAX Song | U: Mute/Unmute EA TRAX Music
               1/2/3/4: Presets & Live 24h | B: Rain | K: Frame-Gen | H: HUD | L: Livery | T: RT | N: Denoiser
               R: Reset Car & Pursuit | P: Save 64-SPP PNG | Mouse Drag: Orbit | Scroll: Zoom | Esc: Quit
@@ -500,6 +553,24 @@ do {
                      renderer.carWorldPosition.x, renderer.carWorldPosition.y, renderer.carWorldPosition.z,
                      yawRad * 180.0 / .pi, renderer.activeWorldInstanceCount,
                      renderer.smoothedSkyOcclusion, renderer.skyCeilingDist))
+    }
+    if let evQuery = opts.eventQuery {
+        if let res = renderer.startEvent(matching: evQuery, skipCountdown: opts.headless) {
+            print(String(format: "Started event -> %@ [%@] | checkpoints=%d | district=%@ | boss=%@",
+                         res.event.title, res.event.kind.rawValue, res.event.checkpoints.count,
+                         res.event.district, res.event.bossName.isEmpty ? "none" : res.event.bossName))
+        } else {
+            fputs("Warning: event '\(evQuery)' not found in events catalog\n", stderr)
+        }
+    }
+    if opts.worldMap {
+        renderer.eventManager.openWorldMap(playerPos: renderer.carWorldPosition)
+        renderer.eventManager.setZoom(1.15)
+        // Select first Blacklist Boss marker for rich showcase card + GPS route preview
+        if let bossIdx = renderer.eventManager.mapMarkers.firstIndex(where: { $0.kind == 3 }) {
+            renderer.eventManager.selectMarker(index: bossIdx)
+        }
+        renderer.hudEnabled = true
     }
 
     if let cfgPath = opts.configPath {
