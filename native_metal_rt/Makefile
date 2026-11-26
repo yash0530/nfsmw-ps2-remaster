@@ -29,6 +29,7 @@ FRAMEWORKS = \
 
 all: $(BIN) metallib
 	cp -f RayTracing.metal $(OUT_DIR)/RayTracing.metal
+	cp -f RTHud.metal $(OUT_DIR)/RTHud.metal
 
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)
@@ -52,4 +53,4 @@ metallib: RayTracing.metal | $(OUT_DIR)
 	fi
 
 clean:
-	rm -f $(BIN) $(METALLIB) $(OUT_DIR)/RayTracing.air $(OUT_DIR)/RayTracing.metal
+	rm -f $(BIN) $(METALLIB) $(OUT_DIR)/RayTracing.air $(OUT_DIR)/RayTracing.metal $(OUT_DIR)/RTHud.metal

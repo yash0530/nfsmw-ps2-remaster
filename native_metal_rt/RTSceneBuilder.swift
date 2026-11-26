@@ -714,6 +714,57 @@ enum RTSceneBuilder {
         }
 
         let pivot = localVerts.isEmpty ? SIMD3<Float>(repeating: 0) : (minB + maxB) * 0.5
+
+        // Filter out EA PS2 square inner-wheel alpha-billboard quads (matte_trim corner vertices at r ~= 1.414 * tireR)
+        // which otherwise protrude as a dark vertical tab beneath the front splitter when front wheels are steered.
+        let isWheelRole: Bool
+        switch role {
+        case .wheelFL, .wheelFR, .wheelRL, .wheelRR: isWheelRole = true
+        default: isWheelRole = false
+        }
+        if isWheelRole && !localTriMats.isEmpty {
+            var maxTireRadius: Float = 0.0
+            for t in 0..<localTriMats.count {
+                let m = localTriMats[t]
+                if m == RTMaterialID.rubberTire.rawValue || m == RTMaterialID.alloyRim.rawValue {
+                    for k in 0..<3 {
+                        let v = localVerts[Int(localIndices[t * 3 + k])]
+                        let r = hypot(v.py - pivot.y, v.pz - pivot.z)
+                        if r > maxTireRadius { maxTireRadius = r }
+                    }
+                }
+            }
+            if maxTireRadius > 0.15 {
+                let maxAllowedR = maxTireRadius * 1.07
+                var keptIndices: [UInt32] = []
+                var keptMats: [UInt32] = []
+                keptIndices.reserveCapacity(localIndices.count)
+                keptMats.reserveCapacity(localTriMats.count)
+                for t in 0..<localTriMats.count {
+                    let m = localTriMats[t]
+                    let i0 = localIndices[t * 3 + 0]
+                    let i1 = localIndices[t * 3 + 1]
+                    let i2 = localIndices[t * 3 + 2]
+                    if m == RTMaterialID.matteTrim.rawValue {
+                        let v0 = localVerts[Int(i0)]
+                        let v1 = localVerts[Int(i1)]
+                        let v2 = localVerts[Int(i2)]
+                        let rMax = max(
+                            hypot(v0.py - pivot.y, v0.pz - pivot.z),
+                            max(hypot(v1.py - pivot.y, v1.pz - pivot.z), hypot(v2.py - pivot.y, v2.pz - pivot.z))
+                        )
+                        if rMax > maxAllowedR { continue }
+                    }
+                    keptIndices.append(i0)
+                    keptIndices.append(i1)
+                    keptIndices.append(i2)
+                    keptMats.append(m)
+                }
+                localIndices = keptIndices
+                localTriMats = keptMats
+            }
+        }
+
         let vOff = vertices.count
         let iOff = indices.count
         let tOff = triMaterials.count
@@ -1193,21 +1244,21 @@ enum RTSceneBuilder {
         let tOff = triMaterials.count
 
         // Dark matte inner wheel-well arch liners tucked inside outer widebody fenders (x=+-0.91) so +12 deg steered front wheels never expose hollow gaps
-        // Front liners cover z=[1.28..1.82], x=[+-0.52..+-0.76], y=[0.25..0.59] (strictly tucked above lower splitter & inside fenders — zero splinter!)
-        appendBox(center: SIMD3<Float>(-0.64, 0.42,  1.55), halfExtents: SIMD3<Float>(0.12, 0.17, 0.27), matID: .matteTrim,
+        // Strictly tucked inside body hull (y >= 0.29, z <= 1.79) so zero dark tab pokes below lower splitter!
+        appendBox(center: SIMD3<Float>(-0.63, 0.44,  1.54), halfExtents: SIMD3<Float>(0.11, 0.15, 0.25), matID: .matteTrim,
                   vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
-        appendBox(center: SIMD3<Float>( 0.64, 0.42,  1.55), halfExtents: SIMD3<Float>(0.12, 0.17, 0.27), matID: .matteTrim,
+        appendBox(center: SIMD3<Float>( 0.63, 0.44,  1.54), halfExtents: SIMD3<Float>(0.11, 0.15, 0.25), matID: .matteTrim,
                   vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
         // Rear inner wheel-well liners
         appendBox(center: SIMD3<Float>(-0.63, 0.36, -1.130), halfExtents: SIMD3<Float>(0.11, 0.24, 0.32), matID: .matteTrim,
                   vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
         appendBox(center: SIMD3<Float>( 0.63, 0.36, -1.130), halfExtents: SIMD3<Float>(0.11, 0.24, 0.32), matID: .matteTrim,
                   vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
-        // Dark matte radiator / honeycomb backing plate recessed strictly behind curved front bumper openings (zero corner poke-through!)
-        appendBox(center: SIMD3<Float>(0.0, 0.28, 2.00), halfExtents: SIMD3<Float>(0.56, 0.11, 0.03), matID: .matteTrim,
+        // Dark matte radiator / honeycomb backing plate strictly recessed behind curved front bumper openings (zero corner poke-through!)
+        appendBox(center: SIMD3<Float>(0.0, 0.29, 1.96), halfExtents: SIMD3<Float>(0.48, 0.09, 0.025), matID: .matteTrim,
                   vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
-        // Dark underbody floor pan sealing lower chassis gap
-        appendBox(center: SIMD3<Float>(0.0, 0.17, 0.22), halfExtents: SIMD3<Float>(0.66, 0.03, 1.82), matID: .matteTrim,
+        // Dark underbody floor pan strictly tucked inside lower rocker & front bumper cutout (z in [-1.53..+1.83], |x|<=0.56, y>=0.175)
+        appendBox(center: SIMD3<Float>(0.0, 0.20, 0.15), halfExtents: SIMD3<Float>(0.56, 0.025, 1.68), matID: .matteTrim,
                   vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
 
         meshes.append(RTBLASMesh(

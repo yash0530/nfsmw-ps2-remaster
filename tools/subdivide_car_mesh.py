@@ -98,10 +98,32 @@ class SubdivideStats:
     aabb_max: List[float]
 
 
+def adaptive_part_subdivision_params(part_name: str) -> Tuple[float, int, bool]:
+    """Return adaptive (crease_deg, levels, lock_material_seams) for a PS2 car solid part.
+
+    Small curved trim pieces (mirrors, spoilers, hoods) have 20-38 deg facets on PS2
+    meshes that stay flat under a global 18 deg crease lock; relaxing their dihedral
+    threshold to 42 deg at L2 while locking material seams smooths mirror/arch glints
+    without rounding crisp trim boundaries.
+    """
+    pn = part_name.upper()
+    if any(k in pn for k in ("WINDOW", "GLASS", "HEADLIGHT", "BRAKELIGHT", "INTERIOR", "BRAKE")):
+        return (18.0, 0, True)
+    if any(k in pn for k in ("MIRROR", "SPOILER", "HOOD")):
+        return (42.0, 2, True)
+    if any(k in pn for k in ("WHEEL", "TIRE", "ENKEI", "BBS")):
+        return (40.0, 1, True)
+    if any(k in pn for k in ("BODY", "BASE")):
+        return (28.0, 1, True)
+    return (28.0, 1, True)
+
+
 def _analyze_topology(
     mesh: CompiledMesh,
     crease_deg: float,
     inv_eps: float = 5000.0,
+    lock_material_seams: bool = False,
+    lock_uv_seams: bool = False,
 ) -> Tuple[
     List[PosKey],
     Dict[PosKey, Vec3],
@@ -136,20 +158,33 @@ def _analyze_topology(
 
     tri_fnorms: List[Vec3] = []
     tri_areas: List[float] = []
+    tri_mats: List[Tuple[int, int]] = []
     edge_tris: Dict[Tuple[PosKey, PosKey], List[int]] = defaultdict(list)
+    edge_uvs: Dict[Tuple[PosKey, PosKey], List[Tuple[Tuple[int, int], Tuple[int, int]]]] = defaultdict(list)
     pk_tris: Dict[PosKey, List[int]] = defaultdict(list)
 
-    for ti, (i0, i1, i2, _tx, _lm) in enumerate(mesh.triangles):
+    for ti, (i0, i1, i2, tx, lm) in enumerate(mesh.triangles):
         pk0, pk1, pk2 = vert_pkeys[i0], vert_pkeys[i1], vert_pkeys[i2]
         p0, p1, p2 = pk_pos[pk0], pk_pos[pk1], pk_pos[pk2]
         cr = _cross(_sub(p1, p0), _sub(p2, p0))
         area2 = _len(cr)
         tri_areas.append(area2)
         tri_fnorms.append((cr[0] / area2, cr[1] / area2, cr[2] / area2) if area2 > 1e-12 else (0.0, 0.0, 1.0))
-        for a, b in ((pk0, pk1), (pk1, pk2), (pk2, pk0)):
+        tri_mats.append((tx, lm))
+        uv0 = mesh.uvs[i0] if i0 < len(mesh.uvs) else (0.0, 0.0)
+        uv1 = mesh.uvs[i1] if i1 < len(mesh.uvs) else (0.0, 0.0)
+        uv2 = mesh.uvs[i2] if i2 < len(mesh.uvs) else (0.0, 0.0)
+        for (a, uva), (b, uvb) in (((pk0, uv0), (pk1, uv1)), ((pk1, uv1), (pk2, uv2)), ((pk2, uv2), (pk0, uv0))):
             if a != b:
-                ek = (a, b) if a <= b else (b, a)
+                if a <= b:
+                    ek = (a, b)
+                    uv_pair = ((round(uva[0] * 1024), round(uva[1] * 1024)), (round(uvb[0] * 1024), round(uvb[1] * 1024)))
+                else:
+                    ek = (b, a)
+                    uv_pair = ((round(uvb[0] * 1024), round(uvb[1] * 1024)), (round(uva[0] * 1024), round(uva[1] * 1024)))
                 edge_tris[ek].append(ti)
+                if lock_uv_seams:
+                    edge_uvs[ek].append(uv_pair)
         pk_tris[pk0].append(ti)
         pk_tris[pk1].append(ti)
         pk_tris[pk2].append(ti)
@@ -170,7 +205,9 @@ def _analyze_topology(
         elif len(ts) == 2:
             t0, t1 = ts[0], ts[1]
             d = max(-1.0, min(1.0, _dot(tri_fnorms[t0], tri_fnorms[t1])))
-            if d < cos_thresh:
+            mat_seam = lock_material_seams and (tri_mats[t0] != tri_mats[t1])
+            uv_seam = lock_uv_seams and len(edge_uvs[ek]) == 2 and (edge_uvs[ek][0] != edge_uvs[ek][1])
+            if d < cos_thresh or mat_seam or uv_seam:
                 sharp_edges.add(ek)
                 sharp_cnt += 1
             else:
@@ -229,6 +266,8 @@ def _subdivide_once(
     crease_deg: float = 38.0,
     mode: str = "pn",
     preserve_aabb: bool = True,
+    lock_material_seams: bool = False,
+    lock_uv_seams: bool = False,
 ) -> Tuple[CompiledMesh, int, int, int]:
     """Perform one level of crease-aware 1-to-4 triangle subdivision."""
     if mode not in ("pn", "loop"):
@@ -244,7 +283,12 @@ def _subdivide_once(
         smooth_cnt,
         sharp_cnt,
         boundary_cnt,
-    ) = _analyze_topology(mesh, crease_deg=crease_deg)
+    ) = _analyze_topology(
+        mesh,
+        crease_deg=crease_deg,
+        lock_material_seams=lock_material_seams,
+        lock_uv_seams=lock_uv_seams,
+    )
 
     orig_xs = [v[0] for v in mesh.vertices]
     orig_ys = [v[1] for v in mesh.vertices]
@@ -437,6 +481,8 @@ def subdivide_compiled_mesh(
     mode: str = "pn",
     levels: int = 1,
     preserve_aabb: bool = True,
+    lock_material_seams: bool = False,
+    lock_uv_seams: bool = False,
 ) -> Tuple[CompiledMesh, SubdivideStats]:
     """Subdivide a CompiledMesh `levels` times with crease-aware smoothing."""
     if levels < 1 or levels > 3:
@@ -446,7 +492,12 @@ def subdivide_compiled_mesh(
     smooth_cnt = sharp_cnt = boundary_cnt = 0
     for _ in range(levels):
         cur, sm, sh, bd = _subdivide_once(
-            cur, crease_deg=crease_deg, mode=mode, preserve_aabb=preserve_aabb
+            cur,
+            crease_deg=crease_deg,
+            mode=mode,
+            preserve_aabb=preserve_aabb,
+            lock_material_seams=lock_material_seams,
+            lock_uv_seams=lock_uv_seams,
         )
         smooth_cnt += sm
         sharp_cnt += sh
@@ -481,6 +532,8 @@ def subdivide_obj_file(
     levels: int = 1,
     preserve_aabb: bool = True,
     part_name: Optional[str] = None,
+    lock_material_seams: bool = False,
+    lock_uv_seams: bool = False,
 ) -> SubdivideStats:
     """Load an OBJ mesh, apply crease-aware subdivision, and write the subdivided OBJ."""
     mesh = load_obj_mesh(in_obj)
@@ -490,9 +543,129 @@ def subdivide_obj_file(
         mode=mode,
         levels=levels,
         preserve_aabb=preserve_aabb,
+        lock_material_seams=lock_material_seams,
+        lock_uv_seams=lock_uv_seams,
     )
     name = part_name or in_obj.stem
     export_rich_obj(out_obj, name, sub_mesh, group_meta=sub_mesh.group_meta)  # type: ignore[arg-type]
+    return stats
+
+
+def smooth_pbr_obj_inplace(
+    obj_path: Path,
+    *,
+    crease_deg: Optional[float] = None,
+    levels: Optional[int] = None,
+    lock_material_seams: Optional[bool] = None,
+) -> SubdivideStats:
+    """Apply seam-aware adaptive PN subdivision to a Y-up PBR Wavefront OBJ preserving usemtl names."""
+    part_name = obj_path.stem
+    auto_crease, auto_levels, auto_lock = adaptive_part_subdivision_params(part_name)
+    c_deg = auto_crease if crease_deg is None else crease_deg
+    lvls = auto_levels if levels is None else levels
+    lock_m = auto_lock if lock_material_seams is None else lock_material_seams
+
+    verts: List[Vec3] = []
+    uvs: List[Vec2] = []
+    norms: List[Vec3] = []
+    mtl_names: List[str] = []
+    mtl_to_id: Dict[str, int] = {}
+    mtllib_line: Optional[str] = None
+    cur_mtl = "car_paint_hero"
+    tri_raw: List[Tuple[int, int, int, int]] = []
+    vert_map: Dict[Tuple[int, int, int], int] = {}
+    out_verts: List[Vec3] = []
+    out_uvs: List[Vec2] = []
+    out_norms: List[Vec3] = []
+
+    def _get_mtl(name: str) -> int:
+        if name not in mtl_to_id:
+            mtl_to_id[name] = len(mtl_names)
+            mtl_names.append(name)
+        return mtl_to_id[name]
+
+    def _get_v(vi: int, vti: int, vni: int) -> int:
+        k = (vi, vti, vni)
+        idx = vert_map.get(k)
+        if idx is not None:
+            return idx
+        idx = len(out_verts)
+        out_verts.append(verts[vi] if 0 <= vi < len(verts) else (0.0, 0.0, 0.0))
+        out_uvs.append(uvs[vti] if 0 <= vti < len(uvs) else (0.0, 0.0))
+        out_norms.append(norms[vni] if 0 <= vni < len(norms) else (0.0, 1.0, 0.0))
+        vert_map[k] = idx
+        return idx
+
+    for line in obj_path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        parts = s.split()
+        head = parts[0]
+        if head == "mtllib":
+            mtllib_line = s
+        elif head == "v" and len(parts) >= 4:
+            verts.append((float(parts[1]), float(parts[2]), float(parts[3])))
+        elif head == "vt" and len(parts) >= 3:
+            uvs.append((float(parts[1]), float(parts[2])))
+        elif head == "vn" and len(parts) >= 4:
+            norms.append((float(parts[1]), float(parts[2]), float(parts[3])))
+        elif head == "usemtl" and len(parts) >= 2:
+            cur_mtl = parts[1]
+        elif head == "f" and len(parts) >= 4:
+            mid = _get_mtl(cur_mtl)
+            fvs: List[int] = []
+            for tok in parts[1:]:
+                comps = tok.split("/")
+                vi = int(comps[0]) - 1 if comps[0] else -1
+                vti = int(comps[1]) - 1 if len(comps) > 1 and comps[1] else -1
+                vni = int(comps[2]) - 1 if len(comps) > 2 and comps[2] else -1
+                fvs.append(_get_v(vi, vti, vni))
+            for k in range(1, len(fvs) - 1):
+                tri_raw.append((fvs[0], fvs[k], fvs[k + 1], mid))
+
+    tris = [(a, b, c, 0, mid) for (a, b, c, mid) in tri_raw]
+    compiled = CompiledMesh(vertices=out_verts, normals=out_norms, uvs=out_uvs, triangles=tris)
+    if lvls <= 0 or not tris:
+        xs = [v[0] for v in out_verts] or [0.0]
+        ys = [v[1] for v in out_verts] or [0.0]
+        zs = [v[2] for v in out_verts] or [0.0]
+        return SubdivideStats("pn", 0, c_deg, len(out_verts), len(tris), len(out_verts), len(tris), 0, 0, 0,
+                              [min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)])
+
+    sub, stats = subdivide_compiled_mesh(
+        compiled,
+        crease_deg=c_deg,
+        mode="pn",
+        levels=lvls,
+        preserve_aabb=True,
+        lock_material_seams=lock_m,
+    )
+
+    lines: List[str] = [
+        f"# Seam-aware adaptive PN subdivided PBR mesh ({c_deg:.1f} deg, L{lvls}): {part_name}",
+        f"# Vertices: {len(sub.vertices)}, Triangles: {len(sub.triangles)}",
+    ]
+    if mtllib_line:
+        lines.append(mtllib_line)
+    lines.append(f"o {part_name}")
+    for x, y, z in sub.vertices:
+        lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")
+    for u, v in sub.uvs:
+        lines.append(f"vt {u:.6f} {v:.6f}")
+    for nx, ny, nz in sub.normals:
+        lines.append(f"vn {nx:.6f} {ny:.6f} {nz:.6f}")
+
+    sorted_tris = sorted(sub.triangles, key=lambda t: t[4])
+    last_mid = -1
+    for a, b, c, _tx, mid in sorted_tris:
+        if mid != last_mid:
+            last_mid = mid
+            mname = mtl_names[mid] if 0 <= mid < len(mtl_names) else "car_paint_hero"
+            lines.append(f"g {part_name}_{mname}")
+            lines.append(f"usemtl {mname}")
+        lines.append(f"f {a+1}/{a+1}/{a+1} {b+1}/{b+1}/{b+1} {c+1}/{c+1}/{c+1}")
+    obj_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return stats
 
 

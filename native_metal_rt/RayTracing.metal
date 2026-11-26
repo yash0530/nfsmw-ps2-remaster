@@ -137,6 +137,22 @@ struct RTPhysicsProbeOutput {
     float4 wallNormalSide; // xyz = nearest side wall normal, w = sideSign (-1 left, +1 right, 0 none)
 };
 
+// Locked Hour 1-3 ABI Contracts (Buffer Slots 11, 12, 13)
+struct RTWorldLight {
+    float4 posRadius;      // xyz = world luminaire position, w = influence radius (m)
+    float4 colorCone;      // rgb = pre-scaled linear radiance, w = coneMinCos (>0 downward lamp, <= -0.9 omni)
+};
+static_assert(sizeof(RTWorldLight) == 32, "RTWorldLight must match locked 32-byte contract");
+
+struct RTDynamicFX {
+    float4 timeWeather;    // x = simTimeSec, y = timeOfDayHours, z = rainIntensity (0..1), w = puddleLevel (0..1)
+    float4 carMetrics;     // x = frontAxleZ, y = rearAxleZ, z = wheelRadiusF, w = wheelRadiusR
+    float4 nosParams;      // x = nosActive (0..1), y = nosFlameLen, z = speedbreaker (0..1), w = worldLightCount
+    float4 copLightPos[4]; // xyz = 4 nearest cop lightbar world positions, w = strobePhase (0=off)
+    float4 copLightCol[4]; // rgb = alternating red/blue color, w = intensity
+};
+static_assert(sizeof(RTDynamicFX) == 176, "RTDynamicFX must match locked 176-byte contract");
+
 // ---------------------------------------------------------------------------
 // Deterministic PRNG & Low-Discrepancy Samplers
 // ---------------------------------------------------------------------------
@@ -737,10 +753,12 @@ static inline float traceShadowVisibility(
 static inline void evaluateRockportPuddleAndRipples(
     float2 wp,
     float worldNY,
+    float viewAbsY,
     float wetness,
-    float nightScale,
+    float rainStrength,
     float rainTime,
     float dist,
+    bool computeRipples,
     thread float& outPuddle,
     thread float& outDamp,
     thread float3& outRippleN
@@ -748,40 +766,49 @@ static inline void evaluateRockportPuddleAndRipples(
     float upMask = smoothstep(0.58f, 0.90f, worldNY);
     float2 warp = float2(fbm2D(wp * 0.09f), fbm2D(wp * 0.09f + float2(5.2f, 1.3f)));
     float puddleField = fbm2D(wp * 0.135f + warp * 1.15f);
-    // Richer rain-soaked puddles in midnight rain so foreground intersections reflect city lights with circular ripples
-    float pThresh = mix(0.84f, (nightScale > 0.55f) ? 0.44f : 0.56f, wetness);
+    // Natural rain-soaked puddles in wet night/rain (preserves dry/damp asphalt islands rather than a uniform oil sheet!)
+    float heavyRain = smoothstep(0.40f, 0.85f, rainStrength) * smoothstep(0.70f, 0.92f, wetness);
+    float pThresh = mix(0.84f, mix(0.56f, 0.40f, heavyRain), wetness);
     // Wide feathered smoothstep (pThresh ± 0.14) eliminates razor-sharp puddle boundaries
     outPuddle = smoothstep(pThresh - 0.14f, pThresh + 0.14f, puddleField) * upMask;
-    outDamp   = smoothstep(pThresh - 0.36f, pThresh + 0.06f, puddleField) * upMask * wetness;
+    // Subtle continuous rainwater sheen during active rain while preserving organic puddle boundaries
+    outPuddle = max(outPuddle, 0.28f * upMask * heavyRain);
+    outDamp   = max(smoothstep(pThresh - 0.36f, pThresh + 0.06f, puddleField) * upMask * wetness, 0.72f * upMask * heavyRain);
     outRippleN = float3(0.0f, 1.0f, 0.0f);
 
-    // Crisp concentric circular raindrop ripple wavelets (0.18-0.55m rings) inside wet night puddles
-    if (outPuddle > 0.18f && wetness > 0.72f && nightScale > 0.55f && dist < 52.0f) {
-        float fade = smoothstep(52.0f, 5.0f, dist) * smoothstep(0.18f, 0.42f, outPuddle);
-        float2 ripGrad = float2(0.0f);
-        for (int layer = 0; layer < 2; ++layer) {
-            float scale = (layer == 0) ? 1.95f : 3.25f;
-            float2 p = wp * scale + float2(float(layer) * 17.3f, float(layer) * 9.1f);
-            float2 cell = floor(p);
-            float2 f = fract(p);
-            for (int dy = -1; dy <= 1; ++dy) {
-                for (int dx = -1; dx <= 1; ++dx) {
-                    float2 nb = cell + float2(float(dx), float(dy));
-                    float3 rnd = hash33(float3(nb, float(layer) * 13.7f + 1.9f));
-                    float2 center = float2(float(dx), float(dy)) + (0.20f + 0.60f * rnd.xy);
-                    float2 diff = f - center;
-                    float r = length(diff);
-                    float cycle = fract(rainTime * (0.75f + 0.45f * rnd.z) + rnd.z * 6.2831f);
-                    float ringR = 0.14f + cycle * 0.80f;
-                    float band = r - ringR;
-                    float env = exp(-band * band * 76.0f) * (1.0f - cycle * 0.80f) * smoothstep(0.94f, 0.06f, r);
-                    float wave = cos(band * 52.0f) * env;
-                    float2 dir = diff / max(r, 0.005f);
-                    ripGrad += dir * wave * ((layer == 0) ? 0.275f : 0.185f);
+    // Delicate 15-40cm concentric raindrop ripple rings with grazing-angle attenuation (zero midground zebra-striping!)
+    if (computeRipples && outPuddle > 0.20f && wetness > 0.70f && rainStrength > 0.35f && dist < 38.0f) {
+        float grazingFade = smoothstep(0.06f, 0.24f, viewAbsY);
+        float fade = smoothstep(38.0f, 3.0f, dist) * grazingFade * smoothstep(0.20f, 0.52f, outPuddle) * clamp(rainStrength, 0.0f, 1.0f);
+        if (fade > 0.01f) {
+            float2 ripGrad = float2(0.0f);
+            int maxLayers = (dist < 18.0f) ? 3 : 2;
+            for (int layer = 0; layer < maxLayers; ++layer) {
+                float scale = (layer == 0) ? 1.60f : ((layer == 1) ? 2.80f : 4.40f);
+                float amp   = (layer == 0) ? 0.36f : ((layer == 1) ? 0.24f : 0.14f);
+                float2 p = wp * scale + float2(float(layer) * 17.3f, float(layer) * 9.1f);
+                float2 cell = floor(p);
+                float2 f = fract(p);
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        float2 nb = cell + float2(float(dx), float(dy));
+                        float3 rnd = hash33(float3(nb, float(layer) * 13.7f + 1.9f));
+                        float2 center = float2(float(dx), float(dy)) + (0.20f + 0.60f * rnd.xy);
+                        float2 diff = f - center;
+                        float r = length(diff);
+                        float cycle = fract(rainTime * (0.68f + 0.38f * rnd.z) + rnd.z * 6.2831f);
+                        float ringR = 0.07f + cycle * 0.74f;
+                        float band = r - ringR;
+                        // Delicate 2-crest raindrop capillary wavelet (15-40cm realistic puddles, never thick motor oil)
+                        float env = exp(-band * band * 44.0f) * (1.0f - cycle * 0.72f) * smoothstep(0.92f, 0.04f, r);
+                        float wave = (sin(band * 28.0f) + 0.42f * sin((band + 0.11f) * 36.0f)) * env;
+                        float2 dir = diff / max(r, 0.006f);
+                        ripGrad += dir * wave * amp;
+                    }
                 }
             }
+            outRippleN = normalize(float3(ripGrad.x * fade, 1.0f, ripGrad.y * fade));
         }
-        outRippleN = normalize(float3(ripGrad.x * fade, 1.0f, ripGrad.y * fade));
     }
 }
 
@@ -846,11 +873,15 @@ static HitSurface resolveWorldSurface(
     RTInstanceMeta inst,
     uint primitiveID,
     float2 bary,
+    bool isPrimary,
     device const RkptVertex* worldVertices,
     device const uint* worldIndices,
     device const RkptMaterial* worldMaterials,
     device const BindlessTexEntry* worldTextures,
     constant RTFrameUniforms& u,
+    constant RTDynamicFX& dynFX,
+    texture2d<float> concreteDiffTex,
+    texture2d<float> concreteNormTex,
     sampler repeatSamp
 ) {
     uint i0 = worldIndices[inst.indexOffset + primitiveID * 3u + 0u];
@@ -905,7 +936,7 @@ static HitSurface resolveWorldSurface(
     float3 texCol = float3(0.42f, 0.43f, 0.45f);
     float mipLod = clamp(log2(max(dist * 0.14f, 1.0f)), 0.0f, 6.0f);
     bool hasTex = (wmat.diffuseTexIndex != 0xFFFFFFFFu && wmat.diffuseTexIndex < texCount);
-    bool useAniso = (wmat.surfaceClass == 0u || wmat.surfaceClass == 1u || wmat.surfaceClass == 2u);
+    bool useAniso = isPrimary && (wmat.surfaceClass == 0u || wmat.surfaceClass == 1u || wmat.surfaceClass == 2u);
 
     if (hasTex) {
         texture2d<float> dTex = worldTextures[wmat.diffuseTexIndex].tex;
@@ -917,34 +948,38 @@ static HitSurface resolveWorldSurface(
                 dist, u, mipLod
             );
         } else {
-            sampled = dTex.sample(repeatSamp, s.uv, level(mipLod));
+            // Fast 1-tap hardware mip fetch on secondary reflections & GI bounces (saves 11 tex fetches/bounce!)
+            float bounceLod = isPrimary ? mipLod : max(mipLod, 1.5f);
+            sampled = dTex.sample(repeatSamp, s.uv, level(bounceLod));
         }
         texCol = sampled.rgb;
         s.alpha = sampled.a;
 
-        // 3x3 Sobel height-to-normal bump derivation from bindless diffuse texture luminance
+        // 3x3 Sobel height-to-normal bump derivation on PRIMARY rays only
         // Suppress Sobel heavily on ROAD_ASPHALT / SIDEWALK (0.18x) so low-res PS2 texel rows never carve washboard stripes!
-        float classBumpBoost = (wmat.surfaceClass == 1u || wmat.surfaceClass == 2u)
-            ? 0.18f
-            : ((wmat.surfaceClass == 0u) ? 1.15f : 0.90f);
-        float bumpAmp = clamp(wmat.bumpStrength * classBumpBoost, 0.0f, 1.50f) * exp(-dist * 0.018f);
-        if (bumpAmp > 0.02f && wmat.surfaceClass != 7u) {
-            float2 texel = float2(1.0f / max(float(dTex.get_width()), 16.0f),
-                                  1.0f / max(float(dTex.get_height()), 16.0f)) * exp2(min(mipLod, 2.0f));
-            float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
-            float tl = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x, -texel.y), level(mipLod)).rgb, lumaW);
-            float tc = dot(dTex.sample(repeatSamp, s.uv + float2(    0.0f, -texel.y), level(mipLod)).rgb, lumaW);
-            float tr = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x, -texel.y), level(mipLod)).rgb, lumaW);
-            float ml = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x,     0.0f), level(mipLod)).rgb, lumaW);
-            float mr = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x,     0.0f), level(mipLod)).rgb, lumaW);
-            float bl = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x,  texel.y), level(mipLod)).rgb, lumaW);
-            float bc = dot(dTex.sample(repeatSamp, s.uv + float2(    0.0f,  texel.y), level(mipLod)).rgb, lumaW);
-            float br = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x,  texel.y), level(mipLod)).rgb, lumaW);
-            float gx = (tr + 2.0f * mr + br) - (tl + 2.0f * ml + bl);
-            float gy = (bl + 2.0f * bc + br) - (tl + 2.0f * tc + tr);
-            float3 t, b;
-            buildONB(worldN, t, b);
-            s.N = normalize(worldN + (t * (-gx) + b * (-gy)) * (bumpAmp * 0.72f));
+        if (isPrimary && wmat.surfaceClass != 7u) {
+            float classBumpBoost = (wmat.surfaceClass == 1u || wmat.surfaceClass == 2u)
+                ? 0.18f
+                : ((wmat.surfaceClass == 0u) ? 1.15f : 0.90f);
+            float bumpAmp = clamp(wmat.bumpStrength * classBumpBoost, 0.0f, 1.50f) * exp(-dist * 0.018f);
+            if (bumpAmp > 0.02f) {
+                float2 texel = float2(1.0f / max(float(dTex.get_width()), 16.0f),
+                                      1.0f / max(float(dTex.get_height()), 16.0f)) * exp2(min(mipLod, 2.0f));
+                float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
+                float tl = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x, -texel.y), level(mipLod)).rgb, lumaW);
+                float tc = dot(dTex.sample(repeatSamp, s.uv + float2(    0.0f, -texel.y), level(mipLod)).rgb, lumaW);
+                float tr = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x, -texel.y), level(mipLod)).rgb, lumaW);
+                float ml = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x,     0.0f), level(mipLod)).rgb, lumaW);
+                float mr = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x,     0.0f), level(mipLod)).rgb, lumaW);
+                float bl = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x,  texel.y), level(mipLod)).rgb, lumaW);
+                float bc = dot(dTex.sample(repeatSamp, s.uv + float2(    0.0f,  texel.y), level(mipLod)).rgb, lumaW);
+                float br = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x,  texel.y), level(mipLod)).rgb, lumaW);
+                float gx = (tr + 2.0f * mr + br) - (tl + 2.0f * ml + bl);
+                float gy = (bl + 2.0f * bc + br) - (tl + 2.0f * tc + tr);
+                float3 t, b;
+                buildONB(worldN, t, b);
+                s.N = normalize(worldN + (t * (-gx) + b * (-gy)) * (bumpAmp * 0.72f));
+            }
         }
     }
 
@@ -953,22 +988,23 @@ static HitSurface resolveWorldSurface(
     float nightScale = u.neonParams.w;
     // Strict true-night ramp (0.0 in golden_hour & daylight, 1.0 in night_neon) — prevents daytime checkerboard windows!
     float isNight = smoothstep(0.032f, 0.015f, u.skyZenith.r);
-    float rainTime = u.envParams.y * 0.45f + u.rtParams.z * 0.04f;
+    float rainStrength = max(isNight * clamp(nightScale, 0.0f, 1.0f), dynFX.timeWeather.z);
+    // Decoupled simulation clock (NEVER driven by sampleIdx rtParams.z, so multi-SPP raindrop rings accumulate razor-sharp!)
+    float rainTime = dynFX.timeWeather.x * 0.62f + 1.37f;
 
     s.baseAlbedo = texCol * aoMul;
     s.roughness = clamp(wmat.roughnessHint > 0.01f ? wmat.roughnessHint : 0.72f, 0.04f, 0.96f);
     s.metallic = clamp(wmat.metallicHint, 0.0f, 1.0f);
 
-    if (wmat.surfaceClass == 1u || wmat.surfaceClass == 2u) {
-        // ROAD_ASPHALT (1) / SIDEWALK (2): tactile multi-scale charcoal asphalt grit + continuous feathered rain puddles!
+    if (wmat.surfaceClass == 1u) {
+        // ROAD_ASPHALT (1): tactile multi-scale charcoal asphalt grit + continuous feathered rain puddles + mirror ripples!
         s.matID = MAT_WET_ASPHALT;
         float2 wp = s.worldPos.xz;
         float puddle = 0.0f, damp = 0.0f;
         float3 rippleN = float3(0.0f, 1.0f, 0.0f);
-        evaluateRockportPuddleAndRipples(wp, worldN.y, wetness, isNight * nightScale, rainTime, dist, puddle, damp, rippleN);
+        evaluateRockportPuddleAndRipples(wp, worldN.y, abs(rayDir.y), wetness, rainStrength, rainTime, dist, isPrimary, puddle, damp, rippleN);
 
         // Multi-scale world-space asphalt aggregate (macro wear 3/m + medium tarmac grit 11.5/m + fine mineral chips 30/m)
-        // Visible from 2m to 45m without averaging out under 32-SPP AA!
         float macroFade = exp(-dist * 0.012f);
         float fineFade  = exp(-dist * 0.032f);
         float aggMacro  = fbm2D(wp * 3.0f);
@@ -977,42 +1013,104 @@ static HitSurface resolveWorldSurface(
         float aggDelta  = (aggMed - 0.5f) * 0.58f * macroFade + (aggFine - 0.5f) * 0.42f * fineFade;
         float aggAlbedo = 1.0f + aggDelta * 0.46f + (aggMacro - 0.5f) * 0.24f;
 
-        float gxMed  = noise2D(wp * 13.0f + float2(0.14f, 0.0f)) - noise2D(wp * 13.0f - float2(0.14f, 0.0f));
-        float gzMed  = noise2D(wp * 13.0f + float2(0.0f, 0.14f)) - noise2D(wp * 13.0f - float2(0.0f, 0.14f));
-        float gxFine = noise2D(wp * 34.0f + float2(0.08f, 0.0f)) - noise2D(wp * 34.0f - float2(0.08f, 0.0f));
-        float gzFine = noise2D(wp * 34.0f + float2(0.0f, 0.08f)) - noise2D(wp * 34.0f - float2(0.0f, 0.08f));
-        float gxAgg  = gxMed * 0.65f * macroFade + gxFine * 0.55f * fineFade;
-        float gzAgg  = gzMed * 0.65f * macroFade + gzFine * 0.55f * fineFade;
-        float aggNStr = ((wmat.surfaceClass == 1u) ? 0.52f : 0.30f) * (1.0f - puddle * 0.85f);
-        float3 aggWorldN = normalize(s.N + float3(gxAgg, 0.0f, gzAgg) * aggNStr);
+        float3 aggWorldN = s.N;
+        if (isPrimary) {
+            float gxMed  = noise2D(wp * 13.0f + float2(0.14f, 0.0f)) - noise2D(wp * 13.0f - float2(0.14f, 0.0f));
+            float gzMed  = noise2D(wp * 13.0f + float2(0.0f, 0.14f)) - noise2D(wp * 13.0f - float2(0.0f, 0.14f));
+            float gxFine = noise2D(wp * 34.0f + float2(0.08f, 0.0f)) - noise2D(wp * 34.0f - float2(0.08f, 0.0f));
+            float gzFine = noise2D(wp * 34.0f + float2(0.0f, 0.08f)) - noise2D(wp * 34.0f - float2(0.0f, 0.08f));
+            float gxAgg  = gxMed * 0.65f * macroFade + gxFine * 0.55f * fineFade;
+            float gzAgg  = gzMed * 0.65f * macroFade + gzFine * 0.55f * fineFade;
+            float aggNStr = 0.52f * (1.0f - puddle * 0.88f);
+            aggWorldN = normalize(s.N + float3(gxAgg, 0.0f, gzAgg) * aggNStr);
+        }
 
         // Realistic dark charcoal tarmac (neutralizes clay/ice tint while keeping foreground wet pools legible, never pitch-black!)
         float paintPreserve = smoothstep(0.30f, 0.62f, lum);
-        float3 roadTex = (wmat.surfaceClass == 1u)
-            ? mix(float3(lum * 0.96f, lum * 0.97f, lum * 1.00f), texCol, 0.42f + 0.58f * paintPreserve)
-            : texCol;
-        float dryGain = (wmat.surfaceClass == 1u)
-            ? mix(0.84f, 0.98f, paintPreserve)
-            : mix(0.92f, 1.00f, paintPreserve);
-        float wetGain = (wmat.surfaceClass == 1u)
-            ? mix(0.68f, 0.88f, paintPreserve)
-            : mix(0.72f, 0.90f, paintPreserve);
+        float3 roadTex = mix(float3(lum * 0.96f, lum * 0.97f, lum * 1.00f), texCol, 0.42f + 0.58f * paintPreserve);
+        float dryGain = mix(0.84f, 0.98f, paintPreserve);
+        float wetGain = mix(0.68f, 0.88f, paintPreserve);
         float albedoGain = mix(mix(dryGain, dryGain * 0.88f, damp), wetGain, puddle);
-        float3 charcoalFloor = (wmat.surfaceClass == 1u)
-            ? float3(0.040f, 0.042f, 0.046f) * aoMul * aggAlbedo
-            : float3(0.048f, 0.050f, 0.052f) * aoMul * aggAlbedo;
+        float3 charcoalFloor = float3(0.040f, 0.042f, 0.046f) * aoMul * aggAlbedo;
         s.baseAlbedo = clamp(max(roadTex * aoMul * albedoGain * aggAlbedo, charcoalFloor), float3(0.0f), float3(0.92f));
 
-        float dryR    = (wmat.surfaceClass == 1u) ? 0.78f : 0.80f;
-        float dampR   = (wmat.surfaceClass == 1u) ? 0.48f : 0.52f;
-        float puddleR = (wmat.surfaceClass == 1u) ? 0.056f : 0.068f;
-        s.roughness   = clamp(mix(mix(dryR, dampR, damp), puddleR, puddle) + (aggMed - 0.5f) * 0.10f * (1.0f - puddle), 0.035f, 0.94f);
-        s.clearcoat   = max(puddle * 0.88f, damp * 0.08f);
-        s.ccRoughness = mix(0.14f, 0.028f, puddle);
+        float dryR    = 0.78f;
+        float dampR   = 0.48f;
+        float puddleR = 0.020f;
+        s.roughness   = clamp(mix(mix(dryR, dampR, damp), puddleR, puddle) + (aggMed - 0.5f) * 0.10f * (1.0f - puddle), 0.018f, 0.94f);
+        s.clearcoat   = max(puddle * 0.92f, damp * 0.08f);
+        s.ccRoughness = mix(0.14f, 0.016f, puddle);
         s.puddleMask  = puddle;
-        float3 puddleSurfaceN = normalize(mix(worldN, rippleN, 0.85f));
-        s.N = normalize(mix(aggWorldN, puddleSurfaceN, puddle * 0.84f));
-        s.clearcoatN = normalize(mix(worldN, rippleN, puddle));
+        float3 puddleSurfaceN = normalize(mix(worldN, rippleN, 0.78f));
+        s.N = normalize(mix(aggWorldN, puddleSurfaceN, puddle * 0.88f));
+        s.clearcoatN = normalize(mix(worldN, rippleN, puddle * 0.78f));
+    } else if (wmat.surfaceClass == 2u) {
+        // SIDEWALK (2): architectural poured-concrete slabs with crisp 1.5m expansion joints & 1K CC0 broom-finish concrete grain!
+        // Uses 4-tap wide UV macro-averaging so blurry PS2 diamond strips de-blob cleanly even on 1-mip v1 .rkpt textures.
+        s.matID = MAT_WET_ASPHALT;
+        float2 wp = s.worldPos.xz;
+        float puddle = 0.0f, damp = 0.0f;
+        float3 rippleN = float3(0.0f, 1.0f, 0.0f);
+        evaluateRockportPuddleAndRipples(wp, worldN.y, abs(rayDir.y), wetness, rainStrength, rainTime, dist, isPrimary, puddle, damp, rippleN);
+
+        float detailFade = exp(-dist * 0.012f);
+        float2 cUV1 = wp * 0.45f;
+        float2 cUV2 = float2(wp.x * 0.18f - wp.y * 0.13f, wp.x * 0.13f + wp.y * 0.18f) + float2(0.31f, 0.57f);
+        float3 ccDiff = mix(concreteDiffTex.sample(repeatSamp, cUV1, level(0.0f)).rgb,
+                            concreteDiffTex.sample(repeatSamp, cUV2, level(0.0f)).rgb, 0.38f);
+        float ccLuma = dot(ccDiff, float3(0.2126f, 0.7152f, 0.0722f));
+        float ccGrain = mix(1.0f, clamp(0.58f + ccLuma * 1.05f, 0.64f, 1.38f), detailFade * 0.95f);
+
+        // Crisp 1.5m poured-concrete sidewalk slab expansion joints + subtle per-slab concrete tone & broom-finish variation
+        float2 slabCoord = wp / 1.50f;
+        float2 slabCell = floor(slabCoord);
+        float2 slabF = fract(slabCoord);
+        float dEdgeX = min(slabF.x, 1.0f - slabF.x);
+        float dEdgeZ = min(slabF.y, 1.0f - slabF.y);
+        float isTopWalk = smoothstep(0.62f, 0.90f, worldN.y);
+        float jointGroove = max(smoothstep(0.032f, 0.006f, dEdgeX), smoothstep(0.032f, 0.006f, dEdgeZ))
+                          * isTopWalk * detailFade;
+        float slabTone = 0.89f + 0.22f * hash21(slabCell);
+        float fineGrit = 0.92f + 0.16f * noise2D(wp * 22.0f);
+
+        // Wide 4-tap UV macro-average completely washes out blurry PS2 diamond tile contrast on both 1-mip v1 & BC7-mip v2!
+        float3 macroCol = texCol;
+        if (hasTex && isTopWalk > 0.2f) {
+            texture2d<float> dTex = worldTextures[wmat.diffuseTexIndex].tex;
+            float avgLod = max(mipLod + 2.5f, 3.5f);
+            float3 avgTex = 0.25f * (
+                dTex.sample(repeatSamp, s.uv + float2( 0.19f,  0.17f), level(avgLod)).rgb +
+                dTex.sample(repeatSamp, s.uv + float2(-0.19f,  0.17f), level(avgLod)).rgb +
+                dTex.sample(repeatSamp, s.uv + float2( 0.17f, -0.19f), level(avgLod)).rgb +
+                dTex.sample(repeatSamp, s.uv + float2(-0.17f, -0.19f), level(avgLod)).rgb
+            );
+            macroCol = mix(texCol, mix(avgTex, texCol, 0.10f), isTopWalk);
+        }
+        float macroLum = clamp(dot(macroCol, float3(0.2126f, 0.7152f, 0.0722f)), 0.16f, 0.62f);
+        float3 warmPouredConcrete = mix(float3(macroLum * 1.01f, macroLum * 0.99f, macroLum * 0.95f), macroCol, 0.35f);
+        float wetGain = mix(mix(0.92f, 0.80f, damp), 0.66f, puddle);
+        float3 slabCol = warmPouredConcrete * aoMul * slabTone * ccGrain * fineGrit * wetGain * (1.0f - jointGroove * 0.54f);
+        s.baseAlbedo = clamp(max(slabCol, float3(0.048f, 0.050f, 0.052f) * aoMul), float3(0.0f), float3(0.90f));
+
+        float3 concWorldN = worldN;
+        if (isPrimary) {
+            float3 ccN = concreteNormTex.sample(repeatSamp, cUV1, level(0.0f)).rgb;
+            float3 ct, cb;
+            buildONB(worldN, ct, cb);
+            concWorldN = unpackNormalSample(ccN, worldN, ct, cb, 0.62f * detailFade * (1.0f - puddle * 0.85f));
+            // Crisp beveled concrete expansion joint normal tilt
+            float jNx = (smoothstep(0.038f, 0.007f, slabF.x) - smoothstep(0.962f, 0.993f, slabF.x)) * 0.44f;
+            float jNz = (smoothstep(0.038f, 0.007f, slabF.y) - smoothstep(0.962f, 0.993f, slabF.y)) * 0.44f;
+            concWorldN = normalize(concWorldN + float3(jNx, 0.0f, jNz) * isTopWalk * detailFade * (1.0f - puddle * 0.8f));
+        }
+
+        s.roughness   = clamp(mix(mix(0.84f, 0.52f, damp), 0.026f, puddle), 0.020f, 0.94f);
+        s.clearcoat   = max(puddle * 0.86f, damp * 0.08f);
+        s.ccRoughness = mix(0.14f, 0.018f, puddle);
+        s.puddleMask  = puddle;
+        float3 puddleSurfaceN = normalize(mix(worldN, rippleN, 0.78f));
+        s.N = normalize(mix(concWorldN, puddleSurfaceN, puddle * 0.85f));
+        s.clearcoatN = normalize(mix(worldN, rippleN, puddle * 0.78f));
     } else if (wmat.surfaceClass == 3u) {
         // BUILDING_GLASS: mirror architectural reflections by day/dusk; refined mullioned warm interior offices at TRUE NIGHT!
         s.matID = MAT_URBAN_GLASS;
@@ -1090,14 +1188,14 @@ static HitSurface resolveWorldSurface(
             // Horizontal concrete plaza / curb apron shares the EXACT same continuous world-space puddle field!
             float puddle = 0.0f, damp = 0.0f;
             float3 rippleN = float3(0.0f, 1.0f, 0.0f);
-            evaluateRockportPuddleAndRipples(s.worldPos.xz, worldN.y, wetness, isNight * nightScale, rainTime, dist, puddle, damp, rippleN);
+            evaluateRockportPuddleAndRipples(s.worldPos.xz, worldN.y, abs(rayDir.y), wetness, rainStrength, rainTime, dist, isPrimary, puddle, damp, rippleN);
             s.baseAlbedo = texCol * aoMul * mix(1.0f, 0.72f, max(puddle, damp * 0.50f));
-            s.roughness = mix(mix(0.80f, 0.50f, damp), 0.060f, puddle);
-            s.clearcoat = max(puddle * 0.86f, damp * 0.08f);
-            s.ccRoughness = mix(0.14f, 0.028f, puddle);
+            s.roughness = mix(mix(0.80f, 0.50f, damp), 0.026f, puddle);
+            s.clearcoat = max(puddle * 0.88f, damp * 0.08f);
+            s.ccRoughness = mix(0.14f, 0.018f, puddle);
             s.puddleMask = puddle;
-            float3 puddleSurfaceN = normalize(mix(worldN, rippleN, 0.85f));
-            s.N = normalize(mix(s.N, puddleSurfaceN, puddle * 0.84f));
+            float3 puddleSurfaceN = normalize(mix(worldN, rippleN, 0.90f));
+            s.N = normalize(mix(s.N, puddleSurfaceN, puddle * 0.88f));
             s.clearcoatN = normalize(mix(worldN, rippleN, puddle));
         } else {
             float rainGloss = wetness * 0.20f;
@@ -1172,6 +1270,7 @@ static HitSurface resolveHitSurface(
     uint instanceID,
     uint primitiveID,
     float2 bary,
+    bool isPrimary,
     device const RTVertex* vertices,
     device const uint* indices,
     device const uint* triMaterials,
@@ -1182,6 +1281,7 @@ static HitSurface resolveHitSurface(
     device const RkptMaterial* worldMaterials,
     device const BindlessTexEntry* worldTextures,
     constant RTFrameUniforms& u,
+    constant RTDynamicFX& dynFX,
     texture2d<float> asphaltDiffTex,
     texture2d<float> asphaltNormTex,
     texture2d<float> asphaltRoughTex,
@@ -1201,8 +1301,9 @@ static HitSurface resolveHitSurface(
     RTInstanceMeta inst = instances[instanceID];
     if ((inst.flags & (1u << 4)) != 0u) {
         return resolveWorldSurface(
-            rayOrigin, rayDir, dist, inst, primitiveID, bary,
-            worldVertices, worldIndices, worldMaterials, worldTextures, u, repeatSamp
+            rayOrigin, rayDir, dist, inst, primitiveID, bary, isPrimary,
+            worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+            concreteDiffTex, concreteNormTex, repeatSamp
         );
     }
     uint triIdx = inst.triOffset + primitiveID;
@@ -1279,8 +1380,9 @@ static HitSurface resolveHitSurface(
             } else {
                 s.baseAlbedo = evaluateBMWLivery(s.modelPos, mat.baseColor.rgb, mat.secondaryColor.rgb, stripeMask);
             }
-            s.metallic  = mix(0.85f, 0.42f, stripeMask);
-            s.roughness = mix(0.18f, 0.22f, stripeMask);
+            // Realistic two-stage automotive Titanium Silver metallic basecoat (0.74 restores crisp metallic daylight door reflections!)
+            s.metallic  = mix(0.74f, 0.44f, stripeMask);
+            s.roughness = mix(0.17f, 0.21f, stripeMask);
         } else {
             // Pure authentic factory metallic paint (Porsche GT Silver Metallic / Lamborghini Giallo Orion Pearl)
             s.baseAlbedo = mat.baseColor.rgb;
@@ -1308,17 +1410,19 @@ static HitSurface resolveHitSurface(
         s.clearcoat = mix(s.clearcoat, 1.0f, nightWetBoost);
         s.ccRoughness = mix(clamp(u.envParams.z, 0.009f, 0.18f), 0.010f, nightWetBoost);
         s.ior = mix(s.ior, 1.62f, nightWetBoost * 0.65f);
-        // M3 GTR rear trunk plate pocket & handle lip (z < -1.80, |x| < 0.44, y in [0.64..0.93]):
-        // Match authentic cool BMW Titanium Silver metallic clearcoat (eliminates matte olive-tan diffuse cast & dark maroon overhang!)
-        if (carID == 0u && s.modelPos.z < -1.80f && abs(s.modelPos.x) < 0.44f && s.modelPos.y > 0.64f && s.modelPos.y < 0.93f) {
-            float upperStripe = stripeMask * step(0.865f, s.modelPos.y);
-            s.baseAlbedo = mix(float3(0.68f, 0.72f, 0.78f), mat.secondaryColor.rgb, upperStripe);
-            s.metallic = 0.84f;
-            s.roughness = 0.16f;
-            s.clearcoat = 1.0f;
-            s.ccRoughness = 0.015f;
-            if (worldN.y < -0.02f) {
-                s.N = normalize(float3(worldN.x, max(worldN.y, 0.10f), worldN.z));
+        // M3 GTR rear trunk recess (|x| < 0.48, y in [0.62..0.94], z < -1.88):
+        // Preserves 100% of EA's authentic diagonal blue stripes (zero boxy stair-step!) while giving the unpainted
+        // silver trapezoid cool BMW Titanium Silver metallic clearcoat + upward-clamped recess normal so downward-facing
+        // trunk polygons (ny = -0.24..-0.96) never reflect warm brown asphalt as an olive/khaki patch!
+        if (carID == 0u && s.modelPos.z < -1.88f && abs(s.modelPos.x) < 0.48f && s.modelPos.y > 0.62f && s.modelPos.y < 0.94f) {
+            float silverTrunk = (1.0f - stripeMask);
+            float lipCrease = 1.0f - 0.18f * smoothstep(0.885f, 0.865f, s.modelPos.y) * smoothstep(0.835f, 0.865f, s.modelPos.y);
+            float3 coolTiSilver = float3(0.72f, 0.76f, 0.84f) * lipCrease;
+            s.baseAlbedo = mix(s.baseAlbedo, coolTiSilver, silverTrunk);
+            s.metallic   = mix(s.metallic, 0.26f, silverTrunk);
+            s.roughness  = mix(s.roughness, 0.26f, silverTrunk);
+            if (worldN.y < 0.26f && silverTrunk > 0.25f) {
+                s.N = normalize(float3(worldN.x, max(worldN.y, 0.28f), worldN.z));
                 s.clearcoatN = s.N;
             }
         }
@@ -1329,20 +1433,25 @@ static HitSurface resolveHitSurface(
             float viewFacing = clamp(dot(worldN, -rayDir), 0.0f, 1.0f);
             s.baseAlbedo = mix(float3(0.88f, 0.52f, 0.014f), float3(1.00f, 0.80f, 0.06f), pow(viewFacing, 0.55f));
         }
-        s.metallic   = mat.pbrParams.x;
-        s.roughness  = clamp(mat.pbrParams.y, 0.12f, 0.30f);
+        s.metallic   = (carID == 0u) ? 0.74f : mat.pbrParams.x;
+        s.roughness  = clamp(mat.pbrParams.y, 0.14f, 0.30f);
         s.clearcoat  = 1.0f;
         float nightWetBoost = smoothstep(0.65f, 0.92f, u.skyZenith.w) * smoothstep(0.45f, 1.10f, u.neonParams.w);
         s.ccRoughness = mix(clamp(u.envParams.z, 0.010f, 0.18f), 0.010f, nightWetBoost);
         s.ior = mix(s.ior, 1.62f, nightWetBoost * 0.65f);
         s.clearcoatN = worldN;
-        if (carID == 0u && s.modelPos.z < -1.80f && abs(s.modelPos.x) < 0.48f && s.modelPos.y > 0.62f && s.modelPos.y < 0.93f) {
-            // Crisp BMW Titanium Silver metallic clearcoat matching M3 trunk paint (zero olive-tan cast!)
-            s.baseAlbedo = float3(0.68f, 0.72f, 0.78f);
-            s.metallic = 0.84f;
-            s.roughness = 0.16f;
+        if (carID == 0u && s.modelPos.z < -1.85f && abs(s.modelPos.x) < 0.55f && s.modelPos.y > 0.60f && s.modelPos.y < 0.94f) {
+            // Crisp cool BMW Titanium Silver metallic clearcoat matching upper trunk lid seamlessly (zero khaki cast!)
+            float lipCrease = 1.0f - 0.16f * smoothstep(0.885f, 0.865f, s.modelPos.y) * smoothstep(0.835f, 0.865f, s.modelPos.y);
+            s.baseAlbedo = float3(0.72f, 0.76f, 0.84f) * lipCrease;
+            s.metallic = 0.26f;
+            s.roughness = 0.26f;
             s.clearcoat = 1.0f;
-            s.ccRoughness = 0.015f;
+            s.ccRoughness = 0.018f;
+            if (worldN.y < 0.26f) {
+                s.N = normalize(float3(worldN.x, max(worldN.y, 0.28f), worldN.z));
+                s.clearcoatN = s.N;
+            }
         }
     } else if (s.matID == MAT_CAR_BADGE) {
         // Real UV-mapped OEM badges & Carrera GT perforated stainless V10 engine-deck mesh!
@@ -1359,16 +1468,30 @@ static HitSurface resolveHitSurface(
             s.clearcoatN = worldN;
         } else {
             float3 paintBase = materials[MAT_CAR_PAINT].baseColor.rgb;
+            float baseMet = materials[MAT_CAR_PAINT].pbrParams.x;
+            float baseRough = 0.18f;
             if (carID == 0u) {
                 float onHoodBlue = step(1.95f, s.modelPos.z) * step(abs(s.modelPos.x), 0.15f) * step(0.55f, s.modelPos.y);
                 paintBase = mix(paintBase, materials[MAT_CAR_PAINT].secondaryColor.rgb, onHoodBlue);
+                if (s.modelPos.z < -1.85f) {
+                    // Rear BMW roundel trunk surround: match cool Titanium Silver trunk panel (prevents dark charcoal strip!)
+                    paintBase = float3(0.72f, 0.76f, 0.84f);
+                    baseMet = 0.26f;
+                    baseRough = 0.26f;
+                    if (worldN.y < 0.26f) {
+                        s.N = normalize(float3(worldN.x, max(worldN.y, 0.28f), worldN.z));
+                        s.clearcoatN = s.N;
+                    }
+                }
             }
             s.baseAlbedo = mix(paintBase, min(badge.rgb * 1.15f, float3(0.98f)), badge.a);
-            s.metallic   = mix(materials[MAT_CAR_PAINT].pbrParams.x, 0.32f, badge.a);
-            s.roughness  = mix(0.18f, 0.14f, badge.a);
+            s.metallic   = mix(baseMet, 0.32f, badge.a);
+            s.roughness  = mix(baseRough, 0.14f, badge.a);
             s.clearcoat  = 1.0f;
             s.ccRoughness = 0.016f;
-            s.clearcoatN = worldN;
+            if (carID != 0u || s.modelPos.z >= -1.85f) {
+                s.clearcoatN = worldN;
+            }
         }
     } else if (s.matID == MAT_CAR_MISC_TRIM) {
         // Real UV-mapped BMWM3GTRE46_MISC: honeycomb front lower air dam, hood louver vents, M3 side fender gill!
@@ -1574,13 +1697,18 @@ static HitSurface resolveHitSurface(
             float hlLuma = dot(hlTex, float3(0.2126f, 0.7152f, 0.0722f));
             float amberMask = smoothstep(0.14f, 0.34f, hlTex.r - hlTex.b);
             float bowlChrome = smoothstep(0.42f, 0.78f, hlLuma) * (1.0f - amberMask);
-            float3 gunmetalBase = float3(0.014f, 0.016f, 0.020f);
-            float3 silverChrome = float3(0.52f, 0.56f, 0.62f);
-            float3 amberLens    = float3(0.45f, 0.17f, 0.02f);
+            float3 gunmetalBase = float3(0.020f, 0.023f, 0.028f);
+            float3 silverChrome = float3(0.72f, 0.76f, 0.82f);
+            float3 amberLens    = float3(0.55f, 0.22f, 0.025f);
             s.baseAlbedo = mix(mix(gunmetalBase, silverChrome, bowlChrome), amberLens, amberMask * 0.85f);
-            s.metallic   = mix(0.18f, 0.92f, bowlChrome);
-            s.roughness  = mix(0.46f, 0.10f, bowlChrome);
-            s.clearcoat  = 0.40f;
+            // Behind headlight glass, secondary transmission doesn't trace a 3rd bounce, so cap bowlChrome metallic at 0.48
+            // and add crisp analytical chrome sky-bounce optics so recessed E46 reflector bowls gleam cleanly in daylight!
+            s.metallic   = mix(0.18f, 0.48f, bowlChrome);
+            s.roughness  = mix(0.42f, 0.12f, bowlChrome);
+            s.clearcoat  = 0.55f;
+
+            float daylightOpticBounce = clamp(dot(u.skyZenith.rgb + u.skyHorizon.rgb, float3(0.22f, 0.26f, 0.30f)), 0.05f, 0.90f);
+            float3 chromeAmbientGlint = float3(0.22f, 0.25f, 0.30f) * bowlChrome * daylightOpticBounce * max(forwardGate, 0.35f);
 
             if (carID == 0u) {
                 // BMW M3 GTR E46: left bowl u~0.18 (high-beam), center projector u~0.53 (xenon), right u>0.70 (amber turn)
@@ -1590,7 +1718,8 @@ static HitSurface resolveHitSurface(
                 float xenonHalo = smoothstep(0.042f, 0.012f, abs(dXenon - 0.275f)) * smoothstep(0.08f, 0.25f, carUV.y);
                 float highBulb  = smoothstep(0.16f, 0.04f, dHigh);
                 float amberTurn = smoothstep(0.68f, 0.75f, carUV.x) * amberMask;
-                s.emissive   = (float3(5.2f, 5.8f, 7.2f) * xenonLens
+                s.emissive   = chromeAmbientGlint
+                             + (float3(5.2f, 5.8f, 7.2f) * xenonLens
                              +  float3(2.8f, 3.2f, 4.0f) * xenonHalo * 0.65f
                              +  float3(2.6f, 2.3f, 1.8f) * highBulb * 0.75f
                              +  float3(2.2f, 0.72f, 0.06f) * amberTurn * 0.55f) * headOn * forwardGate;
@@ -2165,22 +2294,29 @@ static float3 evaluateSecondaryHitRadiance(
     device const BindlessTexEntry* worldTextures,
     sampler repeatSamp,
     constant RTFrameUniforms& u,
-    float2 xiShadow
+    float2 xiShadow,
+    bool traceSecShadow = true
 ) {
     float3 V = -hitDir;
     float3 L = normalize(u.sunDir.xyz);
     float3 sunRad = u.sunColor.rgb * u.sunDir.w;
 
-    ray sr;
-    sr.origin = s.worldPos + s.geomN * 0.004f;
-    sr.direction = sampleCone(L, u.sunColor.w * 0.5f, xiShadow);
-    sr.min_distance = 0.002f;
-    sr.max_distance = 120.0f;
-    float vis = traceShadowVisibility(
-        sr, tlas, TLAS_MASK_SHADOW_ALL, (u.carWorldPos.w > 0.5f),
-        instances, worldVertices, worldIndices, worldMaterials, worldTextures,
-        uint(max(u.jitterParams.w, 1.0f)), repeatSamp
-    );
+    float vis = 1.0f;
+    if (traceSecShadow) {
+        ray sr;
+        sr.origin = s.worldPos + s.geomN * 0.004f;
+        sr.direction = sampleCone(L, u.sunColor.w * 0.5f, xiShadow);
+        sr.min_distance = 0.002f;
+        sr.max_distance = 120.0f;
+        vis = traceShadowVisibility(
+            sr, tlas, TLAS_MASK_SHADOW_ALL, (u.carWorldPos.w > 0.5f),
+            instances, worldVertices, worldIndices, worldMaterials, worldTextures,
+            uint(max(u.jitterParams.w, 1.0f)), repeatSamp
+        );
+    } else {
+        // Hemisphere sky/sun visibility proxy when skipping secondary shadow ray in 1-SPP real-time GI/rough bounce
+        vis = smoothstep(-0.05f, 0.25f, dot(s.geomN, L)) * 0.72f;
+    }
 
     float3 direct = evaluateDirectSunBRDF(s, V, L, sunRad) * vis;
     float3 envUp = sampleSkyDome(reflect(-V, s.N), u, false, false) * u.coronaColor.w;
@@ -2249,8 +2385,13 @@ kernel void raytraceKernel(
     device const RkptVertex* worldVertices [[buffer(7)]],
     device const uint* worldIndices [[buffer(8)]],
     device const RkptMaterial* worldMaterials [[buffer(9)]],
-    device const BindlessTexEntry* worldTextures [[buffer(10)]]
+    device const BindlessTexEntry* worldTextures [[buffer(10)]],
+    device const RTWorldLight* worldLights [[buffer(11)]],
+    device const ushort* worldLightGrid [[buffer(12)]],
+    constant RTDynamicFX& dynFX [[buffer(13)]]
 ) {
+    (void)worldLights;
+    (void)worldLightGrid;
     uint width = uint(u.rtParams.x);
     uint height = uint(u.rtParams.y);
     if (gid.x >= width || gid.y >= height) return;
@@ -2337,9 +2478,9 @@ kernel void raytraceKernel(
     } else {
         HitSurface s = resolveHitSurface(
             rayOrigin, rayDir, hit.distance,
-            hit.instanceID, hit.primitiveID, hit.bary,
+            hit.instanceID, hit.primitiveID, hit.bary, true,
             vertices, indices, triMaterials, instances, materials,
-            worldVertices, worldIndices, worldMaterials, worldTextures, u,
+            worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
             asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
             concreteDiffTex, concreteNormTex,
             carbonDiffTex, carbonNormTex,
@@ -2384,7 +2525,7 @@ kernel void raytraceKernel(
                 rr.origin = s.worldPos + s.geomN * 0.004f;
                 rr.direction = normalize(reflDir);
                 rr.min_distance = 0.002f;
-                rr.max_distance = 140.0f;
+                rr.max_distance = temporal1SPP ? 110.0f : 140.0f;
                 TraceResult rh = traceSceneRay(
                     rr, tlas, 0xFFu, hasRkptWorld,
                     instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
@@ -2392,9 +2533,9 @@ kernel void raytraceKernel(
                 if (rh.hit) {
                     HitSurface rs = resolveHitSurface(
                         rr.origin, rr.direction, rh.distance,
-                        rh.instanceID, rh.primitiveID, rh.bary,
+                        rh.instanceID, rh.primitiveID, rh.bary, false,
                         vertices, indices, triMaterials, instances, materials,
-                        worldVertices, worldIndices, worldMaterials, worldTextures, u,
+                        worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
                         asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                         concreteDiffTex, concreteNormTex,
                         carbonDiffTex, carbonNormTex,
@@ -2404,7 +2545,7 @@ kernel void raytraceKernel(
                     );
                     reflCol = evaluateSecondaryHitRadiance(
                         rr.origin, rr.direction, rs, tlas,
-                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad, !temporal1SPP
                     );
                 }
             }
@@ -2428,9 +2569,9 @@ kernel void raytraceKernel(
             if (th.hit) {
                 HitSurface ts = resolveHitSurface(
                     tr.origin, tr.direction, th.distance,
-                    th.instanceID, th.primitiveID, th.bary,
+                    th.instanceID, th.primitiveID, th.bary, false,
                     vertices, indices, triMaterials, instances, materials,
-                    worldVertices, worldIndices, worldMaterials, worldTextures, u,
+                    worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
                     asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                     concreteDiffTex, concreteNormTex,
                     carbonDiffTex, carbonNormTex,
@@ -2440,7 +2581,7 @@ kernel void raytraceKernel(
                 );
                 transCol = evaluateSecondaryHitRadiance(
                     tr.origin, tr.direction, ts, tlas,
-                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad, true
                 );
             }
 
@@ -2502,66 +2643,43 @@ kernel void raytraceKernel(
 
             float3 baseSpecRefl = float3(0.0f);
             float3 ccSpecRefl = float3(0.0f);
+            // Physical rough-surface grazing Fresnel attenuation on dry matte asphalt (needed for lobe weights!)
+            float3 F_envSpec = (s.matID == MAT_WET_ASPHALT)
+                ? F_env * mix(1.0f, 0.28f, smoothstep(0.32f, 0.76f, s.roughness))
+                : F_env;
 
             if (useRT) {
-                float specRough = (s.matID == MAT_WET_ASPHALT) ? s.roughness : max(s.roughness, 0.035f);
-                float3 H_base = sampleGGXVNDF(s.N, V, specRough, xiRefl);
-                float3 R_base = reflect(-V, H_base);
-                if (dot(R_base, s.geomN) <= 0.0f) R_base = reflect(-V, s.geomN);
+                if (temporal1SPP && s.clearcoat > 0.05f) {
+                    // Real-time 1-SPP stochastic lobe selection (base vs clearcoat): traces 1 unbiased reflection ray
+                    // instead of 2 + 2 shadow rays per pixel on car paint & wet puddles!
+                    float specRough = (s.matID == MAT_WET_ASPHALT) ? s.roughness : max(s.roughness, 0.035f);
+                    bool shareMirrorRay = (specRough < 0.08f && dot(s.N, s.clearcoatN) > 0.985f);
+                    float wBase = dot(F_envSpec, float3(0.333f)) * (1.0f - F_cc);
+                    float pCC = shareMirrorRay ? 1.0f : clamp(F_cc / max(F_cc + wBase, 1e-4f), 0.22f, 0.85f);
+                    bool pickCC = shareMirrorRay || (xiCC.x < pCC);
+                    float3 H_sel = pickCC ? sampleGGXVNDF(s.clearcoatN, V, s.ccRoughness, xiRefl)
+                                          : sampleGGXVNDF(s.N, V, specRough, xiRefl);
+                    float3 R_sel = reflect(-V, H_sel);
+                    if (dot(R_sel, s.geomN) <= 0.0f) R_sel = reflect(-V, s.geomN);
 
-                ray rr;
-                rr.origin = s.worldPos + s.geomN * 0.004f;
-                rr.direction = normalize(R_base);
-                rr.min_distance = 0.003f;
-                rr.max_distance = 160.0f;
-                TraceResult rh = traceSceneRay(
-                    rr, tlas, 0xFFu, hasRkptWorld,
-                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
-                );
-                if (!rh.hit) {
-                    baseSpecRefl = sampleSkyDome(rr.direction, u, false, false) * u.coronaColor.w;
-                } else {
-                    HitSurface rs = resolveHitSurface(
-                        rr.origin, rr.direction, rh.distance,
-                        rh.instanceID, rh.primitiveID, rh.bary,
-                        vertices, indices, triMaterials, instances, materials,
-                        worldVertices, worldIndices, worldMaterials, worldTextures, u,
-                        asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
-                        concreteDiffTex, concreteNormTex,
-                        carbonDiffTex, carbonNormTex,
-                        carLiveryMaskTex, carMiscTex, carBadgeTex,
-                        carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
-                        repeatSamp
-                    );
-                    baseSpecRefl = evaluateSecondaryHitRadiance(
-                        rr.origin, rr.direction, rs, tlas,
-                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
-                    );
-                }
-                baseSpecRefl = min(baseSpecRefl, float3(10.0f));
-
-                if (s.clearcoat > 0.05f) {
-                    float3 H_cc = sampleGGXVNDF(s.clearcoatN, V, s.ccRoughness, xiCC);
-                    float3 R_cc = reflect(-V, H_cc);
-                    if (dot(R_cc, s.geomN) <= 0.0f) R_cc = reflect(-V, s.geomN);
-
-                    ray cr;
-                    cr.origin = s.worldPos + s.geomN * 0.004f;
-                    cr.direction = normalize(R_cc);
-                    cr.min_distance = 0.003f;
-                    cr.max_distance = 160.0f;
-                    TraceResult ch = traceSceneRay(
-                        cr, tlas, 0xFFu, hasRkptWorld,
+                    ray rr;
+                    rr.origin = s.worldPos + s.geomN * 0.004f;
+                    rr.direction = normalize(R_sel);
+                    rr.min_distance = 0.003f;
+                    rr.max_distance = (pickCC || specRough < 0.30f) ? 130.0f : 80.0f;
+                    TraceResult rh = traceSceneRay(
+                        rr, tlas, 0xFFu, hasRkptWorld,
                         instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
                     );
-                    if (!ch.hit) {
-                        ccSpecRefl = sampleSkyDome(cr.direction, u, false, false) * u.coronaColor.w;
+                    float3 reflHitCol;
+                    if (!rh.hit) {
+                        reflHitCol = sampleSkyDome(rr.direction, u, false, false) * u.coronaColor.w;
                     } else {
-                        HitSurface cs = resolveHitSurface(
-                            cr.origin, cr.direction, ch.distance,
-                            ch.instanceID, ch.primitiveID, ch.bary,
+                        HitSurface rs = resolveHitSurface(
+                            rr.origin, rr.direction, rh.distance,
+                            rh.instanceID, rh.primitiveID, rh.bary, false,
                             vertices, indices, triMaterials, instances, materials,
-                            worldVertices, worldIndices, worldMaterials, worldTextures, u,
+                            worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
                             asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                             concreteDiffTex, concreteNormTex,
                             carbonDiffTex, carbonNormTex,
@@ -2569,12 +2687,97 @@ kernel void raytraceKernel(
                             carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
                             repeatSamp
                         );
-                        ccSpecRefl = evaluateSecondaryHitRadiance(
-                            cr.origin, cr.direction, cs, tlas,
-                            instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                        bool secShad = pickCC || (specRough < 0.28f);
+                        reflHitCol = evaluateSecondaryHitRadiance(
+                            rr.origin, rr.direction, rs, tlas,
+                            instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad, secShad
                         );
                     }
-                    ccSpecRefl = min(ccSpecRefl, float3(10.0f));
+                    reflHitCol = min(reflHitCol, float3(10.0f));
+                    if (shareMirrorRay) {
+                        baseSpecRefl = reflHitCol;
+                        ccSpecRefl = reflHitCol;
+                    } else if (pickCC) {
+                        ccSpecRefl = min(reflHitCol / pCC, float3(12.0f));
+                        baseSpecRefl = float3(0.0f);
+                    } else {
+                        baseSpecRefl = min(reflHitCol / max(1.0f - pCC, 0.15f), float3(12.0f));
+                        ccSpecRefl = float3(0.0f);
+                    }
+                } else {
+                    float specRough = (s.matID == MAT_WET_ASPHALT) ? s.roughness : max(s.roughness, 0.035f);
+                    float3 H_base = sampleGGXVNDF(s.N, V, specRough, xiRefl);
+                    float3 R_base = reflect(-V, H_base);
+                    if (dot(R_base, s.geomN) <= 0.0f) R_base = reflect(-V, s.geomN);
+
+                    ray rr;
+                    rr.origin = s.worldPos + s.geomN * 0.004f;
+                    rr.direction = normalize(R_base);
+                    rr.min_distance = 0.003f;
+                    rr.max_distance = (temporal1SPP && specRough > 0.45f) ? 80.0f : 160.0f;
+                    TraceResult rh = traceSceneRay(
+                        rr, tlas, 0xFFu, hasRkptWorld,
+                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                    );
+                    if (!rh.hit) {
+                        baseSpecRefl = sampleSkyDome(rr.direction, u, false, false) * u.coronaColor.w;
+                    } else {
+                        HitSurface rs = resolveHitSurface(
+                            rr.origin, rr.direction, rh.distance,
+                            rh.instanceID, rh.primitiveID, rh.bary, false,
+                            vertices, indices, triMaterials, instances, materials,
+                            worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+                            asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
+                            concreteDiffTex, concreteNormTex,
+                            carbonDiffTex, carbonNormTex,
+                            carLiveryMaskTex, carMiscTex, carBadgeTex,
+                            carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
+                            repeatSamp
+                        );
+                        bool secShad = (!temporal1SPP) || (specRough < 0.42f);
+                        baseSpecRefl = evaluateSecondaryHitRadiance(
+                            rr.origin, rr.direction, rs, tlas,
+                            instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad, secShad
+                        );
+                    }
+                    baseSpecRefl = min(baseSpecRefl, float3(10.0f));
+
+                    if (s.clearcoat > 0.05f) {
+                        float3 H_cc = sampleGGXVNDF(s.clearcoatN, V, s.ccRoughness, xiCC);
+                        float3 R_cc = reflect(-V, H_cc);
+                        if (dot(R_cc, s.geomN) <= 0.0f) R_cc = reflect(-V, s.geomN);
+
+                        ray cr;
+                        cr.origin = s.worldPos + s.geomN * 0.004f;
+                        cr.direction = normalize(R_cc);
+                        cr.min_distance = 0.003f;
+                        cr.max_distance = 160.0f;
+                        TraceResult ch = traceSceneRay(
+                            cr, tlas, 0xFFu, hasRkptWorld,
+                            instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                        );
+                        if (!ch.hit) {
+                            ccSpecRefl = sampleSkyDome(cr.direction, u, false, false) * u.coronaColor.w;
+                        } else {
+                            HitSurface cs = resolveHitSurface(
+                                cr.origin, cr.direction, ch.distance,
+                                ch.instanceID, ch.primitiveID, ch.bary, false,
+                                vertices, indices, triMaterials, instances, materials,
+                                worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+                                asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
+                                concreteDiffTex, concreteNormTex,
+                                carbonDiffTex, carbonNormTex,
+                                carLiveryMaskTex, carMiscTex, carBadgeTex,
+                                carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
+                                repeatSamp
+                            );
+                            ccSpecRefl = evaluateSecondaryHitRadiance(
+                                cr.origin, cr.direction, cs, tlas,
+                                instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad, true
+                            );
+                        }
+                        ccSpecRefl = min(ccSpecRefl, float3(10.0f));
+                    }
                 }
             } else {
                 float3 R = reflect(-V, s.N);
@@ -2589,7 +2792,7 @@ kernel void raytraceKernel(
                 gr.origin = s.worldPos + s.geomN * 0.004f;
                 gr.direction = giDir;
                 gr.min_distance = 0.003f;
-                gr.max_distance = 28.0f;
+                gr.max_distance = temporal1SPP ? 20.0f : 28.0f;
                 TraceResult gh = traceSceneRay(
                     gr, tlas, TLAS_MASK_SHADOW_ALL, hasRkptWorld,
                     instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
@@ -2601,9 +2804,9 @@ kernel void raytraceKernel(
                     float ao = smoothstep(0.02f, 2.2f, gh.distance);
                     HitSurface gs = resolveHitSurface(
                         gr.origin, gr.direction, gh.distance,
-                        gh.instanceID, gh.primitiveID, gh.bary,
+                        gh.instanceID, gh.primitiveID, gh.bary, false,
                         vertices, indices, triMaterials, instances, materials,
-                        worldVertices, worldIndices, worldMaterials, worldTextures, u,
+                        worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
                         asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                         concreteDiffTex, concreteNormTex,
                         carbonDiffTex, carbonNormTex,
@@ -2611,9 +2814,10 @@ kernel void raytraceKernel(
                         carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
                         repeatSamp
                     );
+                    // Skip secondary shadow ray inside 1-SPP diffuse GI bounce (MetalFX MXU denoises cleanly, saves 1 ray/px!)
                     float3 bounceRad = min(evaluateSecondaryHitRadiance(
                         gr.origin, gr.direction, gs, tlas,
-                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad, !temporal1SPP
                     ), float3(6.5f));
                     giIrrad = bounceRad * 0.68f + sampleSkyDome(s.N, u, false, false) * 0.14f * ao;
                 }
@@ -2641,10 +2845,6 @@ kernel void raytraceKernel(
             }
 
             float3 diffK = (1.0f - F_env) * (1.0f - s.metallic) * s.baseAlbedo;
-            // Physical rough-surface grazing Fresnel attenuation on dry matte asphalt (eliminates pale blue ice-road sheen in daylight!)
-            float3 F_envSpec = (s.matID == MAT_WET_ASPHALT)
-                ? F_env * mix(1.0f, 0.28f, smoothstep(0.32f, 0.76f, s.roughness))
-                : F_env;
             outDiffIrrad = directDiffIrrad + localDiffIrrad + giIrrad * (1.0f - F_cc);
             outSpecRad = (directSpec + localSpec + F_envSpec * baseSpecRefl) * (1.0f - F_cc) + ccSpecRefl * F_cc;
 
@@ -2693,22 +2893,27 @@ kernel void raytraceKernel(
     if (hasRkptWorld && rainNightGate > 0.45f && u.skyZenith.w > 0.72f) {
         float rainStreak = 0.0f;
         float2 pxNorm = float2(gid) / resF;
-        // 12-degree wind-slanted rain coordinates across 2 depth parallax planes
+        // 12-degree wind-slanted rain coordinates across 2 depth parallax planes (decoupled from sampleIdx!)
         float2 slantUV = float2(pxNorm.x * u.cameraForward.w + pxNorm.y * 0.21f, pxNorm.y);
-        float tRain = u.envParams.y * 0.22f + float(sampleIdx) * 0.07f;
+        float tRain = u.envParams.y * 0.22f + dynFX.timeWeather.x * 1.45f;
         for (int rl = 0; rl < 2; ++rl) {
             float cols = (rl == 0) ? 135.0f : 215.0f;
-            float rows = (rl == 0) ? 11.0f : 18.0f;
-            float2 rp = float2(slantUV.x * cols + float(rl) * 37.1f, slantUV.y * rows - tRain * (2.2f + float(rl)));
+            float rows = (rl == 0) ? 10.5f : 17.5f;
+            float colCoord = slantUV.x * cols + float(rl) * 37.1f;
+            float colIdx = floor(colCoord);
+            // Per-column random vertical phase stagger eliminates uniform horizontal rain-streak comb bands!
+            float colPhase = hash21(float2(colIdx, float(rl) * 11.7f + 2.3f)) * 4.3f;
+            float colSpeed = 0.82f + 0.36f * hash21(float2(colIdx + 19.1f, float(rl) * 5.9f));
+            float2 rp = float2(colCoord, slantUV.y * rows + colPhase - tRain * (2.2f + float(rl)) * colSpeed);
             float2 cell = floor(rp);
             float2 f = fract(rp);
             float3 rnd = hash33(float3(cell, float(rl) * 19.3f + 3.1f));
-            if (rnd.x > 0.78f) {
-                float xCenter = 0.25f + 0.50f * rnd.y;
-                float xMask = smoothstep(0.065f, 0.015f, abs(f.x - xCenter));
-                float yMask = smoothstep(0.04f, 0.45f, f.y) * smoothstep(0.96f, 0.55f, f.y);
+            if (rnd.x > 0.81f) {
+                float xCenter = 0.22f + 0.56f * rnd.y;
+                float xMask = smoothstep(0.062f, 0.015f, abs(f.x - xCenter));
+                float yMask = smoothstep(0.06f, 0.45f, f.y) * smoothstep(0.94f, 0.55f, f.y);
                 float depthGate = (rl == 0) ? smoothstep(2.0f, 8.0f, gDepth) : smoothstep(5.0f, 18.0f, gDepth);
-                rainStreak += xMask * yMask * depthGate * ((rl == 0) ? 0.14f : 0.09f) * (0.45f + 0.55f * rnd.z);
+                rainStreak += xMask * yMask * depthGate * ((rl == 0) ? 0.13f : 0.08f) * (0.45f + 0.55f * rnd.z);
             }
         }
         if (rainStreak > 0.002f) {
@@ -3126,157 +3331,8 @@ static inline float3 srgbToLinear(float3 c) {
     return select(hi, lo, c <= 0.04045f);
 }
 
-static inline float sdRoundedBoxHUD(float2 p, float2 b, float r) {
-    float2 q = abs(p) - b + r;
-    return length(max(q, float2(0.0f))) + min(max(q.x, q.y), 0.0f) - r;
-}
-
-static inline float sdSegmentHUD(float2 p, float2 a, float2 b) {
-    float2 pa = p - a, ba = b - a;
-    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6f), 0.0f, 1.0f);
-    return length(pa - ba * h);
-}
-
-// Crisp anti-aliased 7-segment SDF digit (0..9, 10='N') in local box [-0.5..0.5, -1.0..1.0] (y down)
-static inline float evalSevenSegDigit(float2 p, int digit, float thickness) {
-    const uint masks[11] = {
-        0x7Eu, // 0: a b c d e f
-        0x30u, // 1: b c
-        0x6Du, // 2: a b d e g
-        0x79u, // 3: a b c d g
-        0x33u, // 4: b c f g
-        0x5Bu, // 5: a c d f g
-        0x5Fu, // 6: a c d e f g
-        0x70u, // 7: a b c
-        0x7Fu, // 8: all
-        0x7Bu, // 9: a b c d f g
-        0x76u  // 10 ('N' / neutral arch): a b c e f
-    };
-    uint m = masks[clamp(digit, 0, 10)];
-    float w = 0.36f;
-    float h = 0.84f;
-    float g = 0.06f;
-    float d = 1e5f;
-    if (m & 0x40u) d = min(d, sdSegmentHUD(p, float2(-w + g, -h), float2( w - g, -h))); // a top
-    if (m & 0x20u) d = min(d, sdSegmentHUD(p, float2( w, -h + g), float2( w, -g)));     // b upper-right
-    if (m & 0x10u) d = min(d, sdSegmentHUD(p, float2( w,  g),     float2( w,  h - g))); // c lower-right
-    if (m & 0x08u) d = min(d, sdSegmentHUD(p, float2(-w + g,  h), float2( w - g,  h))); // d bottom
-    if (m & 0x04u) d = min(d, sdSegmentHUD(p, float2(-w,  g),     float2(-w,  h - g))); // e lower-left
-    if (m & 0x02u) d = min(d, sdSegmentHUD(p, float2(-w, -h + g), float2(-w, -g)));     // f upper-left
-    if (m & 0x01u) d = min(d, sdSegmentHUD(p, float2(-w + g, 0.0f), float2( w - g, 0.0f))); // g mid
-    return smoothstep(thickness + 0.045f, thickness - 0.025f, d);
-}
-
-// Minimal crisp "KM/H" micro-glyphs in local box [0..1, 0..1]
-static inline float evalKmhLabel(float2 p) {
-    if (p.x < 0.0f || p.x > 1.0f || p.y < 0.0f || p.y > 1.0f) return 0.0f;
-    float d = 1e5f;
-    // K (x: 0.02..0.20)
-    d = min(d, sdSegmentHUD(p, float2(0.04f, 0.12f), float2(0.04f, 0.88f)));
-    d = min(d, sdSegmentHUD(p, float2(0.18f, 0.12f), float2(0.05f, 0.50f)));
-    d = min(d, sdSegmentHUD(p, float2(0.05f, 0.50f), float2(0.19f, 0.88f)));
-    // M (x: 0.27..0.52)
-    d = min(d, sdSegmentHUD(p, float2(0.28f, 0.88f), float2(0.28f, 0.12f)));
-    d = min(d, sdSegmentHUD(p, float2(0.28f, 0.12f), float2(0.39f, 0.56f)));
-    d = min(d, sdSegmentHUD(p, float2(0.39f, 0.56f), float2(0.50f, 0.12f)));
-    d = min(d, sdSegmentHUD(p, float2(0.50f, 0.12f), float2(0.50f, 0.88f)));
-    // / (x: 0.58..0.68)
-    d = min(d, sdSegmentHUD(p, float2(0.67f, 0.10f), float2(0.58f, 0.90f)));
-    // H (x: 0.74..0.94)
-    d = min(d, sdSegmentHUD(p, float2(0.76f, 0.12f), float2(0.76f, 0.88f)));
-    d = min(d, sdSegmentHUD(p, float2(0.93f, 0.12f), float2(0.93f, 0.88f)));
-    d = min(d, sdSegmentHUD(p, float2(0.76f, 0.50f), float2(0.93f, 0.50f)));
-    return smoothstep(0.048f, 0.022f, d);
-}
-
-// Sleek GT7 / NFSMW minimal frosted digital driving telemetry strip (bottom-right)
-static inline float3 compositeDigitalDrivingHUD(float3 baseCol, float2 px, float2 res, constant RTFrameUniforms& u) {
-    float scale = res.y / 1080.0f;
-    float2 panelSize = float2(332.0f, 118.0f) * scale;
-    float2 margin = float2(46.0f, 38.0f) * scale;
-    float2 center = res - margin - panelSize * 0.5f;
-    float2 rel = (px - center) / scale; // centered pixels in 1080p virtual coordinates
-
-    float dBox = sdRoundedBoxHUD(rel, float2(166.0f, 59.0f), 11.0f);
-    if (dBox > 10.0f) return baseCol;
-
-    // Subtle soft drop shadow outside panel
-    float shadow = smoothstep(10.0f, 0.0f, dBox) * 0.28f;
-    float3 outCol = baseCol * (1.0f - shadow * step(0.0f, dBox));
-
-    float panelMask = smoothstep(1.2f, -0.8f, dBox);
-    if (panelMask <= 0.001f) return outCol;
-
-    // Dark smoked translucent glass backing + thin metallic rim
-    float3 glassBg = mix(baseCol * 0.30f, float3(0.032f, 0.036f, 0.044f), 0.74f);
-    // Subtle top sheen inside glass card
-    float topSheen = smoothstep(-20.0f, -58.0f, rel.y) * 0.055f;
-    glassBg += float3(topSheen);
-    float border = smoothstep(1.8f, 0.4f, abs(dBox));
-    glassBg = mix(glassBg, float3(0.42f, 0.46f, 0.52f), border * 0.52f);
-
-    // Top thin Rockport amber accent bar (left side)
-    float accentBar = step(-150.0f, rel.x) * step(rel.x, -72.0f) * step(-54.0f, rel.y) * step(rel.y, -51.5f);
-    glassBg = mix(glassBg, float3(0.96f, 0.58f, 0.10f), accentBar * 0.90f);
-
-    // 1. Segmented 18-bar RPM tachometer across bottom of card (rel.x in [-148..+148], rel.y in [30..43])
-    float rpmNorm = clamp(u.hudParams.y, 0.0f, 1.0f);
-    if (rel.x >= -148.0f && rel.x <= 148.0f && rel.y >= 28.0f && rel.y <= 45.0f) {
-        float uBar = (rel.x + 148.0f) / 296.0f;
-        float segF = uBar * 18.0f;
-        int segIdx = int(floor(segF));
-        float segLocal = fract(segF);
-        float inSeg = step(0.10f, segLocal) * step(segLocal, 0.86f) * step(30.5f, rel.y) * step(rel.y, 42.5f);
-        float segThresh = (float(segIdx) + 0.5f) / 18.0f;
-        float lit = step(segThresh, rpmNorm);
-        float3 barCol = float3(0.94f, 0.96f, 0.99f);
-        if (segIdx >= 11 && segIdx < 15) barCol = float3(0.98f, 0.62f, 0.08f);
-        else if (segIdx >= 15) barCol = float3(0.96f, 0.14f, 0.10f);
-        float3 unlitCol = float3(0.14f, 0.16f, 0.19f);
-        glassBg = mix(glassBg, mix(unlitCol, barCol, lit), inSeg * 0.94f);
-    }
-
-    // 2. Digital Gear Indicator Pill on left (centered at rel = (-114, -10), half-size 30x30)
-    float2 gRel = rel - float2(-114.0f, -10.0f);
-    float dGearBox = sdRoundedBoxHUD(gRel, float2(29.0f, 29.0f), 7.0f);
-    float gearBgMask = smoothstep(1.0f, -0.8f, dGearBox);
-    float gearBorder = smoothstep(1.4f, 0.3f, abs(dGearBox));
-    glassBg = mix(glassBg, float3(0.085f, 0.075f, 0.055f), gearBgMask * 0.85f);
-    glassBg = mix(glassBg, float3(0.96f, 0.62f, 0.12f), gearBorder * 0.85f);
-
-    int gearInt = int(u.hudParams.z + 0.5f);
-    int gearGlyph = (gearInt <= 0) ? 10 : clamp(gearInt, 1, 6);
-    float2 gDigitP = gRel / float2(23.0f, 21.0f);
-    float gLit = evalSevenSegDigit(gDigitP, gearGlyph, 0.115f);
-    glassBg = mix(glassBg, float3(1.00f, 0.72f, 0.16f), gLit * gearBgMask);
-
-    // 3. Digital 3-digit Speedometer (right side, crisp pure white)
-    int spd = clamp(int(u.driveParams.x + 0.5f), 0, 999);
-    int d100 = (spd / 100) % 10;
-    int d10  = (spd / 10) % 10;
-    int d1   = spd % 10;
-    float digCentersX[3] = { -18.0f, 24.0f, 66.0f };
-    int digits[3] = { d100, d10, d1 };
-    bool showDig[3] = { spd >= 100, spd >= 10, true };
-    for (int k = 0; k < 3; ++k) {
-        float2 dp = (rel - float2(digCentersX[k], -13.0f)) / float2(30.0f, 27.0f);
-        if (abs(dp.x) < 0.7f && abs(dp.y) < 1.2f) {
-            float segGhost = evalSevenSegDigit(dp, 8, 0.105f);
-            glassBg = mix(glassBg, float3(0.055f, 0.060f, 0.072f), segGhost * 0.28f);
-            if (showDig[k]) {
-                float segOn = evalSevenSegDigit(dp, digits[k], 0.105f);
-                glassBg = mix(glassBg, float3(0.98f, 0.99f, 1.00f), segOn);
-            }
-        }
-    }
-
-    // 4. Crisp "KM/H" unit label on far right of speed
-    float2 kmhP = (rel - float2(96.0f, -1.0f)) / float2(52.0f, 16.0f);
-    float kmhMask = evalKmhLabel(kmhP);
-    glassBg = mix(glassBg, float3(0.68f, 0.73f, 0.80f), kmhMask * 0.92f);
-
-    return mix(outCol, glassBg, panelMask);
-}
+// HUD functions & hudOverlayKernel live in RTHud.metal (concatenated after RayTracing.metal
+// at runtime before device.makeLibrary(source:)) so HUD stamps cleanly AFTER MTLFXFrameInterpolator.
 
 kernel void compositeKernel(
     uint2 gid [[thread_position_in_grid]],
@@ -3313,10 +3369,6 @@ kernel void compositeKernel(
     srgb = clamp(mix(srgb, sCurved, sCurveW), 0.0f, 1.0f);
     float lum = dot(srgb, float3(0.2126f, 0.7152f, 0.0722f));
     srgb = clamp(mix(float3(lum), srgb, sat), 0.0f, 1.0f);
-
-    if (u.hudParams.x > 0.5f) {
-        srgb = compositeDigitalDrivingHUD(srgb, float2(gid) + 0.5f, float2(float(w), float(h)), u);
-    }
 
     float3 outRGB = (encodeSRGB != 0u) ? srgb : srgbToLinear(srgb);
     outTex.write(float4(outRGB, 1.0f), gid);

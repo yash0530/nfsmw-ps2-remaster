@@ -89,6 +89,30 @@ struct RTPhysicsProbeOutput {
     var wallNormalSide: SIMD4<Float> // xyz = nearest side wall normal, w = sideSign (-1 left, +1 right, 0 none)
 }
 
+// Locked Hour 1-3 ABI Contracts matching RayTracing.metal Buffer Slots 11, 12, 13
+struct RTWorldLightGPU {
+    var posRadius: SIMD4<Float>
+    var colorCone: SIMD4<Float>      // rgb = pre-scaled linear radiance, w = coneMinCos (>0 downward lamp, <= -0.9 omni)
+}
+
+struct RTDynamicFXGPU {
+    var timeWeather: SIMD4<Float>    // x = simTimeSec, y = timeOfDayHours, z = rainIntensity, w = puddleLevel
+    var carMetrics: SIMD4<Float>     // x = frontAxleZ, y = rearAxleZ, z = wheelRadiusF, w = wheelRadiusR
+    var nosParams: SIMD4<Float>      // x = nosActive, y = nosFlameLen, z = speedbreaker, w = worldLightCount
+    var copLightPos: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)
+    var copLightCol: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)
+
+    static func zeroed() -> RTDynamicFXGPU {
+        return RTDynamicFXGPU(
+            timeWeather: .zero,
+            carMetrics: SIMD4<Float>(1.595, -1.13, 0.33, 0.33),
+            nosParams: .zero,
+            copLightPos: (.zero, .zero, .zero, .zero),
+            copLightCol: (.zero, .zero, .zero, .zero)
+        )
+    }
+}
+
 struct RTOrbitCamera {
     var target: SIMD3<Float>
     var distance: Float
@@ -203,6 +227,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     private var bloomThresholdPSO: MTLComputePipelineState!
     private var bloomBlurPSO: MTLComputePipelineState!
     private var compositePSO: MTLComputePipelineState!
+    private var hudOverlayPSO: MTLComputePipelineState!
     private var physicsProbePSO: MTLComputePipelineState!
     private var linearSampler: MTLSamplerState!
     private var repeatSampler: MTLSamplerState!
@@ -214,6 +239,11 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     private let dummyWorldMB: MTLBuffer
     private let dummyWorldTB: MTLBuffer
     private let dummyWorldTex: MTLTexture
+
+    // Reserved Hour 1-3 ABI buffers (Buffer Slots 11, 12, 13)
+    private var worldLightsBuffer: MTLBuffer!
+    private var worldLightGridBuffer: MTLBuffer!
+    private var dynamicFXBuffer: MTLBuffer!
 
     // Unified TLAS (car BLASes + optional .rkpt world BLASes)
     private var blasList: [MTLAccelerationStructure] = []
@@ -256,22 +286,33 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     private var hdrResolvedTex: MTLTexture?
     private var bloomTexA: MTLTexture?
     private var bloomTexB: MTLTexture?
+    private var ldrColorTexA: MTLTexture?
+    private var ldrColorTexB: MTLTexture?
+    private var ldrInterpTex: MTLTexture?
 
     private var rtWidth: Int = 0
     private var rtHeight: Int = 0
     private var targetWidth: Int = 0
     private var targetHeight: Int = 0
     private var temporalScaler: AnyObject? = nil // MTLFXTemporalDenoisedScaler on macOS 26+
+    private var frameInterpolator: AnyObject? = nil // MTLFXFrameInterpolator on macOS 26+
     private var scalerInputW: Int = 0
     private var scalerInputH: Int = 0
     private var scalerOutputW: Int = 0
     private var scalerOutputH: Int = 0
     private var metalFXActive: Bool = false
+    private var frameGenActive: Bool = false
+    private var ldrWriteToA: Bool = true
+    private var frameGenHistoryValid: Bool = false
+    private var frameGenPresentPhase: Int = 0
+    private var lastRealFrameTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    private var lastRealFrameDelta: Float = 1.0 / 60.0
 
     private var prevViewProj: simd_float4x4 = matrix_identity_float4x4
     private var hasValidPrevFrame: Bool = false
     private var historyResetPending: Bool = true
     private var frameCounter: UInt32 = 0
+    private var simTimeSec: Float = 2.40
 
     var camera: RTOrbitCamera
     var cameraMode: RTCameraMode = .hero
@@ -291,6 +332,18 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             historyResetPending = true
         }
     }
+    var frameGenEnabled: Bool = false {
+        didSet {
+            if frameGenEnabled != oldValue {
+                frameGenHistoryValid = false
+                frameGenPresentPhase = 0
+                historyResetPending = true
+            }
+        }
+    }
+    var timeCycleEnabled: Bool = false
+    var timeOfDayHours: Float = 17.6
+    var rainIntensity: Float = 0.0
     var liveryEnabled: Bool = true {
         didSet { if liveryEnabled != oldValue { resetAccumulation() } }
     }
@@ -324,6 +377,17 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             return MTLFXTemporalDenoisedScalerDescriptor.supportsDevice(device)
         }
         return false
+    }
+
+    var supportsFrameInterpolator: Bool {
+        if #available(macOS 26.0, *) {
+            return MTLFXFrameInterpolatorDescriptor.supportsDevice(device)
+        }
+        return false
+    }
+
+    var effectiveFrameGenActive: Bool {
+        return frameGenEnabled && supportsFrameInterpolator && denoiseMode == .metalfx && supportsMetalFXDenoiser
     }
 
     var effectiveDenoiseLabel: String {
@@ -364,11 +428,23 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         super.init()
 
         guard let pin = device.makeBuffer(length: MemoryLayout<RTPhysicsProbeInput>.stride, options: .storageModeShared),
-              let pout = device.makeBuffer(length: MemoryLayout<RTPhysicsProbeOutput>.stride, options: .storageModeShared) else {
-            throw NSError(domain: "RTRenderer", code: 102, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate physics probe buffers"])
+              let pout = device.makeBuffer(length: MemoryLayout<RTPhysicsProbeOutput>.stride, options: .storageModeShared),
+              let wlBuf = device.makeBuffer(length: MemoryLayout<RTWorldLightGPU>.stride, options: .storageModeShared),
+              let wlgBuf = device.makeBuffer(length: 256, options: .storageModeShared),
+              let dfxBuf = device.makeBuffer(length: MemoryLayout<RTDynamicFXGPU>.stride, options: .storageModeShared) else {
+            throw NSError(domain: "RTRenderer", code: 102, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate physics/ABI buffers"])
         }
+        precondition(MemoryLayout<RTWorldLightGPU>.stride == 32, "RTWorldLightGPU stride must be 32 bytes")
+        precondition(MemoryLayout<RTDynamicFXGPU>.stride == 176, "RTDynamicFXGPU stride must be 176 bytes")
         self.physicsInBuffer = pin
         self.physicsOutBuffer = pout
+        self.worldLightsBuffer = wlBuf
+        self.worldLightGridBuffer = wlgBuf
+        self.dynamicFXBuffer = dfxBuf
+        memset(wlBuf.contents(), 0, MemoryLayout<RTWorldLightGPU>.stride)
+        memset(wlgBuf.contents(), 0, 256)
+        var initFX = RTDynamicFXGPU.zeroed()
+        memcpy(dfxBuf.contents(), &initFX, MemoryLayout<RTDynamicFXGPU>.stride)
 
         try buildPipelines(metalFileURL: metalFileURL)
         buildSamplers()
@@ -516,6 +592,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     func resetAccumulation() {
         sampleIndex = 0
         historyResetPending = true
+        frameGenHistoryValid = false
+        frameGenPresentPhase = 0
     }
 
     private func buildPipelines(metalFileURL: URL?) throws {
@@ -523,9 +601,11 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         let exeURL = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
         let siblingMetallib = exeURL.deletingLastPathComponent().appendingPathComponent("RockportMetalRT.metallib")
         let siblingSource = exeURL.deletingLastPathComponent().appendingPathComponent("RayTracing.metal")
+        let siblingHud = exeURL.deletingLastPathComponent().appendingPathComponent("RTHud.metal")
 
         if FileManager.default.fileExists(atPath: siblingMetallib.path),
-           let precompiled = try? device.makeLibrary(URL: siblingMetallib) {
+           let precompiled = try? device.makeLibrary(URL: siblingMetallib),
+           precompiled.makeFunction(name: "hudOverlayKernel") != nil {
             library = precompiled
             compiledMSLVersion = "precompiled"
         } else {
@@ -537,13 +617,32 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             ].compactMap { $0 }
 
             var loadedSource: String? = nil
+            var loadedDir: URL? = nil
             for cand in candidates where FileManager.default.fileExists(atPath: cand.path) {
                 loadedSource = try String(contentsOf: cand, encoding: .utf8)
+                loadedDir = cand.deletingLastPathComponent()
                 break
             }
-            guard let source = loadedSource else {
+            guard let baseSource = loadedSource else {
                 throw NSError(domain: "RTRenderer", code: 102, userInfo: [NSLocalizedDescriptionKey: "RayTracing.metal not found"])
             }
+
+            // Concatenate RTHud.metal after RayTracing.metal before runtime compilation (zero #include dependency!)
+            let hudCandidates = [
+                loadedDir?.appendingPathComponent("RTHud.metal"),
+                siblingHud,
+                URL(fileURLWithPath: "native_metal_rt/RTHud.metal"),
+                URL(fileURLWithPath: "RTHud.metal")
+            ].compactMap { $0 }
+            var hudSource: String? = nil
+            for cand in hudCandidates where FileManager.default.fileExists(atPath: cand.path) {
+                hudSource = try String(contentsOf: cand, encoding: .utf8)
+                break
+            }
+            guard let resolvedHudSource = hudSource else {
+                throw NSError(domain: "RTRenderer", code: 102, userInfo: [NSLocalizedDescriptionKey: "RTHud.metal not found"])
+            }
+            let source = baseSource + "\n\n// === Concatenated RTHud.metal ===\n" + resolvedHudSource
 
             // Compile runtime MSL 4.0 on macOS 26+, falling back cleanly to 3.2 / 3.1
             var builtLib: MTLLibrary? = nil
@@ -574,7 +673,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                 }
             }
             guard let finalLib = builtLib else {
-                throw lastErr ?? NSError(domain: "RTRenderer", code: 103, userInfo: [NSLocalizedDescriptionKey: "Failed to compile RayTracing.metal"])
+                throw lastErr ?? NSError(domain: "RTRenderer", code: 103, userInfo: [NSLocalizedDescriptionKey: "Failed to compile RayTracing.metal + RTHud.metal"])
             }
             library = finalLib
         }
@@ -593,6 +692,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         bloomThresholdPSO = try makeCompute("bloomThresholdKernel")
         bloomBlurPSO = try makeCompute("bloomBlurKernel")
         compositePSO = try makeCompute("compositeKernel")
+        hudOverlayPSO = try makeCompute("hudOverlayKernel")
         physicsProbePSO = try makeCompute("physicsProbeKernel")
     }
 
@@ -964,13 +1064,16 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         return (outW, outH)
     }
 
-    private func ensureRenderTargets(width: Int, height: Int, useMetalFX: Bool) {
+    private func ensureRenderTargets(width: Int, height: Int, useMetalFX: Bool, useFrameGen: Bool = false) {
         let wantsMFX = useMetalFX && supportsMetalFXDenoiser
+        let wantsFG = useFrameGen && wantsMFX && supportsFrameInterpolator
         let (inW, inH) = computeRTResolution(outW: width, outH: height, useMetalFX: wantsMFX)
 
         if width == targetWidth && height == targetHeight &&
            inW == rtWidth && inH == rtHeight &&
-           metalFXActive == wantsMFX && accumDiffTex != nil {
+           metalFXActive == wantsMFX &&
+           frameGenActive == wantsFG &&
+           accumDiffTex != nil {
             return
         }
 
@@ -979,6 +1082,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         rtWidth = inW
         rtHeight = inH
         metalFXActive = wantsMFX
+        frameGenActive = false
+        frameInterpolator = nil
 
         var colorExtraUsage: MTLTextureUsage = []
         var depthExtraUsage: MTLTextureUsage = []
@@ -989,6 +1094,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         var roughExtraUsage: MTLTextureUsage = []
         var reactiveExtraUsage: MTLTextureUsage = []
         var outExtraUsage: MTLTextureUsage = []
+        var fiColorExtraUsage: MTLTextureUsage = []
+        var fiOutExtraUsage: MTLTextureUsage = []
 
         if wantsMFX {
             if #available(macOS 26.0, *) {
@@ -1033,6 +1140,30 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                     temporalScaler = nil
                     metalFXActive = false
                 }
+
+                if wantsFG && metalFXActive {
+                    let fiDesc = MTLFXFrameInterpolatorDescriptor()
+                    fiDesc.colorTextureFormat = .bgra8Unorm
+                    fiDesc.outputTextureFormat = .bgra8Unorm
+                    fiDesc.depthTextureFormat = .r32Float
+                    fiDesc.motionTextureFormat = .rg16Float
+                    fiDesc.inputWidth = inW
+                    fiDesc.inputHeight = inH
+                    fiDesc.outputWidth = width
+                    fiDesc.outputHeight = height
+                    fiDesc.scaler = nil // Standalone post-ACES pre-HUD mode (1.80ms verified on M5 Pro, zero HUD warp!)
+                    if #available(macOS 27.0, *) {
+                        fiDesc.requiresPrevColorTexture = true
+                    }
+                    if let fi = fiDesc.makeFrameInterpolator(device: device) {
+                        frameInterpolator = fi
+                        frameGenActive = true
+                        fiColorExtraUsage = fi.colorTextureUsage
+                        fiOutExtraUsage = fi.outputTextureUsage
+                        depthExtraUsage.formUnion(fi.depthTextureUsage)
+                        motionExtraUsage.formUnion(fi.motionTextureUsage)
+                    }
+                }
             }
         } else {
             temporalScaler = nil
@@ -1074,8 +1205,15 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         bloomTexA = makeTex(.rgba16Float, w: bw, h: bh)
         bloomTexB = makeTex(.rgba16Float, w: bw, h: bh)
 
+        ldrColorTexA = makeTex(.bgra8Unorm, w: width, h: height, extra: fiColorExtraUsage)
+        ldrColorTexB = makeTex(.bgra8Unorm, w: width, h: height, extra: fiColorExtraUsage)
+        ldrInterpTex = makeTex(.bgra8Unorm, w: width, h: height, extra: fiOutExtraUsage)
+        ldrWriteToA = true
+
         hasValidPrevFrame = false
         historyResetPending = true
+        frameGenHistoryValid = false
+        frameGenPresentPhase = 0
         resetAccumulation()
     }
 
@@ -1085,6 +1223,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     }
 
     private func resolvedSunDirection(preset: RTLightingPreset) -> SIMD3<Float> {
+        if timeCycleEnabled {
+            let phase = (timeOfDayHours / 24.0) * 2.0 * .pi
+            let el = max(0.08, sin(phase - .pi * 0.5) * 0.72 + 0.25)
+            let az = phase - 0.65
+            return simd_normalize(SIMD3<Float>(cos(el) * sin(az), sin(el), cos(el) * cos(az)))
+        }
         if lookdevConfig.sun_elevation_deg == nil && lookdevConfig.sun_azimuth_deg == nil {
             return simd_normalize(preset.sunDirection)
         }
@@ -1094,6 +1238,19 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         let el = (lookdevConfig.sun_elevation_deg ?? defaultEl) * .pi / 180.0
         let az = (lookdevConfig.sun_azimuth_deg ?? defaultAz) * .pi / 180.0
         return simd_normalize(SIMD3<Float>(cos(el) * sin(az), sin(el), cos(el) * cos(az)))
+    }
+
+    private func updateDynamicFXBuffer() {
+        let p = resolvedPreset()
+        let frontZ: Float = (scene.carID == 1) ? 1.205 : ((scene.carID == 2) ? 1.16 : 1.595)
+        let rearZ: Float  = (scene.carID == 1) ? -1.48 : ((scene.carID == 2) ? -1.39 : -1.13)
+        let effectiveRain: Float = (activePresetKey == "night_neon" || activePresetKey == "night_rain")
+            ? max(rainIntensity, 0.85)
+            : rainIntensity
+        var fx = RTDynamicFXGPU.zeroed()
+        fx.timeWeather = SIMD4<Float>(simTimeSec, timeOfDayHours, effectiveRain, lookdevConfig.puddle_wetness ?? p.wetness)
+        fx.carMetrics = SIMD4<Float>(frontZ, rearZ, 0.32, (scene.carID == 1) ? 0.34 : 0.33)
+        memcpy(dynamicFXBuffer.contents(), &fx, MemoryLayout<RTDynamicFXGPU>.stride)
     }
 
     private static func halton(_ index: UInt32, base: UInt32) -> Float {
@@ -1240,10 +1397,14 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.setBuffer(scene.triMaterialBuffer, offset: 0, index: 4)
         enc.setBuffer(instanceMetaBuffer, offset: 0, index: 5)
         enc.setBuffer(scene.materialBuffer, offset: 0, index: 6)
+        updateDynamicFXBuffer()
         enc.setBuffer(world?.vertexBuffer ?? dummyWorldVB, offset: 0, index: 7)
         enc.setBuffer(world?.indexBuffer ?? dummyWorldIB, offset: 0, index: 8)
         enc.setBuffer(world?.materialBuffer ?? dummyWorldMB, offset: 0, index: 9)
         enc.setBuffer(world?.bindlessTexIDBuffer ?? dummyWorldTB, offset: 0, index: 10)
+        enc.setBuffer(worldLightsBuffer, offset: 0, index: 11)
+        enc.setBuffer(worldLightGridBuffer, offset: 0, index: 12)
+        enc.setBuffer(dynamicFXBuffer, offset: 0, index: 13)
         enc.useResources(blasList, usage: .read)
         if let wHeap = world?.textureHeap {
             enc.useHeap(wHeap)
@@ -1256,13 +1417,87 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.endEncoding()
     }
 
+    func encodeHudOverlay(
+        commandBuffer: MTLCommandBuffer,
+        inputTexture: MTLTexture,
+        outputTexture: MTLTexture,
+        encodeSRGB: Bool,
+        splitCompare: Bool = false,
+        temporal1SPP: Bool = false,
+        jitter: SIMD2<Float> = .zero
+    ) {
+        guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
+        let outW = outputTexture.width
+        let outH = outputTexture.height
+        var uniforms = makeUniforms(
+            width: outW,
+            height: outH,
+            sampleIdx: sampleIndex,
+            splitCompare: splitCompare,
+            temporal1SPP: temporal1SPP,
+            jitter: jitter
+        )
+        var srgbFlag: UInt32 = encodeSRGB ? 1 : 0
+        enc.setComputePipelineState(hudOverlayPSO)
+        enc.setTexture(inputTexture, index: 0)
+        enc.setTexture(outputTexture, index: 1)
+        enc.setBytes(&uniforms, length: MemoryLayout<RTFrameUniforms>.stride, index: 0)
+        enc.setBytes(&srgbFlag, length: MemoryLayout<UInt32>.stride, index: 1)
+        dispatch2D(encoder: enc, pso: hudOverlayPSO, width: outW, height: outH)
+        enc.endEncoding()
+    }
+
+    @discardableResult
+    func encodeFrameInterpolator(
+        commandBuffer: MTLCommandBuffer,
+        currTexture: MTLTexture,
+        prevTexture: MTLTexture,
+        outputTexture: MTLTexture,
+        dt: Float,
+        jitter: SIMD2<Float>,
+        resetHistory: Bool
+    ) -> Bool {
+        guard frameGenActive,
+              let gDep = gDepthTex,
+              let gMot = gMotionTex else { return false }
+        if #available(macOS 26.0, *), let fi = frameInterpolator as? MTLFXFrameInterpolator {
+            let outW = outputTexture.width
+            let outH = outputTexture.height
+            let aspect = Float(outW) / Float(max(outH, 1))
+            fi.colorTexture = currTexture
+            fi.prevColorTexture = prevTexture
+            fi.depthTexture = gDep
+            fi.motionTexture = gMot
+            fi.outputTexture = outputTexture
+            fi.motionVectorScaleX = Float(outW) / Float(max(rtWidth, 1))
+            fi.motionVectorScaleY = Float(outH) / Float(max(rtHeight, 1))
+            fi.jitterOffsetX = -jitter.x
+            fi.jitterOffsetY = -jitter.y
+            fi.deltaTime = max(0.001, dt)
+            fi.nearPlane = 0.20
+            fi.farPlane = 800.0
+            fi.fieldOfView = camera.fovDeg
+            fi.aspectRatio = aspect
+            fi.isDepthReversed = true
+            if #available(macOS 27.0, *) {
+                fi.worldToViewMatrix = camera.viewMatrix()
+                fi.viewToClipMatrix = camera.projMatrixReverseZ(aspect: aspect)
+            }
+            fi.shouldResetHistory = resetHistory
+            fi.encode(commandBuffer: commandBuffer)
+            return true
+        }
+        return false
+    }
+
     func encodePostProcess(
         commandBuffer: MTLCommandBuffer,
         outputTexture: MTLTexture,
         encodeSRGB: Bool,
         splitCompare: Bool,
         temporal1SPP: Bool,
-        jitter: SIMD2<Float>
+        jitter: SIMD2<Float>,
+        runHudOverlay: Bool = true
     ) {
         let outW = outputTexture.width
         let outH = outputTexture.height
@@ -1283,7 +1518,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
               let sPong = denoiseSpecPong,
               let hdrRes = hdrResolvedTex,
               let bloomA = bloomTexA,
-              let bloomB = bloomTexB else { return }
+              let bloomB = bloomTexB,
+              let ldrScratch = ldrColorTexA else { return }
 
         var uniforms = makeUniforms(
             width: outW,
@@ -1411,15 +1647,27 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             dispatch2D(encoder: enc, pso: bloomBlurPSO, width: bloomA.width, height: bloomA.height)
         }
 
-        var srgbFlag: UInt32 = encodeSRGB ? 1 : 0
+        // Composite post-ACES perceptual sRGB (pre-HUD)
+        let compositeDest: MTLTexture = runHudOverlay ? ldrScratch : outputTexture
+        var compSrgbFlag: UInt32 = runHudOverlay ? 1 : (encodeSRGB ? 1 : 0)
         enc.setComputePipelineState(compositePSO)
         enc.setTexture(hdrRes, index: 0)
         enc.setTexture(bloomA, index: 1)
-        enc.setTexture(outputTexture, index: 2)
+        enc.setTexture(compositeDest, index: 2)
         enc.setSamplerState(linearSampler, index: 0)
         enc.setBytes(&uniforms, length: MemoryLayout<RTFrameUniforms>.stride, index: 0)
-        enc.setBytes(&srgbFlag, length: MemoryLayout<UInt32>.stride, index: 1)
+        enc.setBytes(&compSrgbFlag, length: MemoryLayout<UInt32>.stride, index: 1)
         dispatch2D(encoder: enc, pso: compositePSO, width: outW, height: outH)
+
+        if runHudOverlay {
+            var hudSrgbFlag: UInt32 = encodeSRGB ? 1 : 0
+            enc.setComputePipelineState(hudOverlayPSO)
+            enc.setTexture(ldrScratch, index: 0)
+            enc.setTexture(outputTexture, index: 1)
+            enc.setBytes(&uniforms, length: MemoryLayout<RTFrameUniforms>.stride, index: 0)
+            enc.setBytes(&hudSrgbFlag, length: MemoryLayout<UInt32>.stride, index: 1)
+            dispatch2D(encoder: enc, pso: hudOverlayPSO, width: outW, height: outH)
+        }
         enc.endEncoding()
 
         // Copy SVGF temporal history if SVGF is active
@@ -1534,11 +1782,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         try RTSceneBuilder.writeBGRA8TextureToPNG(texture: outTex, outURL: outURL)
     }
 
-    // Drive forward N real-time frames with MetalFX/SVGF active, measuring GPU ms/frame & FPS and saving final frame
+    // Drive forward N real-time frames with MetalFX/SVGF (+ optional 2x MTLFXFrameInterpolator), measuring GPU ms/frame & FPS and saving final frame
     func runDriveBenchmark(frames: Int, width: Int, height: Int, outURL: URL) throws -> (avgMs: Double, fps: Double) {
         let totalFrames = max(1, frames)
         let useMFX = (denoiseMode == .metalfx) && supportsMetalFXDenoiser
-        ensureRenderTargets(width: width, height: height, useMetalFX: useMFX)
+        let useFG = frameGenEnabled && useMFX && supportsFrameInterpolator
+        ensureRenderTargets(width: width, height: height, useMetalFX: useMFX, useFrameGen: useFG)
 
         let outDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
         outDesc.usage = [.shaderRead, .shaderWrite]
@@ -1554,44 +1803,147 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         }
         historyResetPending = true
         hasValidPrevFrame = false
+        frameGenHistoryValid = false
+        ldrWriteToA = true
 
         var totalWallSec = 0.0
         var timedFrames = 0
-        let warmup = min(3, max(0, totalFrames - 1))
+        // Use even warmup (4) when Frame-Gen is active so timedFrames covers exact (real+FI, real) pairs
+        let warmup = useFG ? min(4, max(0, totalFrames - 2)) : min(3, max(0, totalFrames - 1))
+        var realFrameIdx: UInt32 = 0
+        var lastRealLdr: MTLTexture? = nil
 
         for f in 0..<totalFrames {
             let t0 = CFAbsoluteTimeGetCurrent()
             let dt: Float = 1.0 / 60.0
-            _ = stepDrivePhysics(dt: dt)
 
-            guard let cb = commandQueue.makeCommandBuffer() else { continue }
-            try rebuildTLAS(commandBuffer: cb)
-            if world != nil {
-                encodePhysicsProbe(commandBuffer: cb)
+            if frameGenActive,
+               let ldrA = ldrColorTexA, let ldrB = ldrColorTexB, let ldrInterp = ldrInterpTex {
+                // Monotonic 2x Frame-Gen schedule:
+                //   f == 0: Render R0 -> present R0
+                //   f odd : Render R_k + encode FI(R_{k-1}, R_k) -> present FI (half-frame t = k - 0.5)
+                //   f even: Present R_k directly via post-FI hudOverlayKernel (t = k)
+                if f == 0 || (f % 2 == 1) {
+                    _ = stepDrivePhysics(dt: dt)
+                    simTimeSec += dt
+                    if timeCycleEnabled {
+                        timeOfDayHours = (timeOfDayHours + dt * 0.25).truncatingRemainder(dividingBy: 24.0)
+                    }
+                    guard let cb = commandQueue.makeCommandBuffer() else { continue }
+                    try rebuildTLAS(commandBuffer: cb)
+                    if world != nil {
+                        encodePhysicsProbe(commandBuffer: cb)
+                    }
+
+                    let jIdx = UInt32((realFrameIdx % 16) + 1)
+                    let jitter = SIMD2<Float>(Self.halton(jIdx, base: 2) - 0.5, Self.halton(jIdx, base: 3) - 0.5)
+                    let currLdr = ldrWriteToA ? ldrA : ldrB
+                    let prevLdr = ldrWriteToA ? ldrB : ldrA
+
+                    encodeRayTraceSample(
+                        commandBuffer: cb,
+                        width: rtWidth,
+                        height: rtHeight,
+                        sampleIdx: realFrameIdx,
+                        splitCompare: false,
+                        temporal1SPP: true,
+                        jitter: jitter
+                    )
+                    encodePostProcess(
+                        commandBuffer: cb,
+                        outputTexture: currLdr,
+                        encodeSRGB: true,
+                        splitCompare: false,
+                        temporal1SPP: true,
+                        jitter: jitter,
+                        runHudOverlay: false
+                    )
+                    if frameGenHistoryValid {
+                        _ = encodeFrameInterpolator(
+                            commandBuffer: cb,
+                            currTexture: currLdr,
+                            prevTexture: prevLdr,
+                            outputTexture: ldrInterp,
+                            dt: dt,
+                            jitter: jitter,
+                            resetHistory: (realFrameIdx <= 1)
+                        )
+                        encodeHudOverlay(
+                            commandBuffer: cb,
+                            inputTexture: ldrInterp,
+                            outputTexture: outTex,
+                            encodeSRGB: true,
+                            temporal1SPP: true,
+                            jitter: jitter
+                        )
+                    } else {
+                        encodeHudOverlay(
+                            commandBuffer: cb,
+                            inputTexture: currLdr,
+                            outputTexture: outTex,
+                            encodeSRGB: true,
+                            temporal1SPP: true,
+                            jitter: jitter
+                        )
+                        frameGenHistoryValid = true
+                    }
+                    cb.commit()
+                    cb.waitUntilCompleted()
+                    if let err = cb.error { throw err }
+
+                    lastRealLdr = currLdr
+                    ldrWriteToA.toggle()
+                    realFrameIdx &+= 1
+                } else if let readyLdr = lastRealLdr, let cb = commandQueue.makeCommandBuffer() {
+                    encodeHudOverlay(
+                        commandBuffer: cb,
+                        inputTexture: readyLdr,
+                        outputTexture: outTex,
+                        encodeSRGB: true,
+                        temporal1SPP: true,
+                        jitter: .zero
+                    )
+                    cb.commit()
+                    cb.waitUntilCompleted()
+                    if let err = cb.error { throw err }
+                }
+            } else {
+                _ = stepDrivePhysics(dt: dt)
+                simTimeSec += dt
+                if timeCycleEnabled {
+                    timeOfDayHours = (timeOfDayHours + dt * 0.25).truncatingRemainder(dividingBy: 24.0)
+                }
+
+                guard let cb = commandQueue.makeCommandBuffer() else { continue }
+                try rebuildTLAS(commandBuffer: cb)
+                if world != nil {
+                    encodePhysicsProbe(commandBuffer: cb)
+                }
+
+                let jIdx = UInt32((f % 16) + 1)
+                let jitter = SIMD2<Float>(Self.halton(jIdx, base: 2) - 0.5, Self.halton(jIdx, base: 3) - 0.5)
+                encodeRayTraceSample(
+                    commandBuffer: cb,
+                    width: rtWidth,
+                    height: rtHeight,
+                    sampleIdx: UInt32(f),
+                    splitCompare: false,
+                    temporal1SPP: true,
+                    jitter: jitter
+                )
+                encodePostProcess(
+                    commandBuffer: cb,
+                    outputTexture: outTex,
+                    encodeSRGB: true,
+                    splitCompare: false,
+                    temporal1SPP: true,
+                    jitter: jitter,
+                    runHudOverlay: true
+                )
+                cb.commit()
+                cb.waitUntilCompleted()
+                if let err = cb.error { throw err }
             }
-
-            let jIdx = UInt32((f % 16) + 1)
-            let jitter = SIMD2<Float>(Self.halton(jIdx, base: 2) - 0.5, Self.halton(jIdx, base: 3) - 0.5)
-            encodeRayTraceSample(
-                commandBuffer: cb,
-                width: rtWidth,
-                height: rtHeight,
-                sampleIdx: UInt32(f),
-                splitCompare: false,
-                temporal1SPP: true,
-                jitter: jitter
-            )
-            encodePostProcess(
-                commandBuffer: cb,
-                outputTexture: outTex,
-                encodeSRGB: true,
-                splitCompare: false,
-                temporal1SPP: true,
-                jitter: jitter
-            )
-            cb.commit()
-            cb.waitUntilCompleted()
-            if let err = cb.error { throw err }
 
             let dtFrame = CFAbsoluteTimeGetCurrent() - t0
             if f >= warmup {
@@ -1732,8 +2084,113 @@ final class RTRenderer: NSObject, MTKViewDelegate {
               let cmdBuf = commandQueue.makeCommandBuffer() else { return }
         let tex = drawable.texture
         let useTemporalMFX = (denoiseMode == .metalfx) && supportsMetalFXDenoiser
-        ensureRenderTargets(width: tex.width, height: tex.height, useMetalFX: useTemporalMFX)
+        let useFG = frameGenEnabled && useTemporalMFX && supportsFrameInterpolator
+        ensureRenderTargets(width: tex.width, height: tex.height, useMetalFX: useTemporalMFX, useFrameGen: useFG)
 
+        let encodeSRGB = (view.colorPixelFormat == .bgra8Unorm)
+
+        // Interactive 120 Hz 2x Frame-Gen pacing:
+        //   Phase 0: Step physics, RT + MetalFX TDS -> currLdr, interpolate FI(prevLdr, currLdr) -> HUD -> present
+        //   Phase 1: Present currLdr via post-FI HUD overlay (~0.2ms, zero RT work!)
+        if frameGenActive && denoiseMode == .metalfx,
+           let ldrA = ldrColorTexA, let ldrB = ldrColorTexB, let ldrInterp = ldrInterpTex {
+            if frameGenPresentPhase == 1 && frameGenHistoryValid {
+                let readyLdr = ldrWriteToA ? ldrB : ldrA
+                encodeHudOverlay(
+                    commandBuffer: cmdBuf,
+                    inputTexture: readyLdr,
+                    outputTexture: tex,
+                    encodeSRGB: encodeSRGB,
+                    temporal1SPP: true,
+                    jitter: .zero
+                )
+                frameGenPresentPhase = 0
+                cmdBuf.present(drawable)
+                cmdBuf.commit()
+                return
+            }
+
+            let realDt = Float(min(0.05, max(0.002, now - lastRealFrameTime)))
+            lastRealFrameTime = now
+            lastRealFrameDelta = realDt
+            simTimeSec += realDt
+            if timeCycleEnabled {
+                timeOfDayHours = (timeOfDayHours + realDt * 0.25).truncatingRemainder(dividingBy: 24.0)
+            }
+
+            let moved = stepDrivePhysics(dt: realDt)
+            if moved {
+                try? rebuildTLAS(commandBuffer: cmdBuf)
+                if world != nil {
+                    encodePhysicsProbe(commandBuffer: cmdBuf)
+                }
+            }
+
+            let jIdx = UInt32((frameCounter % 16) + 1)
+            let jitter = SIMD2<Float>(Self.halton(jIdx, base: 2) - 0.5, Self.halton(jIdx, base: 3) - 0.5)
+            let currLdr = ldrWriteToA ? ldrA : ldrB
+            let prevLdr = ldrWriteToA ? ldrB : ldrA
+
+            encodeRayTraceSample(
+                commandBuffer: cmdBuf,
+                width: rtWidth,
+                height: rtHeight,
+                sampleIdx: frameCounter,
+                splitCompare: false,
+                temporal1SPP: true,
+                jitter: jitter
+            )
+            encodePostProcess(
+                commandBuffer: cmdBuf,
+                outputTexture: currLdr,
+                encodeSRGB: true,
+                splitCompare: false,
+                temporal1SPP: true,
+                jitter: jitter,
+                runHudOverlay: false
+            )
+            if frameGenHistoryValid {
+                _ = encodeFrameInterpolator(
+                    commandBuffer: cmdBuf,
+                    currTexture: currLdr,
+                    prevTexture: prevLdr,
+                    outputTexture: ldrInterp,
+                    dt: realDt,
+                    jitter: jitter,
+                    resetHistory: (frameCounter <= 1)
+                )
+                encodeHudOverlay(
+                    commandBuffer: cmdBuf,
+                    inputTexture: ldrInterp,
+                    outputTexture: tex,
+                    encodeSRGB: encodeSRGB,
+                    temporal1SPP: true,
+                    jitter: jitter
+                )
+                frameGenPresentPhase = 1
+            } else {
+                encodeHudOverlay(
+                    commandBuffer: cmdBuf,
+                    inputTexture: currLdr,
+                    outputTexture: tex,
+                    encodeSRGB: encodeSRGB,
+                    temporal1SPP: true,
+                    jitter: jitter
+                )
+                frameGenHistoryValid = true
+                frameGenPresentPhase = 0
+            }
+            ldrWriteToA.toggle()
+            frameCounter &+= 1
+            cmdBuf.present(drawable)
+            cmdBuf.commit()
+            return
+        }
+
+        simTimeSec += dt
+        if timeCycleEnabled {
+            timeOfDayHours = (timeOfDayHours + dt * 0.25).truncatingRemainder(dividingBy: 24.0)
+        }
         let moved = stepDrivePhysics(dt: dt)
         if moved {
             try? rebuildTLAS(commandBuffer: cmdBuf)
@@ -1776,14 +2233,14 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             }
         }
 
-        let encodeSRGB = (view.colorPixelFormat == .bgra8Unorm)
         encodePostProcess(
             commandBuffer: cmdBuf,
             outputTexture: tex,
             encodeSRGB: encodeSRGB,
             splitCompare: false,
             temporal1SPP: useTemporalMode,
-            jitter: jitter
+            jitter: jitter,
+            runHudOverlay: true
         )
         cmdBuf.present(drawable)
         cmdBuf.commit()

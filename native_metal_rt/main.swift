@@ -50,11 +50,18 @@ final class RTShowcaseMTKView: MTKView {
         case "c":
             r.applyCameraMode(r.cameraMode.next())
         case "1":
+            r.timeCycleEnabled = false
             r.activePresetKey = "golden_hour"
         case "2":
+            r.timeCycleEnabled = false
             r.activePresetKey = "night_neon"
         case "3":
+            r.timeCycleEnabled = false
             r.activePresetKey = "daylight"
+        case "4":
+            r.timeCycleEnabled.toggle()
+        case "k":
+            r.frameGenEnabled.toggle()
         case "t":
             r.rtEnabled.toggle()
         case "n":
@@ -194,6 +201,7 @@ struct RTCLIOptions {
     var rtEnabled = true
     var denoiseMode: RTDenoiseMode? = nil
     var denoiserEnabled = true
+    var frameGen = false
     var cameraMode: RTCameraMode? = nil
     var azimuth: Float? = nil
     var elevation: Float? = nil
@@ -240,6 +248,13 @@ func parseRTArgs() -> RTCLIOptions {
                 opts.denoiseMode = m
                 opts.denoiserEnabled = (m != .off)
             }
+        case "--frame-gen":
+            if let v = nextVal() {
+                let low = v.lowercased()
+                opts.frameGen = (low == "on" || low == "true" || low == "1" || low == "yes")
+            } else {
+                opts.frameGen = true
+            }
         case "--camera-mode":
             if let v = nextVal() { opts.cameraMode = RTCameraMode.parse(v) }
         case "--no-livery":
@@ -281,11 +296,11 @@ func parseRTArgs() -> RTCLIOptions {
             print("""
             RockportMetalRT — NFSMW: Rockport 2026 Apple Silicon Hardware Ray Tracing + MetalFX Engine
             Usage:
-              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--denoise metalfx|svgf|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 30] [--hud] [--out|--output <png>] [--compare-out <png>]
-              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo] [--preset golden_hour] [--denoise metalfx|svgf|off] [--camera-mode chase|hero|street|overhead] [--hud]
+              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 30] [--hud] [--out|--output <png>] [--compare-out <png>]
+              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--hud]
             Interactive Controls:
               W/S: Throttle/Brake | A/D: Steer | C: Cycle Camera (Hero/Chase/Street/Overhead) | Mouse Drag: Orbit | Scroll: Zoom
-              G: Cycle Garage Car | H: Toggle Digital HUD | 1/2/3: Presets | T: Toggle RT | N: Cycle Denoiser (MetalFX/SVGF/Off) | L: Toggle Livery | R: Reset | P: Save 64-SPP PNG | Q/Esc: Quit
+              G: Cycle Garage Car | H: Toggle Digital HUD | 1/2/3/4: Presets/Live24h | K: Toggle Frame-Gen | T: Toggle RT | N: Cycle Denoiser (MetalFX/SVGF/Off) | L: Toggle Livery | R: Reset | P: Save 64-SPP PNG | Q/Esc: Quit
             """)
             exit(0)
         default:
@@ -343,6 +358,7 @@ do {
         renderer.denoiseMode = .metalfx
         renderer.denoiserEnabled = opts.denoiserEnabled
     }
+    renderer.frameGenEnabled = opts.frameGen
     renderer.hudEnabled = opts.hud ?? false
 
     if let cfgPath = opts.configPath {
@@ -371,10 +387,11 @@ do {
         let outURL = URL(fileURLWithPath: opts.outPath)
         if opts.hud == nil { renderer.hudEnabled = true }
         let (avgMs, fps) = try renderer.runDriveBenchmark(frames: benchFrames, width: opts.width, height: opts.height, outURL: outURL)
-        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | blas=%d | tris=%d | denoise=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
+        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | blas=%d | tris=%d | denoise=%@ | frameGen=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
                      device.name, renderer.compiledMSLVersion, scene.carProfile.rawValue,
                      worldPkg?.url.lastPathComponent ?? "procedural",
                      totalBlas, totalTris, renderer.effectiveDenoiseLabel,
+                     renderer.effectiveFrameGenActive ? "on" : "off",
                      benchFrames, avgMs, fps, outURL.path))
     } else if opts.headless {
         let outURL = URL(fileURLWithPath: opts.outPath)

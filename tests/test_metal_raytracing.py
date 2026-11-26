@@ -38,6 +38,7 @@ class TestMetalRayTracingStructure(unittest.TestCase):
             NATIVE_RT_DIR / "Makefile",
             NATIVE_RT_DIR / "README.md",
             NATIVE_RT_DIR / "RayTracing.metal",
+            NATIVE_RT_DIR / "RTHud.metal",
             NATIVE_RT_DIR / "RTWorldLoader.swift",
             NATIVE_RT_DIR / "RTSceneBuilder.swift",
             NATIVE_RT_DIR / "RTRenderer.swift",
@@ -65,8 +66,14 @@ class TestMetalRayTracingStructure(unittest.TestCase):
             "compositeKernel",
             "resolveWorldSurface",
             "intersection_query<triangle_data, instancing>",
+            "RTWorldLight",
+            "RTDynamicFX",
         ):
             self.assertIn(symbol, metal_src)
+
+        hud_src = (NATIVE_RT_DIR / "RTHud.metal").read_text(encoding="utf-8")
+        self.assertIn("hudOverlayKernel", hud_src)
+        self.assertIn("compositeDigitalDrivingHUD", hud_src)
 
     def test_swift_uses_acceleration_structures_config_and_drive_mode(self) -> None:
         rt_src = (NATIVE_RT_DIR / "RTRenderer.swift").read_text(encoding="utf-8")
@@ -77,6 +84,8 @@ class TestMetalRayTracingStructure(unittest.TestCase):
         self.assertIn("useResources(blasList", rt_src)
         self.assertIn("denoiseAtrousKernel", rt_src)
         self.assertIn("remodulateKernel", rt_src)
+        self.assertIn("hudOverlayKernel", rt_src)
+        self.assertIn("MTLFXFrameInterpolator", rt_src)
         self.assertIn("configureDrivePose", rt_src)
 
         scene_src = (NATIVE_RT_DIR / "RTSceneBuilder.swift").read_text(encoding="utf-8")
@@ -263,6 +272,43 @@ class TestMetalRayTracingExecution(unittest.TestCase):
             self.assertIn("FPS)", bench_res.stdout)
             self.assertTrue(bench_png.is_file(), "RKPT drive-bench PNG missing")
 
+            # Also verify 2x MTLFXFrameInterpolator (--frame-gen on) on synthetic .rkpt world
+            fg_png = tmp_path / "rkpt_drive_framegen.png"
+            fg_res = subprocess.run(
+                [
+                    str(binary),
+                    "--headless",
+                    "--synthetic",
+                    "--world",
+                    str(rkpt_path),
+                    "--car",
+                    "m3_gtr",
+                    "--drive-bench",
+                    "10",
+                    "--denoise",
+                    "metalfx",
+                    "--frame-gen",
+                    "on",
+                    "--hud",
+                    "--camera-mode",
+                    "chase",
+                    "--width",
+                    "320",
+                    "--height",
+                    "180",
+                    "--output",
+                    str(fg_png),
+                ],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(fg_res.returncode, 0, f"RKPT frame-gen drive-bench failed:\n{fg_res.stdout}\n{fg_res.stderr}")
+            self.assertIn("Metal RT DriveBench", fg_res.stdout)
+            self.assertIn("frameGen=", fg_res.stdout)
+            self.assertTrue(fg_png.is_file(), "RKPT frame-gen PNG missing")
+
             # Also verify SVGF fallback + overhead camera mode on .rkpt world
             svgf_png = tmp_path / "rkpt_overhead_svgf.png"
             svgf_res = subprocess.run(
@@ -298,6 +344,9 @@ class TestMetalRayTracingExecution(unittest.TestCase):
                 b_arr = np.array(Image.open(bench_png))
                 self.assertEqual(b_arr.shape, (180, 320, 3))
                 self.assertGreater(float(b_arr.std()), 12.0, "RKPT MetalFX drive-bench frame appears blank/flat")
+                fg_arr = np.array(Image.open(fg_png))
+                self.assertEqual(fg_arr.shape, (180, 320, 3))
+                self.assertGreater(float(fg_arr.std()), 12.0, "RKPT Frame-Gen frame appears blank/flat")
                 s_arr = np.array(Image.open(svgf_png))
                 self.assertEqual(s_arr.shape, (180, 320, 3))
                 self.assertGreater(float(s_arr.std()), 10.0, "RKPT SVGF frame appears blank/flat")

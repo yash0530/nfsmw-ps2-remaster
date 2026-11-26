@@ -53,6 +53,10 @@ PROHIBITED_EXTENSIONS = frozenset(
         ".ckpt",
         ".ps2",
         ".p2s",
+        ".rkpt",
+        ".wav",
+        ".pcm",
+        ".obj",
     }
 )
 

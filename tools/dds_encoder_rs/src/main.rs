@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 const DDS_MAGIC: [u8; 4] = *b"DDS ";
@@ -120,6 +121,7 @@ struct CliArgs {
     srgb: bool,
     force_dx10: bool,
     input_raw: bool,
+    batch: bool,
     width: Option<u32>,
     height: Option<u32>,
     threads: usize,
@@ -128,12 +130,14 @@ struct CliArgs {
 
 fn print_usage() {
     eprintln!(
-        "rockport_dds v0.4.0 — Pure-Rust Native BC7/BC3/BC1/RGBA8 DDS Encoder\n\
+        "rockport_dds v0.5.0 — Pure-Rust Native BC7/BC3/BC1/RGBA8 DDS & Batch RKPT Encoder\n\
          Usage:\n  \
-           rockport_dds --input <in> --output <out.dds> [options]\n\n\
+           rockport_dds --input <in> --output <out.dds> [options]\n  \
+           rockport_dds --batch <in.rkb1> --output <out.rko1> [--format bc7] [--srgb] [--mipmaps] [-j N]\n\n\
          Options:\n  \
            -i, --input <path>     Input image (.tga, .pam, or raw RGBA8 with --input-raw)\n  \
-           -o, --output <path>    Output .dds path\n  \
+           --batch <path>         Batch encode packed RKB1 raw RGBA8 stream -> RKO1 raw block mips\n  \
+           -o, --output <path>    Output .dds (or .rko1 in --batch mode) path\n  \
            -f, --format <fmt>     bc7 (default), bc3, bc1, rgba8\n  \
            --mipmaps              Generate full mipmap chain (default)\n  \
            --no-mipmaps           Encode top mip level only\n  \
@@ -162,6 +166,7 @@ fn parse_args() -> Result<CliArgs, String> {
     let mut srgb = false;
     let mut force_dx10 = false;
     let mut input_raw = false;
+    let mut batch = false;
     let mut width: Option<u32> = None;
     let mut height: Option<u32> = None;
     let mut threads = thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
@@ -175,13 +180,19 @@ fn parse_args() -> Result<CliArgs, String> {
                 process::exit(0);
             }
             "--version" => {
-                println!("rockport_dds 0.4.0");
+                println!("rockport_dds 0.5.0");
                 process::exit(0);
             }
             "-i" | "--input" => {
                 i += 1;
                 let v = args.get(i).ok_or("--input requires a path")?;
                 input = Some(PathBuf::from(v));
+            }
+            "--batch" => {
+                i += 1;
+                let v = args.get(i).ok_or("--batch requires a path")?;
+                input = Some(PathBuf::from(v));
+                batch = true;
             }
             "-o" | "--output" => {
                 i += 1;
@@ -231,9 +242,9 @@ fn parse_args() -> Result<CliArgs, String> {
         i += 1;
     }
 
-    let input = input.ok_or("Missing --input")?;
+    let input = input.ok_or("Missing --input or --batch")?;
     let output = output.ok_or("Missing --output")?;
-    if input_raw && (width.is_none() || height.is_none()) {
+    if !batch && input_raw && (width.is_none() || height.is_none()) {
         return Err("--input-raw requires both --width and --height".to_string());
     }
 
@@ -245,6 +256,7 @@ fn parse_args() -> Result<CliArgs, String> {
         srgb,
         force_dx10,
         input_raw,
+        batch,
         width,
         height,
         threads,
@@ -615,20 +627,29 @@ fn downsample_2x2(src: &ImageRgba, srgb: bool, lut: &[f32; 256]) -> ImageRgba {
     }
 }
 
-fn generate_mip_chain(base: ImageRgba, mipmaps: bool, srgb: bool) -> Vec<ImageRgba> {
+fn generate_mip_chain_with_lut(
+    base: ImageRgba,
+    mipmaps: bool,
+    srgb: bool,
+    lut: &[f32; 256],
+) -> Vec<ImageRgba> {
     let mut chain = Vec::new();
     let count = if mipmaps {
         mip_count_for(base.width, base.height)
     } else {
         1
     };
-    let lut = build_srgb_to_linear_lut();
     chain.push(base);
     while (chain.len() as u32) < count {
-        let next = downsample_2x2(chain.last().unwrap(), srgb, &lut);
+        let next = downsample_2x2(chain.last().unwrap(), srgb, lut);
         chain.push(next);
     }
     chain
+}
+
+fn generate_mip_chain(base: ImageRgba, mipmaps: bool, srgb: bool) -> Vec<ImageRgba> {
+    let lut = build_srgb_to_linear_lut();
+    generate_mip_chain_with_lut(base, mipmaps, srgb, &lut)
 }
 
 // ---------------------------------------------------------------------------
@@ -1405,8 +1426,215 @@ fn write_dds(
     Ok(total)
 }
 
+const BATCH_IN_MAGIC: [u8; 4] = *b"RKB1";
+const BATCH_OUT_MAGIC: [u8; 4] = *b"RKO1";
+const BATCH_FLAG_MIPMAPS: u32 = 1 << 0;
+const BATCH_FLAG_SRGB: u32 = 1 << 1;
+const BATCH_FLAGS_USE_CLI: u32 = 0xFFFF_FFFF;
+
+struct BatchInputRef<'a> {
+    width: u32,
+    height: u32,
+    mipmaps: bool,
+    srgb: bool,
+    pixels: &'a [u8],
+}
+
+struct BatchOutputEntry {
+    width: u32,
+    height: u32,
+    mip_count: u32,
+    payload: Vec<u8>,
+}
+
+fn encode_batch_bytes(
+    data: &[u8],
+    format: OutputFormat,
+    default_mipmaps: bool,
+    default_srgb: bool,
+    threads: usize,
+) -> Result<(Vec<u8>, usize), String> {
+    if data.len() < 8 || &data[0..4] != &BATCH_IN_MAGIC {
+        return Err("Invalid RKB1 batch input header".to_string());
+    }
+    let count = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+    let mut pos = 8usize;
+    let mut entries = Vec::with_capacity(count);
+    for idx in 0..count {
+        if pos + 16 > data.len() {
+            return Err(format!("Truncated RKB1 record header at index {idx}"));
+        }
+        let width = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
+        let height = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
+        let flags = u32::from_le_bytes(data[pos + 8..pos + 12].try_into().unwrap());
+        let raw_len = u32::from_le_bytes(data[pos + 12..pos + 16].try_into().unwrap()) as usize;
+        pos += 16;
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|px| px.checked_mul(4))
+            .ok_or_else(|| format!("RKB1 dimension overflow at index {idx}"))?;
+        if width == 0 || height == 0 || raw_len != expected || pos + raw_len > data.len() {
+            return Err(format!(
+                "Invalid RKB1 payload at index {idx} ({width}x{height}, raw_len={raw_len}, expected={expected})"
+            ));
+        }
+        let (mipmaps, srgb) = if flags == BATCH_FLAGS_USE_CLI {
+            (default_mipmaps, default_srgb)
+        } else {
+            ((flags & BATCH_FLAG_MIPMAPS) != 0, (flags & BATCH_FLAG_SRGB) != 0)
+        };
+        entries.push(BatchInputRef {
+            width,
+            height,
+            mipmaps,
+            srgb,
+            pixels: &data[pos..pos + raw_len],
+        });
+        pos += raw_len;
+    }
+
+    let lut = build_srgb_to_linear_lut();
+    let workers = threads.min(count.max(1)).max(1);
+    let inner_threads = if count < threads && count > 0 {
+        (threads / count).max(1)
+    } else {
+        1
+    };
+
+    let next_idx = AtomicUsize::new(0);
+    let mut slots: Vec<Option<BatchOutputEntry>> = (0..count).map(|_| None).collect();
+
+    if workers <= 1 {
+        for (idx, ent) in entries.iter().enumerate() {
+            let img = ImageRgba {
+                width: ent.width,
+                height: ent.height,
+                pixels: ent.pixels.to_vec(),
+            };
+            let mips = generate_mip_chain_with_lut(img, ent.mipmaps, ent.srgb, &lut);
+            let mut payload = Vec::new();
+            for mip in &mips {
+                payload.extend_from_slice(&encode_mip_level(mip, format, inner_threads));
+            }
+            slots[idx] = Some(BatchOutputEntry {
+                width: ent.width,
+                height: ent.height,
+                mip_count: mips.len() as u32,
+                payload,
+            });
+        }
+    } else {
+        let mut per_worker: Vec<Vec<(usize, BatchOutputEntry)>> =
+            (0..workers).map(|_| Vec::new()).collect();
+        let entries_ref = &entries;
+        let next_ref = &next_idx;
+        let lut_ref = &lut;
+        thread::scope(|s| {
+            for bucket in &mut per_worker {
+                s.spawn(move || loop {
+                    let idx = next_ref.fetch_add(1, Ordering::Relaxed);
+                    if idx >= entries_ref.len() {
+                        break;
+                    }
+                    let ent = &entries_ref[idx];
+                    let img = ImageRgba {
+                        width: ent.width,
+                        height: ent.height,
+                        pixels: ent.pixels.to_vec(),
+                    };
+                    let mips = generate_mip_chain_with_lut(img, ent.mipmaps, ent.srgb, lut_ref);
+                    let mut payload = Vec::new();
+                    for mip in &mips {
+                        payload.extend_from_slice(&encode_mip_level(mip, format, inner_threads));
+                    }
+                    bucket.push((
+                        idx,
+                        BatchOutputEntry {
+                            width: ent.width,
+                            height: ent.height,
+                            mip_count: mips.len() as u32,
+                            payload,
+                        },
+                    ));
+                });
+            }
+        });
+        for bucket in per_worker {
+            for (idx, item) in bucket {
+                slots[idx] = Some(item);
+            }
+        }
+    }
+
+    let total_payload_bytes: usize = slots
+        .iter()
+        .map(|s| s.as_ref().map(|e| e.payload.len()).unwrap_or(0))
+        .sum();
+    let mut out = Vec::with_capacity(8 + count * 16 + total_payload_bytes);
+    out.extend_from_slice(&BATCH_OUT_MAGIC);
+    push_u32(&mut out, count as u32);
+    for slot in slots {
+        let item = slot.ok_or("Internal error: missing batch output slot")?;
+        push_u32(&mut out, item.width);
+        push_u32(&mut out, item.height);
+        push_u32(&mut out, item.mip_count);
+        push_u32(&mut out, item.payload.len() as u32);
+        out.extend_from_slice(&item.payload);
+    }
+
+    Ok((out, count))
+}
+
+fn run_batch(args: &CliArgs) -> Result<(), String> {
+    let mut reader = BufReader::new(
+        File::open(&args.input)
+            .map_err(|e| format!("Failed to open batch input {}: {e}", args.input.display()))?,
+    );
+    let mut raw = Vec::new();
+    reader
+        .read_to_end(&mut raw)
+        .map_err(|e| format!("Failed to read batch input {}: {e}", args.input.display()))?;
+
+    let (encoded, count) =
+        encode_batch_bytes(&raw, args.format, args.mipmaps, args.srgb, args.threads)?;
+
+    if let Some(parent) = args.output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        }
+    }
+    let mut writer = BufWriter::new(
+        File::create(&args.output)
+            .map_err(|e| format!("Failed to create batch output {}: {e}", args.output.display()))?,
+    );
+    writer
+        .write_all(&encoded)
+        .map_err(|e| format!("Write batch output failed: {e}"))?;
+    writer
+        .flush()
+        .map_err(|e| format!("Flush batch output failed: {e}"))?;
+
+    if args.verbose {
+        println!(
+            "Batch encoded {} textures (format={:?}, mips={}, srgb={}, threads={}, {} bytes) -> {}",
+            count,
+            args.format,
+            args.mipmaps,
+            args.srgb,
+            args.threads,
+            encoded.len(),
+            args.output.display()
+        );
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let args = parse_args()?;
+    if args.batch {
+        return run_batch(&args);
+    }
     let img = load_image(&args)?;
     let width = img.width;
     let height = img.height;
@@ -1632,5 +1860,62 @@ mod tests {
         assert_eq!(decoded_pam.width, 2);
         assert_eq!(decoded_pam.height, 1);
         assert_eq!(&decoded_pam.pixels, &[1, 2, 3, 4, 250, 240, 230, 200]);
+    }
+
+    #[test]
+    fn test_batch_rkb1_to_bc7_mip_roundtrip() {
+        let mut batch_in = Vec::new();
+        batch_in.extend_from_slice(&BATCH_IN_MAGIC);
+        push_u32(&mut batch_in, 2);
+
+        // Texture 0: 16x8 solid gradient with sRGB mipmaps
+        let (w0, h0) = (16u32, 8u32);
+        push_u32(&mut batch_in, w0);
+        push_u32(&mut batch_in, h0);
+        push_u32(&mut batch_in, BATCH_FLAG_MIPMAPS | BATCH_FLAG_SRGB);
+        push_u32(&mut batch_in, w0 * h0 * 4);
+        for y in 0..h0 {
+            for x in 0..w0 {
+                batch_in.extend_from_slice(&[(x * 16) as u8, (y * 32) as u8, 120, 255]);
+            }
+        }
+
+        // Texture 1: 8x8 uniform odd-parity color, single mip
+        let (w1, h1) = (8u32, 8u32);
+        push_u32(&mut batch_in, w1);
+        push_u32(&mut batch_in, h1);
+        push_u32(&mut batch_in, 0);
+        push_u32(&mut batch_in, w1 * h1 * 4);
+        for _ in 0..(w1 * h1) {
+            batch_in.extend_from_slice(&[171, 85, 213, 255]);
+        }
+
+        let (out1, cnt1) = encode_batch_bytes(&batch_in, OutputFormat::Bc7, true, true, 1).unwrap();
+        let (out4, cnt4) = encode_batch_bytes(&batch_in, OutputFormat::Bc7, true, true, 4).unwrap();
+        assert_eq!(cnt1, 2);
+        assert_eq!(cnt4, 2);
+        assert_eq!(out1, out4, "Batch BC7 output must be deterministic across thread counts");
+        assert_eq!(&out1[0..4], &BATCH_OUT_MAGIC);
+        assert_eq!(u32::from_le_bytes(out1[4..8].try_into().unwrap()), 2);
+
+        // Entry 0: 16x8 -> 5 mips: (4x2 + 2x1 + 1x1 + 1x1 + 1x1) = 13 blocks * 16 = 208 bytes
+        let ew0 = u32::from_le_bytes(out1[8..12].try_into().unwrap());
+        let eh0 = u32::from_le_bytes(out1[12..16].try_into().unwrap());
+        let em0 = u32::from_le_bytes(out1[16..20].try_into().unwrap());
+        let el0 = u32::from_le_bytes(out1[20..24].try_into().unwrap()) as usize;
+        assert_eq!((ew0, eh0, em0, el0), (16, 8, 5, 208));
+
+        // Entry 1: 8x8 -> 1 mip: 2x2 = 4 blocks * 16 = 64 bytes, first block decodes exact
+        let o1 = 24 + el0;
+        let ew1 = u32::from_le_bytes(out1[o1..o1 + 4].try_into().unwrap());
+        let eh1 = u32::from_le_bytes(out1[o1 + 4..o1 + 8].try_into().unwrap());
+        let em1 = u32::from_le_bytes(out1[o1 + 8..o1 + 12].try_into().unwrap());
+        let el1 = u32::from_le_bytes(out1[o1 + 12..o1 + 16].try_into().unwrap()) as usize;
+        assert_eq!((ew1, eh1, em1, el1), (8, 8, 1, 64));
+        let blk: [u8; 16] = out1[o1 + 16..o1 + 32].try_into().unwrap();
+        let dec = decode_bc7_mode6_block(&blk);
+        for px in dec {
+            assert_eq!(px, [171, 85, 213, 255]);
+        }
     }
 }

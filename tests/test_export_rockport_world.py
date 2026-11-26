@@ -60,12 +60,17 @@ def _make_padded_solid_pack(pad_bytes: int, first_tex_hash: int = 0xAABBCC11) ->
 class TestRkptContractOffline(unittest.TestCase):
     def test_locked_struct_sizes(self) -> None:
         self.assertEqual(erw.HEADER_SIZE, 160)
+        self.assertEqual(erw.V2_EXT_HEADER_SIZE, 96)
         self.assertEqual(erw.SECTION_SIZE, 64)
         self.assertEqual(erw.MESH_SIZE, 48)
         self.assertEqual(erw.INSTANCE_SIZE, 64)
         self.assertEqual(erw.MATERIAL_SIZE, 32)
         self.assertEqual(erw.TEXTURE_SIZE, 32)
         self.assertEqual(erw.VERTEX_SIZE, 36)
+        self.assertEqual(erw.ROAD_NODE_SIZE, 32)
+        self.assertEqual(erw.ROAD_SEGMENT_SIZE, 16)
+        self.assertEqual(erw.WORLD_LIGHT_SIZE, 32)
+        self.assertEqual(erw.LANDMARK_SIZE, 64)
 
     def test_det_plus_one_coordinate_and_instance_transform_roundtrip(self) -> None:
         det_p = float(np.linalg.det(erw.P_PS2_TO_METAL))
@@ -192,6 +197,124 @@ class TestRkptContractOffline(unittest.TestCase):
         self.assertFalse(did_large)
         self.assertEqual(same.shape, (512, 256, 4))
 
+        # Verify narrow-axis sidewalk strip upscaling (64x512 -> 256x512)
+        sidewalk = np.full((512, 64, 4), 140, dtype=np.uint8)
+        sidewalk[:, :, 3] = 255
+        up_sw, did_sw = erw.enhance_world_texture_2x(sidewalk, has_cutout_alpha=False, tex_name="TRNS_ALL_LZ_SIDEWALKA_0")
+        self.assertTrue(did_sw)
+        self.assertEqual(up_sw.shape, (512, 256, 4))
+
+        # Verify botanical cypress frond texture & multi-tier cypress mesh generator
+        frond = erw.generate_botanical_cypress_frond_rgba(256)
+        self.assertEqual(frond.shape, (256, 256, 4))
+        cutout_frac = float(np.mean(frond[:, :, 3] < 128))
+        self.assertGreater(cutout_frac, 0.35)
+        self.assertLess(cutout_frac, 0.65)
+
+        # Verify TER_CONC_WALK1, MD_GRASSYTILE1024 & TRNS_ALL_LZ_BOARDWALKA_ classify as SIDEWALK (2u)
+        for sw_tex in ("TRNS_ALL_LZ_SIDEWALKA_0", "TER_COBBLE1", "TER_CONC_WALK1", "TRNS_ALL_LZ_BOARDWALKA_", "MD_GRASSYTILE1024"):
+            self.assertEqual(
+                erw.classify_world_material(sw_tex, "TRN_WALK", False, 0, 99).surface_class,
+                erw.SURFACE_SIDEWALK,
+                sw_tex,
+            )
+
+        dummy_cyp = erw.DecodedWorldSolid(
+            name="XO_CT_CYPRESS_1B_00",
+            name_hash=0x50DA7F95,
+            texture_hashes=[erw.CYPRESS_FROND_TEX_HASH, erw.CYPRESS_TRUNK_TEX_HASH],
+            positions_metal=np.array([[-3, 0, -2.5], [3, 23.5, 2.5], [0, 12, 0]], dtype=np.float32),
+            normals_metal=np.array([[0, 1, 0]] * 3, dtype=np.float32),
+            uvs_metal=np.zeros((3, 2), dtype=np.float32),
+            vertex_ao=np.full(3, 255, dtype=np.uint8),
+            vertex_tex_slot=np.array([0, 0, 1], dtype=np.int32),
+            indices=np.array([0, 1, 2], dtype=np.uint32),
+            aabb_min_metal=(-3.0, 0.0, -2.5),
+            aabb_max_metal=(3.0, 23.5, 2.5),
+        )
+        bot_cyp = erw.build_botanical_cypress_solid(dummy_cyp)
+        bot_tris = len(bot_cyp.indices) // 3
+        self.assertGreaterEqual(bot_tris, 320)
+        self.assertLessEqual(bot_tris, 520)
+        self.assertAlmostEqual(bot_cyp.aabb_max_metal[1], 23.5, delta=1.0)
+
+    def test_synthetic_rkpt_v2_bc7_road_light_landmark_roundtrip(self) -> None:
+        solid = erw.DecodedWorldSolid(
+            name="XO_STREETLIGHTG_1B_00",
+            name_hash=0x01020305,
+            texture_hashes=[0x11223344],
+            positions_metal=np.array([[0, 0, 0], [0.4, 7.5, 0], [-0.4, 7.5, 0]], dtype=np.float32),
+            normals_metal=np.array([[0, 1, 0], [0, 1, 0], [0, 1, 0]], dtype=np.float32),
+            uvs_metal=np.array([[0, 0], [1, 0], [0, 1]], dtype=np.float32),
+            vertex_ao=np.array([255, 255, 255], dtype=np.uint8),
+            vertex_tex_slot=np.array([0, 0, 0], dtype=np.int32),
+            indices=np.array([0, 1, 2], dtype=np.uint32),
+            aabb_min_metal=(-0.4, 0.0, 0.0),
+            aabb_max_metal=(0.4, 7.5, 0.0),
+        )
+        mat = erw.classify_world_material("OBJ_ETHNICSTREETLIGHT", "XO_STREETLIGHTG_1B_00", False, 0, 0x11223344)
+        mips, bc7_len = erw.expected_bc7_mip_chain_bytes(8, 8, mipmaps=True)
+        self.assertEqual((mips, bc7_len), (4, (4 + 1 + 1 + 1) * 16))
+        tex = erw.DecodedRkptTexture(
+            "OBJ_ETHNICSTREETLIGHT", 0x11223344, 8, 8,
+            bytes([128] * (8 * 8 * 4)),
+            erw.TEX_FLAG_PS2_0X80_NORMALIZED, "synth",
+            pixel_format=erw.PIXEL_FORMAT_BC7_SRGB,
+            mip_count=mips,
+            encoded_bytes=bytes([0x40] * bc7_len),
+        )
+        xform = erw.ps2_instance_to_metal_4x3([8192, 0, 0, 0, 8192, 0, 0, 0, 8192], (10.0, 20.0, 0.0), (0.0, 0.0, 0.0))
+        lights, breakdown = erw.extract_world_lights(
+            [solid], [np.array([0, 0, 0], dtype=np.int32)], [mat], [(0, 0, 0, xform)]
+        )
+        self.assertEqual(len(lights), 1)
+        self.assertEqual(breakdown.get("streetlamp"), 1)
+        self.assertGreater(lights[0].pos_metal[1], 6.5)
+
+        rnode0 = erw.RkptRoadNode((0.0, 0.0, 0.0), 0, 1, 1, (0, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF))
+        rnode1 = erw.RkptRoadNode((30.0, 0.0, 0.0), 1, 1, 1, (0, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF))
+        rseg = erw.RkptRoadSegment(0, 1, 9, 1, 0xFFFF, 30.0, 5.5)
+        lm = erw.RkptLandmark("Rosewood Blvd", (15.0, 0.0, 0.0), 1.57, 0)
+
+        with tempfile.TemporaryDirectory() as td:
+            out_rkpt = Path(td) / "synth_v2.rkpt"
+            erw.write_rkpt_v2(
+                out_path=out_rkpt,
+                sections_meta=[("A47", 47, 0, 1, (0.0, 0.0, 0.0), 100.0, (-1, 0, -1), (1, 8, 1), 0)],
+                meshes=[solid],
+                mesh_vert_mats=[np.array([0, 0, 0], dtype=np.int32)],
+                mesh_flags=[erw.MESH_FLAG_SOLID_WALL],
+                instances=[(0, 0, 0, xform)],
+                materials=[mat],
+                textures=[tex],
+                world_bounds_min=(-1.0, 0.0, -1.0),
+                world_bounds_max=(11.0, 8.0, 1.0),
+                spawn_pos=(15.0, 0.0, 0.0),
+                spawn_yaw_rad=1.57,
+                ps2_origin=(1000.0, 2000.0, 0.0),
+                spatial_section_count=1,
+                panorama_section_count=0,
+                road_nodes=[rnode0, rnode1],
+                road_segments=[rseg],
+                world_lights=lights,
+                landmarks=[lm],
+            )
+            hdr = erw.read_rkpt_header(out_rkpt)
+            self.assertEqual(hdr["version"], 2)
+            self.assertTrue(hdr["flags"] & erw.RKPT_HDR_FLAG_HAS_V2_EXT)
+            self.assertTrue(hdr["flags"] & erw.RKPT_HDR_FLAG_BC7_TEXTURES)
+            self.assertEqual(hdr["sectionsOffset"], 256)
+            self.assertEqual(hdr["roadNodeCount"], 2)
+            self.assertEqual(hdr["roadSegmentCount"], 1)
+            self.assertEqual(hdr["worldLightCount"], 1)
+            self.assertEqual(hdr["landmarkCount"], 1)
+            raw = out_rkpt.read_bytes()
+            _th, tw, th_, pfmt, _doff, dsz, tfl = struct.unpack_from(erw.TEXTURE_FMT, raw, hdr["texturesOffset"])
+            self.assertEqual((tw, th_, pfmt, dsz), (8, 8, erw.PIXEL_FORMAT_BC7_SRGB, bc7_len))
+            self.assertEqual((tfl >> erw.TEX_FLAG_MIPCOUNT_SHIFT) & 0xFF, mips)
+            lm_name_raw = struct.unpack_from(erw.LANDMARK_FMT, raw, hdr["landmarksOffset"])[0]
+            self.assertEqual(lm_name_raw.split(b"\x00", 1)[0].decode("ascii"), "Rosewood Blvd")
+
     def test_synthetic_rkpt_v1_write_and_read_roundtrip(self) -> None:
         solid = erw.DecodedWorldSolid(
             name="TRN_SYNTH_ROAD",
@@ -263,7 +386,7 @@ class TestRockportLiveISOReadOnly(unittest.TestCase):
             self.assertEqual(hdr["sectionCount"], exp_sec_cnt)
             self.assertGreater(hdr["meshCount"], 400)
             self.assertGreater(hdr["instanceCount"], 2000)
-            self.assertLess(hdr["fileSize"], 110 * 1024 * 1024)
+            self.assertLess(hdr["fileSize"], 130 * 1024 * 1024)
             self.assertEqual(manifest["unresolved_instances"], 0)
             self.assertGreaterEqual(manifest["texture_resolved_pct"], 97.5)
             self.assertGreater(manifest["texture_enhanced_2x_count"], 100)
@@ -316,6 +439,64 @@ class TestRockportLiveISOReadOnly(unittest.TestCase):
             with Image.open(layout_png) as im:
                 im.load()
                 self.assertEqual(im.size, (1200, 1200))
+
+    def test_live_rockport_full_v2_bc7_export(self) -> None:
+        iso = _default_iso()
+        if not iso.is_file():
+            self.skipTest("Untouched PS2 NFSMW ISO not present; skipping full-map Rockport v2 verification")
+
+        out_dir = REPO_ROOT / "build" / "rockport_world"
+        rkpt_path = out_dir / "rockport_full.rkpt"
+        manifest_path = out_dir / "rockport_full_manifest.json"
+        layout_png = out_dir / "rockport_full_layout_check.png"
+        if not rkpt_path.is_file() or not manifest_path.is_file():
+            erw.export_rockport_district(iso, "rockport_full", out_dir, render_layout=True)
+
+        hdr = erw.read_rkpt_header(rkpt_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(hdr["magic"], "RKPT")
+        self.assertEqual(hdr["version"], 2)
+        self.assertTrue(hdr["flags"] & erw.RKPT_HDR_FLAG_HAS_V2_EXT)
+        self.assertTrue(hdr["flags"] & erw.RKPT_HDR_FLAG_BC7_TEXTURES)
+        self.assertTrue(hdr["flags"] & erw.RKPT_HDR_FLAG_HAS_PANORAMA)
+        self.assertEqual(hdr["sectionCount"], 718)
+        self.assertEqual(hdr["spatialSectionCount"], 638)
+        self.assertEqual(hdr["panoramaSectionCount"], 80)
+        self.assertGreater(hdr["meshCount"], 9500)
+        self.assertGreater(hdr["instanceCount"], 80000)
+        self.assertLessEqual(hdr["fileSize"], 240 * 1024 * 1024)
+        self.assertEqual(manifest["unresolved_instances"], 0)
+        self.assertGreaterEqual(manifest["texture_resolved_pct"], 99.0)
+        self.assertEqual(hdr["roadNodeCount"], 4385)
+        self.assertEqual(hdr["roadSegmentCount"], 6538)
+        self.assertGreaterEqual(hdr["worldLightCount"], 2000)
+        self.assertEqual(hdr["landmarkCount"], 6)
+        self.assertGreaterEqual(manifest["botanical_cypress_meshes_replaced"], 2)
+        self.assertTrue(manifest["botanical_cypress_texture_replaced"])
+        self.assertGreaterEqual(manifest["texture_narrow_axis_upscaled_count"], 30)
+
+        # Verify every texture record is BC7_RGBA_UNORM_SRGB with valid mipCount and exact dataSize
+        raw = rkpt_path.read_bytes()
+        toff = hdr["texturesOffset"]
+        for i in range(hdr["textureCount"]):
+            _hsh, tw, th, pfmt, _doff, dsz, tfl = struct.unpack_from(
+                erw.TEXTURE_FMT, raw, toff + i * erw.TEXTURE_SIZE
+            )
+            self.assertEqual(pfmt, erw.PIXEL_FORMAT_BC7_SRGB)
+            exp_mips, exp_bytes = erw.expected_bc7_mip_chain_bytes(tw, th, mipmaps=True)
+            self.assertEqual((tfl >> erw.TEX_FLAG_MIPCOUNT_SHIFT) & 0xFF, exp_mips)
+            self.assertEqual(dsz, exp_bytes)
+
+        # Verify no personal paths leaked in manifest & layout PNG is Pillow-valid
+        raw_manifest = manifest_path.read_text(encoding="utf-8")
+        self.assertNotIn("/Users/", raw_manifest)
+        self.assertNotIn("C:\\Users\\", raw_manifest)
+        self.assertTrue(layout_png.is_file())
+        self.assertGreater(layout_png.stat().st_size, 20_000)
+        with Image.open(layout_png) as im:
+            im.load()
+            self.assertEqual(im.size, (1600, 1600))
 
 
 if __name__ == "__main__":

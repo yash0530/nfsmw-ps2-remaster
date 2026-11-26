@@ -39,6 +39,10 @@
 *.BIG
 *.tm2
 *.TM2
+*.rkpt
+*.RKPT
+*.pcm
+*.PCM
 *.xdelta
 *.vcdiff
 
