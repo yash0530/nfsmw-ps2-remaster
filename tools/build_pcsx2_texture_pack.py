@@ -19,10 +19,12 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _TOOLS_DIR.parent
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
-import install_macos_texture_tools as imtt, pcsx2_tex_hash as pth  # noqa: E402
+import install_macos_texture_tools as imtt, pcsx2_tex_hash as pth, texture_relief_3d as tr3d  # noqa: E402
 from zdir_tool import PS2NFSMWArchive  # noqa: E402
 
-DEFAULT_OUT_DIR = _REPO_ROOT / "build" / "pcsx2_textures_v22" / "SLUS-21351" / "replacements"
+DEFAULT_OUT_DIR = _REPO_ROOT / "build" / "pcsx2_textures_v25" / "SLUS-21351" / "replacements"
+DEFAULT_FAITHFUL_OUT_DIR = _REPO_ROOT / "build" / "pcsx2_textures_v22" / "SLUS-21351" / "replacements"
+RELIEF_MODE_CHOICES: Tuple[str, ...] = tr3d.RELIEF_MODES
 DISTRICT_CHOICES: Tuple[str, ...] = ("rosewood", "downtown", "camden", "highway99", "all")
 DXGI_FORMAT_BC7_UNORM = 98
 DENYLIST_ARCHIVE_TOKENS: Tuple[str, ...] = (
@@ -182,6 +184,18 @@ def enhance_faithful_rgba(
     return np.dstack([out_rgb, up_a]), mat, alpha_mode
 
 
+def enhance_texture_rgba(
+    rgba_u8: np.ndarray, *, name: str, archive: str = "", scale: int = 4, small_scale: int = 8,
+    max_size: int = 1024, relief_mode: str = "sculpted",
+) -> Tuple[np.ndarray, str, str]:
+    """Dispatch texture enhancement between v2.2 faithful mode and v2.5 sculpted 3D relief mode."""
+    if relief_mode == "faithful":
+        return enhance_faithful_rgba(rgba_u8, name=name, archive=archive, scale=scale, small_scale=small_scale, max_size=max_size)
+    if relief_mode == "sculpted":
+        return tr3d.sculpt_texture_relief_rgba(rgba_u8, name=name, archive=archive, scale=scale, small_scale=small_scale, max_size=max_size)
+    raise ValueError(f"Unsupported relief_mode: {relief_mode!r}")
+
+
 def build_bc7_dds_header(width: int, height: int, mip_count: int) -> bytes:
     """Build exact 148-byte DDS + DDS_HEADER_DXT10 header for DXGI_FORMAT_BC7_UNORM (98)."""
     flags = 0x81007 | (0x20000 if mip_count > 1 else 0)
@@ -271,9 +285,11 @@ def build_texture_pack(
     *, iso_path: Path, out_dir: Path, district: str = "all", include_global: bool = True,
     include_cars: bool = True, scale: int = 4, small_scale: int = 8, max_size: int = 1024,
     emit_mip1_tails: bool = True, supplement_dumps: Optional[Path] = None,
-    batch_size: int = 384, threads: int = 0,
+    batch_size: int = 384, threads: int = 0, relief_mode: str = "sculpted",
 ) -> Dict[str, Any]:
-    """Build a faithful 4x/8x BC7 DDS replacement pack offline from the untouched PS2 ISO."""
+    """Build a 4x/8x BC7 DDS replacement pack (faithful v2.2 or sculpted 3D v2.5) offline from PS2 ISO."""
+    if relief_mode not in RELIEF_MODE_CHOICES:
+        raise ValueError(f"Unsupported relief_mode: {relief_mode!r}")
     t0 = time.perf_counter()
     encoder_bin = imtt.find_rockport_dds() or imtt.build_rockport_dds(release=True)
     arc = PS2NFSMWArchive(iso_path)
@@ -286,7 +302,10 @@ def build_texture_pack(
     files_written, bytes_written, unique_tex = 0, 0, 0
 
     def _enhance_one(j: Tuple[List[Tuple[str, int]], np.ndarray, str, str, str]) -> Tuple[List[Tuple[str, int]], np.ndarray, str, str, str]:
-        enh, mat, amode = enhance_faithful_rgba(j[1], name=j[2], archive=j[3], scale=scale, small_scale=small_scale, max_size=max_size)
+        enh, mat, amode = enhance_texture_rgba(
+            j[1], name=j[2], archive=j[3], scale=scale, small_scale=small_scale,
+            max_size=max_size, relief_mode=relief_mode,
+        )
         return j[0], enh, mat, amode, j[4]
 
     def _flush(pool: concurrent.futures.ThreadPoolExecutor) -> None:
@@ -376,7 +395,8 @@ def build_texture_pack(
         _flush(pool)
 
     manifest = {
-        "schema_version": "2.2", "district": district, "include_global": include_global, "include_cars": include_cars,
+        "schema_version": "2.5" if relief_mode == "sculpted" else "2.2",
+        "relief_mode": relief_mode, "district": district, "include_global": include_global, "include_cars": include_cars,
         "scale": scale, "small_scale": small_scale, "max_size": max_size, "dxgi_format": DXGI_FORMAT_BC7_UNORM,
         "sections_matched": sections_matched, "unique_textures_enhanced": unique_tex, "dds_files_written": files_written,
         "total_dds_bytes": bytes_written, "total_dds_mb": round(bytes_written / (1024 * 1024), 2),
@@ -390,9 +410,10 @@ def build_texture_pack(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Build faithful 4x/8x BC7 DDS PCSX2 texture packs offline from PS2 ISO.")
-    ap.add_argument("--iso", type=Path, default=None); ap.add_argument("--out", type=Path, default=DEFAULT_OUT_DIR)
+    ap = argparse.ArgumentParser(description="Build 4x/8x BC7 DDS PCSX2 texture packs (v2.2 faithful or v2.5 sculpted 3D) offline from PS2 ISO.")
+    ap.add_argument("--iso", type=Path, default=None); ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--district", choices=DISTRICT_CHOICES, default="all")
+    ap.add_argument("--relief-mode", choices=RELIEF_MODE_CHOICES, default="sculpted")
     ap.add_argument("--include-global", action="store_true"); ap.add_argument("--include-cars", action="store_true")
     ap.add_argument("--scale", type=int, default=4, choices=(2, 4, 8)); ap.add_argument("--small-scale", type=int, default=8, choices=(4, 8))
     ap.add_argument("--max-size", type=int, default=1024); ap.add_argument("--no-sub-mips", action="store_true")
@@ -403,13 +424,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if iso_path is None or not iso_path.is_file():
         print("ERROR: PS2 NFSMW ISO not found (pass --iso or set NFSMW_ISO).", file=sys.stderr)
         return 1
+    out_dir = args.out.expanduser().resolve() if args.out else (DEFAULT_OUT_DIR if args.relief_mode == "sculpted" else DEFAULT_FAITHFUL_OUT_DIR)
     m = build_texture_pack(
-        iso_path=iso_path, out_dir=args.out.expanduser().resolve(), district=args.district,
+        iso_path=iso_path, out_dir=out_dir, district=args.district,
         include_global=args.include_global, include_cars=args.include_cars, scale=args.scale,
         small_scale=args.small_scale, max_size=args.max_size, emit_mip1_tails=not args.no_sub_mips,
-        supplement_dumps=args.supplement_dumps.expanduser().resolve() if args.supplement_dumps else None, threads=args.threads,
+        supplement_dumps=args.supplement_dumps.expanduser().resolve() if args.supplement_dumps else None,
+        threads=args.threads, relief_mode=args.relief_mode,
     )
-    print(json.dumps(m, indent=2) if args.json else f"Built v2.2 ({m['district']}): {m['dds_files_written']} BC7 DDS ({m['total_dds_mb']} MB) in {m['elapsed_seconds']}s")
+    ver = "v2.5" if args.relief_mode == "sculpted" else "v2.2"
+    print(json.dumps(m, indent=2) if args.json else f"Built {ver} ({m['district']}, {m['relief_mode']}): {m['dds_files_written']} BC7 DDS ({m['total_dds_mb']} MB) in {m['elapsed_seconds']}s")
     return 0
 
 
