@@ -9,10 +9,10 @@ ISO ?= $(HOME)/Documents/PS2Games/Need for Speed - Most Wanted - Black Edition.i
 PROFILE ?= rockport2026_v0.5
 PYTHON ?= python3
 
-.PHONY: help status profiles verify test lint audit inspect zdir vlt lighting audio geometry tpk-extract build build-v0.2 build-v0.3 build-v0.4 build-v0.5 enhance-world pine-drive video-qa setup-pcsx2 cc0-search hud-pack build-dds caves decomp-bridge metal-showcase metal-rt live-verify
+.PHONY: help status profiles verify test lint audit inspect zdir vlt lighting audio geometry tpk-extract build build-v0.2 build-v0.3 build-v0.4 build-v0.5 enhance-world pine-drive video-qa export-world metal-rt-world setup-pcsx2 cc0-search hud-pack build-dds caves decomp-bridge metal-showcase metal-rt live-verify
 
 help:
-	@echo "NFSMW: Rockport 2026 — Open-Source PS2 + Native Metal RT Suite (v0.5.0)"
+	@echo "NFSMW: Rockport 2026 — Open-Source PS2 + Native Metal 4 RT Rockport City Suite (v0.6.0)"
 	@echo ""
 	@echo "Targets:"
 	@echo "  make status         - Show ISO, modded builds, PCSX2 profile, and tool readiness"
@@ -31,11 +31,13 @@ help:
 	@echo "  make enhance-world  - Enhance live PCSX2 world dumps to 4x BC7 DDS (preserving 0x80 alpha)"
 	@echo "  make pine-drive     - Probe live PCSX2 PINE IPC RAM telemetry (slot 28011)"
 	@echo "  make video-qa       - Show native AVFoundation MP4 video QA pipeline usage"
+	@echo "  make export-world   - Export authentic Rosewood + Downtown .rkpt v1 worlds from source ISO"
+	@echo "  make metal-rt-world - Build & launch native Metal 4 RT + MetalFX driving in real Rosewood"
 	@echo "  make build-dds      - Compile native arm64 Rust BC7 encoder & build mipmapped DDS pack"
 	@echo "  make caves          - Verify MIPS R5900 code caves & emit .pnach"
 	@echo "  make decomp-bridge  - Generate C++20/Metal headers from VLT + lighting recipes"
 	@echo "  make metal-showcase - Launch interactive native Apple Silicon Metal 2026 PBR showcase"
-	@echo "  make metal-rt       - Launch interactive native Apple Silicon Metal RT showcase"
+	@echo "  make metal-rt       - Launch interactive native Apple Silicon Metal 4 RT showcase"
 	@echo "  make live-verify    - Boot-verify v0.5 ISO live in PCSX2 v2.6.3 Metal"
 	@echo "  make setup-pcsx2    - Install 4K Metal 60fps per-game PCSX2 settings (macOS)"
 	@echo "  make cc0-search     - Search Poly Haven CC0 asphalt/road textures"
@@ -103,6 +105,12 @@ pine-drive:
 
 video-qa:
 	$(PYTHON) tools/video_qa_pipeline.py --help
+
+export-world:
+	$(PYTHON) tools/rockport_cli.py export-world --district all --iso "$(ISO)" --out-dir build/rockport_world
+
+metal-rt-world:
+	$(PYTHON) tools/rockport_cli.py metal-rt --world build/rockport_world/rosewood.rkpt --denoise metalfx --hud --preset golden_hour --camera-mode chase
 
 build-dds:
 	$(PYTHON) tools/rockport_cli.py build-dds --size 2048

@@ -27,6 +27,7 @@ struct RTInstanceMeta {
     var flags: UInt32
     var modelMatrix: simd_float4x4
     var invTransposeMatrix: simd_float4x4
+    var prevModelMatrix: simd_float4x4
 }
 
 struct RTMaterial {
@@ -274,7 +275,7 @@ enum RTSceneBuilder {
                 skyHorizon: SIMD3<Float>(0.58, 0.36, 0.18),
                 skyGround: SIMD3<Float>(0.025, 0.024, 0.026),
                 iblIntensity: 1.12,
-                wetness: 0.68,
+                wetness: 0.60,
                 fogDensity: 0.0068,
                 exposure: 1.06,
                 bloomThreshold: 1.65,
@@ -308,25 +309,25 @@ enum RTSceneBuilder {
             ),
             "daylight": RTLightingPreset(
                 key: "daylight",
-                name: "Rockport 2005 Overcast Autumn Industrial Daylight",
-                sunDirection: simd_normalize(SIMD3<Float>(0.38, 0.52, 0.76)),
-                sunColor: SIMD3<Float>(1.00, 0.96, 0.90),
-                sunIntensity: 4.5,
-                sunConeRadius: 0.032,
-                coronaColor: SIMD3<Float>(0.58, 0.66, 0.74),
-                skyZenith: SIMD3<Float>(0.12, 0.20, 0.32),
-                skyHorizon: SIMD3<Float>(0.48, 0.54, 0.60),
+                name: "Rockport 2005 Crisp Autumn Daylight",
+                sunDirection: simd_normalize(SIMD3<Float>(0.38, 0.54, 0.75)),
+                sunColor: SIMD3<Float>(1.04, 0.98, 0.91),
+                sunIntensity: 5.0,
+                sunConeRadius: 0.028,
+                coronaColor: SIMD3<Float>(0.62, 0.76, 0.92),
+                skyZenith: SIMD3<Float>(0.075, 0.20, 0.48),
+                skyHorizon: SIMD3<Float>(0.48, 0.62, 0.78),
                 skyGround: SIMD3<Float>(0.04, 0.042, 0.045),
-                iblIntensity: 1.22,
-                wetness: 0.52,
-                fogDensity: 0.0054,
-                exposure: 1.02,
-                bloomThreshold: 1.70,
-                bloomIntensity: 0.18,
-                headlightsOn: 0.70,
+                iblIntensity: 1.28,
+                wetness: 0.14,
+                fogDensity: 0.0042,
+                exposure: 1.04,
+                bloomThreshold: 1.75,
+                bloomIntensity: 0.16,
+                headlightsOn: 0.55,
                 neonTint: SIMD3<Float>(1.0, 0.72, 0.38),
-                neonIntensity: 0.35,
-                cloudCoverage: 0.74
+                neonIntensity: 0.22,
+                cloudCoverage: 0.42
             )
         ]
     }
@@ -1181,12 +1182,50 @@ enum RTSceneBuilder {
         }
     }
 
+    private static func appendM3WheelWellAndIntakeBackings(
+        meshes: inout [RTBLASMesh],
+        vertices: inout [RTVertex],
+        indices: inout [UInt32],
+        triMaterials: inout [UInt32]
+    ) {
+        let vOff = vertices.count
+        let iOff = indices.count
+        let tOff = triMaterials.count
+
+        // Dark matte inner wheel-well arch liners tucked inside outer widebody fenders (x=+-0.91) so +12 deg steered front wheels never expose hollow gaps
+        // Front liners cover z=[1.28..1.82], x=[+-0.52..+-0.76], y=[0.25..0.59] (strictly tucked above lower splitter & inside fenders — zero splinter!)
+        appendBox(center: SIMD3<Float>(-0.64, 0.42,  1.55), halfExtents: SIMD3<Float>(0.12, 0.17, 0.27), matID: .matteTrim,
+                  vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+        appendBox(center: SIMD3<Float>( 0.64, 0.42,  1.55), halfExtents: SIMD3<Float>(0.12, 0.17, 0.27), matID: .matteTrim,
+                  vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+        // Rear inner wheel-well liners
+        appendBox(center: SIMD3<Float>(-0.63, 0.36, -1.130), halfExtents: SIMD3<Float>(0.11, 0.24, 0.32), matID: .matteTrim,
+                  vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+        appendBox(center: SIMD3<Float>( 0.63, 0.36, -1.130), halfExtents: SIMD3<Float>(0.11, 0.24, 0.32), matID: .matteTrim,
+                  vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+        // Dark matte radiator / honeycomb backing plate recessed strictly behind curved front bumper openings (zero corner poke-through!)
+        appendBox(center: SIMD3<Float>(0.0, 0.28, 2.00), halfExtents: SIMD3<Float>(0.56, 0.11, 0.03), matID: .matteTrim,
+                  vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+        // Dark underbody floor pan sealing lower chassis gap
+        appendBox(center: SIMD3<Float>(0.0, 0.17, 0.22), halfExtents: SIMD3<Float>(0.66, 0.03, 1.82), matID: .matteTrim,
+                  vertices: &vertices, indices: &indices, triMaterials: &triMaterials, vOffsetBase: vOff)
+
+        meshes.append(RTBLASMesh(
+            name: "M3_InnerWheelWellsAndRadiatorBacking",
+            vertexOffset: vOff, vertexCount: vertices.count - vOff,
+            indexOffset: iOff, triOffset: tOff, triangleCount: triMaterials.count - tOff,
+            isTransparent: false, flags: 0, modelMatrix: matrix_identity_float4x4,
+            role: .carBody, pivotCenter: .zero, sharedBlasIndex: nil
+        ))
+    }
+
     static func buildScene(
         device: MTLDevice,
         commandQueue: MTLCommandQueue,
         scenePath: String?,
         carKey: String = "m3_gtr",
-        forceSynthetic: Bool
+        forceSynthetic: Bool,
+        skipProceduralWorld: Bool = false
     ) throws -> RTScenePackage {
         var vertices: [RTVertex] = []
         var indices: [UInt32] = []
@@ -1335,6 +1374,9 @@ enum RTSceneBuilder {
                     )
                     if mesh.triangleCount > 0 { meshes.append(mesh) }
                 }
+                if profile == .m3_gtr {
+                    appendM3WheelWellAndIntakeBackings(meshes: &meshes, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+                }
             } else if fm.fileExists(atPath: "build/obj_preview/cars_bmwm3gtre46_geometry_bin__BMWM3GTRE46_KIT00_BODY_B.obj") {
                 sourceLabel = "build/obj_preview"
                 let bodyURL = URL(fileURLWithPath: "build/obj_preview/cars_bmwm3gtre46_geometry_bin__BMWM3GTRE46_KIT00_BODY_B.obj")
@@ -1398,7 +1440,9 @@ enum RTSceneBuilder {
             appendSyntheticCar(meshes: &meshes, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
         }
 
-        appendRockportCoastalHighway(meshes: &meshes, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+        if !skipProceduralWorld {
+            appendRockportCoastalHighway(meshes: &meshes, vertices: &vertices, indices: &indices, triMaterials: &triMaterials)
+        }
 
         guard let vBuf = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<RTVertex>.stride, options: .storageModeShared),
               let iBuf = device.makeBuffer(bytes: indices, length: indices.count * MemoryLayout<UInt32>.stride, options: .storageModeShared),

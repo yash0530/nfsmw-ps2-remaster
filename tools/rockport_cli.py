@@ -168,6 +168,7 @@ def collect_tool_readiness(repo_root: Path) -> Dict[str, Any]:
     metal_pbr_bin = repo_root / "build" / "metal_wave3" / "RockportMetalPBR"
     metal_rt_bin = repo_root / "build" / "metal_rt_wave3" / "RockportMetalRT"
     metal_rt_wave4_bin = repo_root / "build" / "metal_rt_wave4" / "RockportMetalRT"
+    metal_rt_v06_bin = repo_root / "build" / "metal_rt_v06" / "RockportMetalRT"
     key_driver_bin = repo_root / "build" / "flywheel" / "key_driver"
 
     models_dir = repo_root / "models"
@@ -184,8 +185,9 @@ def collect_tool_readiness(repo_root: Path) -> Dict[str, Any]:
         "dds_and_media_clis": cli_bins,
         "rockport_dds_built": rockport_dds_bin.is_file(),
         "metal_pbr_built": metal_pbr_bin.is_file(),
-        "metal_rt_built": metal_rt_bin.is_file() or metal_rt_wave4_bin.is_file(),
+        "metal_rt_built": metal_rt_bin.is_file() or metal_rt_wave4_bin.is_file() or metal_rt_v06_bin.is_file(),
         "metal_rt_wave4_built": metal_rt_wave4_bin.is_file(),
+        "metal_rt_v06_built": metal_rt_v06_bin.is_file(),
         "key_driver_built": key_driver_bin.is_file(),
         "dds_encoder_ready": rockport_dds_bin.is_file() or cli_bins.get("cargo", False) or any(
             cli_bins[k] for k in ("dds_tool", "kram", "cuttlefish", "texconv", "compressonatorcli", "nvcompress")
@@ -1653,10 +1655,44 @@ def build_parser() -> argparse.ArgumentParser:
     p_metal.add_argument("--width", type=int, default=1920)
     p_metal.add_argument("--height", type=int, default=1080)
 
-    # metal-rt (Native M5 Pro Metal 4 Hardware Ray Tracing renderer)
+    # export-world (Streamed Rockport City .rkpt v1 world extractor)
+    p_xw = sub.add_parser(
+        "export-world",
+        help="Export authentic PS2 NFSMW Rockport City districts (TRACKS\\L2RA.BUN + STREAML2RA.BUN) to .rkpt v1",
+    )
+    p_xw.add_argument(
+        "--iso",
+        type=Path,
+        default=Path(os.environ.get("ROCKPORT_SOURCE_ISO", str(DEFAULT_SOURCE_ISO))),
+        help="Path to untouched SLUS-21351 ISO (opened strictly read-only)",
+    )
+    p_xw.add_argument(
+        "--district",
+        choices=("rosewood", "downtown", "all"),
+        default="rosewood",
+        help="Rockport City district to export (default: rosewood)",
+    )
+    p_xw.add_argument(
+        "--out",
+        "--out-dir",
+        dest="out_dir",
+        type=Path,
+        default=REPO_ROOT / "build" / "rockport_world",
+        help="Output directory inside gitignored build/ (default: build/rockport_world)",
+    )
+    p_xw.add_argument(
+        "--no-enhance-textures",
+        action="store_true",
+        help="Disable detail-preserving world texture enhancement and emit native PS2 resolutions",
+    )
+    p_xw.add_argument("--no-layout", action="store_true", help="Skip rendering <district>_layout_check.png")
+    p_xw.add_argument("--json", action="store_true", help="Print JSON manifest to stdout")
+    p_xw.add_argument("extra_args", nargs=argparse.REMAINDER, help="Additional arguments forwarded to export_rockport_world.py")
+
+    # metal-rt (Native Apple Silicon Metal 4 Hardware Ray Tracing + MetalFX Rockport City engine)
     p_rt = sub.add_parser(
         "metal-rt",
-        help="Build & run native Apple Silicon Metal 4 Hardware Ray Tracing showcase (RTR, RTAO, RTGI, soft shadows)",
+        help="Build & run native Apple Silicon Metal 4 Hardware Ray Tracing + MetalFX engine (real Rockport City or garage)",
     )
     p_rt.add_argument(
         "--iso",
@@ -1664,14 +1700,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(os.environ.get("ROCKPORT_SOURCE_ISO", str(DEFAULT_SOURCE_ISO))),
         help="Path to untouched SLUS-21351 ISO if scene needs exporting",
     )
+    p_rt.add_argument("--world", type=Path, default=None, help="Path to exported Rockport City .rkpt archive (e.g. build/rockport_world/rosewood.rkpt)")
+    p_rt.add_argument("--car", choices=("m3_gtr", "carrera_gt", "gallardo"), default=None, help="Hero car selection (m3_gtr, carrera_gt, gallardo)")
+    p_rt.add_argument("--scene", type=Path, default=None, help="Optional explicit car scene.json or scene directory")
+    p_rt.add_argument("--config", type=Path, default=None, help="Optional lookdev JSON config path")
     p_rt.add_argument("--synthetic", action="store_true", help="Use synthetic GT coupe geometry (no ISO needed)")
     p_rt.add_argument("--headless", action="store_true", help="Render offscreen PNG instead of interactive window")
     p_rt.add_argument("--preset", choices=("golden_hour", "night_neon", "daylight"), default="golden_hour")
+    p_rt.add_argument("--denoise", choices=("metalfx", "svgf", "off"), default=None, help="Denoiser mode: metalfx (MXU neural), svgf, or off")
+    p_rt.add_argument("--camera-mode", choices=("chase", "hero", "street", "overhead"), default=None, help="Camera mode: chase, hero, street, or overhead")
+    p_rt.add_argument("--drive-bench", type=int, default=None, help="Run N-frame headless driving benchmark across real Rockport City")
+    p_rt.add_argument("--drive-demo", action="store_true", help="Enable headless driving pose")
+    p_rt.add_argument("--speed-kmh", type=float, default=None, help="Driving demo speed in km/h")
+    p_rt.add_argument("--steer-deg", type=float, default=None, help="Driving demo steering angle in degrees")
+    p_rt.add_argument("--hud", action="store_true", help="Enable digital motorsport HUD overlay")
     p_rt.add_argument("--spp", type=int, default=32, help="Samples per pixel for headless RT accumulation (default: 32)")
-    p_rt.add_argument("--out", type=Path, default=REPO_ROOT / "build" / "metal_rt_wave3" / "rt_showcase.png")
+    p_rt.add_argument("--out", type=Path, default=REPO_ROOT / "build" / "metal_rt_v06" / "rt_showcase.png")
     p_rt.add_argument("--compare-out", type=Path, default=None, help="Optional split RT-Off vs RT-On PNG path")
     p_rt.add_argument("--width", type=int, default=1920)
     p_rt.add_argument("--height", type=int, default=1080)
+    p_rt.add_argument("extra_args", nargs=argparse.REMAINDER, help="Additional arguments forwarded to RockportMetalRT")
 
     # build-dds (Native arm64 Rust BC7 DDS compiler & 4K pack)
     p_dds = sub.add_parser(
@@ -1950,11 +1998,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             run_cmd_list.extend(["--headless", "--width", str(args.width), "--height", str(args.height), "--out", str(args.out)])
         return subprocess.run(run_cmd_list, cwd=str(REPO_ROOT)).returncode
 
+    if args.command == "export-world":
+        cmd = [
+            sys.executable,
+            str(TOOLS_DIR / "export_rockport_world.py"),
+            "--district",
+            args.district,
+            "--iso",
+            str(args.iso),
+            "--out-dir",
+            str(args.out_dir),
+        ]
+        if args.no_enhance_textures:
+            cmd.append("--no-enhance-textures")
+        if args.no_layout:
+            cmd.append("--no-layout")
+        if args.json:
+            cmd.append("--json")
+        extra = list(args.extra_args or [])
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        cmd.extend(extra)
+        return subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
+
     if args.command == "metal-rt":
-        out_dir = REPO_ROOT / "build" / "metal_rt_wave3"
+        out_dir = REPO_ROOT / "build" / "metal_rt_v06"
         scene_dir = REPO_ROOT / "build" / "metal_wave3" / ("scene_synth" if args.synthetic else "scene")
         scene_json = scene_dir / "scene.json"
-        if not scene_json.is_file():
+        hq_scene_json = REPO_ROOT / "build" / "flywheel" / "hq_m3_gtr" / "scene.json"
+        if args.scene is None and args.world is None and not hq_scene_json.is_file() and not scene_json.is_file():
             exp_cmd = [sys.executable, str(TOOLS_DIR / "export_pbr_scene.py"), "--out", str(scene_dir)]
             if args.synthetic or not args.iso.is_file():
                 exp_cmd.append("--synthetic")
@@ -1967,10 +2039,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if mk.returncode != 0:
             return mk.returncode
         run_cmd_list = [str(out_dir / "RockportMetalRT"), "--preset", args.preset]
-        if scene_json.is_file() and not args.synthetic:
+        if args.world is not None:
+            run_cmd_list.extend(["--world", str(args.world)])
+        if args.car is not None:
+            run_cmd_list.extend(["--car", args.car])
+        if args.scene is not None:
+            run_cmd_list.extend(["--scene", str(args.scene)])
+        elif args.world is None and not args.synthetic and not hq_scene_json.is_file() and scene_json.is_file():
             run_cmd_list.extend(["--scene", str(scene_json)])
+        if args.config is not None:
+            run_cmd_list.extend(["--config", str(args.config)])
         if args.synthetic:
             run_cmd_list.append("--synthetic")
+        if args.denoise is not None:
+            run_cmd_list.extend(["--denoise", args.denoise])
+        if args.camera_mode is not None:
+            run_cmd_list.extend(["--camera-mode", args.camera_mode])
+        if args.drive_bench is not None:
+            run_cmd_list.extend(["--drive-bench", str(args.drive_bench)])
+        if args.drive_demo:
+            run_cmd_list.append("--drive-demo")
+        if args.speed_kmh is not None:
+            run_cmd_list.extend(["--speed-kmh", str(args.speed_kmh)])
+        if args.steer_deg is not None:
+            run_cmd_list.extend(["--steer-deg", str(args.steer_deg)])
+        if args.hud:
+            run_cmd_list.append("--hud")
         if args.headless:
             run_cmd_list.extend([
                 "--headless", "--spp", str(args.spp),
@@ -1979,6 +2073,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ])
             if args.compare_out is not None:
                 run_cmd_list.extend(["--compare-out", str(args.compare_out)])
+        extra = list(args.extra_args or [])
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        run_cmd_list.extend(extra)
         return subprocess.run(run_cmd_list, cwd=str(REPO_ROOT)).returncode
 
     if args.command == "build-dds":

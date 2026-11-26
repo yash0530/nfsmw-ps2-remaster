@@ -23,13 +23,13 @@ final class RTShowcaseMTKView: MTKView {
         lastDrag = pt
         r.camera.azimuthDeg -= dx * 0.35
         r.camera.elevationDeg = max(2.0, min(65.0, r.camera.elevationDeg - dy * 0.25))
-        r.resetAccumulation()
+        if r.denoiseMode == .off { r.resetAccumulation() }
     }
 
     override func scrollWheel(with event: NSEvent) {
         guard let r = rendererRef else { return }
-        r.camera.distance = max(2.4, min(14.0, r.camera.distance - Float(event.scrollingDeltaY) * 0.12))
-        r.resetAccumulation()
+        r.camera.distance = max(2.4, min(40.0, r.camera.distance - Float(event.scrollingDeltaY) * 0.18))
+        if r.denoiseMode == .off { r.resetAccumulation() }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -48,16 +48,7 @@ final class RTShowcaseMTKView: MTKView {
         case "a": r.steerLeftHeld = true
         case "d": r.steerRightHeld = true
         case "c":
-            r.chaseCamEnabled.toggle()
-            if r.chaseCamEnabled {
-                r.camera.azimuthDeg = 180.0
-                r.camera.elevationDeg = 7.8
-                r.camera.distance = 4.65
-                r.camera.fovDeg = 46.0
-            } else {
-                r.camera.reset()
-            }
-            r.resetAccumulation()
+            r.applyCameraMode(r.cameraMode.next())
         case "1":
             r.activePresetKey = "golden_hour"
         case "2":
@@ -67,7 +58,7 @@ final class RTShowcaseMTKView: MTKView {
         case "t":
             r.rtEnabled.toggle()
         case "n":
-            r.denoiserEnabled.toggle()
+            r.denoiseMode = r.denoiseMode.next()
         case "l":
             r.liveryEnabled.toggle()
         case "h":
@@ -86,8 +77,15 @@ final class RTShowcaseMTKView: MTKView {
             r.carYawRad = 0.0
             r.carRollRad = 0.0
             r.carPitchRad = 0.0
-            r.chaseCamEnabled = false
-            r.camera.reset()
+            if let w = r.world {
+                r.carWorldPosition = w.spawnPos
+                r.carHeadingRad = w.spawnYawRad
+                r.snapCarToWorldRoad()
+            } else {
+                r.carWorldPosition = .zero
+                r.carHeadingRad = 0.0
+            }
+            r.applyCameraMode(.hero)
             try? r.rebuildTLAS(commandBuffer: nil)
             r.resetAccumulation()
         case "p":
@@ -137,7 +135,8 @@ final class RTAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "NFSMW: Rockport 2026 — \(renderer.scene.carProfile.displayName) — Metal 4 RT (\(renderer.device.name))"
+        let worldTag = renderer.world != nil ? " [Rockport City]" : ""
+        window.title = "NFSMW: Rockport 2026 — \(renderer.scene.carProfile.displayName)\(worldTag) — Metal RT (\(renderer.device.name))"
         window.delegate = self
 
         mtkView = RTShowcaseMTKView(frame: rect, device: renderer.device)
@@ -148,11 +147,12 @@ final class RTAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mtkView.rendererRef = renderer
         mtkView.onCarChanged = { [weak self] profile in
             guard let self else { return }
-            self.window.title = "NFSMW: Rockport 2026 — \(profile.displayName) — Metal 4 RT (\(self.renderer.device.name))"
+            let wTag = self.renderer.world != nil ? " [Rockport City]" : ""
+            self.window.title = "NFSMW: Rockport 2026 — \(profile.displayName)\(wTag) — Metal RT (\(self.renderer.device.name))"
         }
         mtkView.onScreenshotRequested = { [weak self] in
             guard let self else { return }
-            let outURL = URL(fileURLWithPath: "build/metal_rt_wave5/interactive_rt_\(self.renderer.scene.carProfile.rawValue)_\(self.renderer.activePresetKey).png")
+            let outURL = URL(fileURLWithPath: "build/metal_rt_v06/interactive_rt_\(self.renderer.scene.carProfile.rawValue)_\(self.renderer.activePresetKey).png")
             do {
                 try self.renderer.renderHeadless(width: 1920, height: 1080, spp: 64, splitCompare: false, outURL: outURL)
                 print("Saved 64-SPP RT PNG -> \(outURL.path)")
@@ -175,10 +175,12 @@ final class RTAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct RTCLIOptions {
     var headless = false
     var scenePath: String? = nil
+    var worldPath: String? = nil
     var carKey: String = "m3_gtr"
     var configPath: String? = nil
     var synthetic = false
     var driveDemo = false
+    var driveBenchFrames: Int? = nil
     var hud: Bool? = nil
     var speedKmh: Float = 145.0
     var steerDeg: Float = 12.0
@@ -190,7 +192,9 @@ struct RTCLIOptions {
     var preset = "golden_hour"
     var livery = true
     var rtEnabled = true
+    var denoiseMode: RTDenoiseMode? = nil
     var denoiserEnabled = true
+    var cameraMode: RTCameraMode? = nil
     var azimuth: Float? = nil
     var elevation: Float? = nil
     var distance: Float? = nil
@@ -217,23 +221,39 @@ func parseRTArgs() -> RTCLIOptions {
             opts.synthetic = true
         case "--drive-demo":
             opts.driveDemo = true
+        case "--drive-bench":
+            if let v = nextVal(), let n = Int(v) {
+                opts.driveBenchFrames = max(1, n)
+                opts.headless = true
+            }
         case "--hud":
             opts.hud = true
         case "--no-hud":
             opts.hud = false
         case "--car":
             if let v = nextVal() { opts.carKey = v }
+        case "--world":
+            if let v = nextVal() { opts.worldPath = v }
+        case "--denoise":
+            if let v = nextVal() {
+                let m = RTDenoiseMode.parse(v)
+                opts.denoiseMode = m
+                opts.denoiserEnabled = (m != .off)
+            }
+        case "--camera-mode":
+            if let v = nextVal() { opts.cameraMode = RTCameraMode.parse(v) }
         case "--no-livery":
             opts.livery = false
         case "--no-rt":
             opts.rtEnabled = false
         case "--no-denoise":
             opts.denoiserEnabled = false
+            opts.denoiseMode = .off
         case "--scene":
             if let v = nextVal() { opts.scenePath = v }
         case "--config":
             if let v = nextVal() { opts.configPath = v }
-        case "--out":
+        case "--out", "--output":
             if let v = nextVal() { opts.outPath = v }
         case "--compare-out":
             if let v = nextVal() { opts.compareOutPath = v }
@@ -259,13 +279,13 @@ func parseRTArgs() -> RTCLIOptions {
             if let v = nextVal(), let f = Float(v) { opts.fov = f }
         case "--help", "-h":
             print("""
-            RockportMetalRT — NFSMW: Rockport 2026 Apple Silicon Metal 4 Hardware Ray Tracing Engine
+            RockportMetalRT — NFSMW: Rockport 2026 Apple Silicon Hardware Ray Tracing + MetalFX Engine
             Usage:
-              RockportMetalRT --headless [--car m3_gtr|carrera_gt|gallardo] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--hud] [--out <png>] [--compare-out <png>]
-              RockportMetalRT [--car m3_gtr|carrera_gt|gallardo] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour] [--hud]
+              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--denoise metalfx|svgf|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 30] [--hud] [--out|--output <png>] [--compare-out <png>]
+              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo] [--preset golden_hour] [--denoise metalfx|svgf|off] [--camera-mode chase|hero|street|overhead] [--hud]
             Interactive Controls:
-              W/S: Throttle/Brake | A/D: Steer | C: Chase/Orbit Cam | Mouse Drag: Orbit | Scroll: Zoom
-              G: Cycle Garage Car | H: Toggle Digital HUD | 1/2/3: Presets | T: Toggle RT | N: Toggle Denoiser | L: Toggle Livery | R: Reset | P: Save 64-SPP PNG | Q/Esc: Quit
+              W/S: Throttle/Brake | A/D: Steer | C: Cycle Camera (Hero/Chase/Street/Overhead) | Mouse Drag: Orbit | Scroll: Zoom
+              G: Cycle Garage Car | H: Toggle Digital HUD | 1/2/3: Presets | T: Toggle RT | N: Cycle Denoiser (MetalFX/SVGF/Off) | L: Toggle Livery | R: Reset | P: Save 64-SPP PNG | Q/Esc: Quit
             """)
             exit(0)
         default:
@@ -291,20 +311,38 @@ guard let queue = device.makeCommandQueue() else {
 }
 
 do {
+    var worldPkg: RTWorldPackage? = nil
+    if let wPath = opts.worldPath {
+        let wURL = URL(fileURLWithPath: wPath)
+        let tW = CFAbsoluteTimeGetCurrent()
+        let pkg = try RTWorldLoader.load(url: wURL, device: device, commandQueue: queue)
+        let dtW = (CFAbsoluteTimeGetCurrent() - tW) * 1000.0
+        print(String(format: "Loaded RKPT world %@ | sections=%d | meshes=%d | instances=%d | materials=%d | textures=%d | worldTris=%d (%.1f ms)",
+                     wURL.lastPathComponent, pkg.sections.count, pkg.meshes.count, pkg.instances.count,
+                     pkg.materials.count, pkg.textures.count, pkg.totalTriangles, dtW))
+        worldPkg = pkg
+    }
+
     let scene = try RTSceneBuilder.buildScene(
         device: device,
         commandQueue: queue,
         scenePath: opts.scenePath,
         carKey: opts.carKey,
-        forceSynthetic: opts.synthetic
+        forceSynthetic: opts.synthetic,
+        skipProceduralWorld: (worldPkg != nil)
     )
     let metalURL = URL(fileURLWithPath: "native_metal_rt/RayTracing.metal")
-    let renderer = try RTRenderer(device: device, scene: scene, metalFileURL: metalURL)
+    let renderer = try RTRenderer(device: device, commandQueue: queue, scene: scene, world: worldPkg, metalFileURL: metalURL)
     renderer.forceSyntheticMode = opts.synthetic
     renderer.activePresetKey = opts.preset
     renderer.liveryEnabled = opts.livery
     renderer.rtEnabled = opts.rtEnabled
-    renderer.denoiserEnabled = opts.denoiserEnabled
+    if let dm = opts.denoiseMode {
+        renderer.denoiseMode = dm
+    } else {
+        renderer.denoiseMode = .metalfx
+        renderer.denoiserEnabled = opts.denoiserEnabled
+    }
     renderer.hudEnabled = opts.hud ?? false
 
     if let cfgPath = opts.configPath {
@@ -317,25 +355,52 @@ do {
         renderer.configureDrivePose(speedKmh: opts.speedKmh, steerDeg: opts.steerDeg, useChaseCam: true)
     }
 
+    if let cm = opts.cameraMode {
+        renderer.applyCameraMode(cm)
+    }
+
     if let az = opts.azimuth { renderer.camera.azimuthDeg = az }
     if let el = opts.elevation { renderer.camera.elevationDeg = el }
     if let dist = opts.distance { renderer.camera.distance = dist }
     if let fov = opts.fov { renderer.camera.fovDeg = fov }
 
-    if opts.headless {
+    let totalTris = scene.totalTriangles + (worldPkg?.totalTriangles ?? 0)
+    let totalBlas = scene.meshes.count + (worldPkg?.blasList.count ?? 0)
+
+    if let benchFrames = opts.driveBenchFrames {
         let outURL = URL(fileURLWithPath: opts.outPath)
+        if opts.hud == nil { renderer.hudEnabled = true }
+        let (avgMs, fps) = try renderer.runDriveBenchmark(frames: benchFrames, width: opts.width, height: opts.height, outURL: outURL)
+        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | blas=%d | tris=%d | denoise=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
+                     device.name, renderer.compiledMSLVersion, scene.carProfile.rawValue,
+                     worldPkg?.url.lastPathComponent ?? "procedural",
+                     totalBlas, totalTris, renderer.effectiveDenoiseLabel,
+                     benchFrames, avgMs, fps, outURL.path))
+    } else if opts.headless {
+        let outURL = URL(fileURLWithPath: opts.outPath)
+        let forceTemporal = (opts.denoiseMode == .metalfx)
+        let denoiseTag: String
+        if !renderer.denoiserEnabled {
+            denoiseTag = "off"
+        } else if forceTemporal {
+            denoiseTag = renderer.effectiveDenoiseLabel
+        } else {
+            denoiseTag = "atrous4"
+        }
         let t0 = CFAbsoluteTimeGetCurrent()
         try renderer.renderHeadless(
             width: opts.width,
             height: opts.height,
             spp: opts.spp,
             splitCompare: false,
-            outURL: outURL
+            outURL: outURL,
+            forceTemporalDenoise: forceTemporal
         )
         let dt = CFAbsoluteTimeGetCurrent() - t0
-        print(String(format: "Metal RT GPU=%@ | supportsRaytracing=true | car=%@ | source=%@ | blas=%d | tris=%d | denoise=%@ | hud=%@ | %dx%d @ %d spp -> %@ (%.2fs)",
-                     device.name, scene.carProfile.rawValue, scene.sourceLabel, scene.meshes.count, scene.totalTriangles,
-                     renderer.denoiserEnabled ? "atrous4" : "off",
+        print(String(format: "Metal RT GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | source=%@ | world=%@ | blas=%d | tris=%d | denoise=%@ | hud=%@ | %dx%d @ %d spp -> %@ (%.2fs)",
+                     device.name, renderer.compiledMSLVersion, scene.carProfile.rawValue, scene.sourceLabel,
+                     worldPkg?.url.lastPathComponent ?? "procedural",
+                     totalBlas, totalTris, denoiseTag,
                      renderer.hudEnabled ? "on" : "off",
                      opts.width, opts.height, opts.spp, outURL.path, dt))
 
@@ -347,10 +412,11 @@ do {
                 height: opts.height,
                 spp: opts.spp,
                 splitCompare: true,
-                outURL: cmpURL
+                outURL: cmpURL,
+                forceTemporalDenoise: false
             )
             let dt2 = CFAbsoluteTimeGetCurrent() - t1
-            print(String(format: "Metal RT Split Compare (Left: Raster Baseline / Right: M5 Pro Hardware RT + Denoiser) -> %@ (%.2fs)",
+            print(String(format: "Metal RT Split Compare (Left: Raster Baseline / Right: Apple Silicon Hardware RT + Denoiser) -> %@ (%.2fs)",
                          cmpURL.path, dt2))
         }
     } else {

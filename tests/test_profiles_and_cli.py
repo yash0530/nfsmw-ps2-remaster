@@ -879,6 +879,87 @@ class TestV05ProfilesAndWave45Cli(unittest.TestCase):
         self.assertEqual(recorded[5][2], "analyze")
         self.assertIn("frame_01.png", recorded[5])
 
+    def test_v06_export_world_and_metal_rt_cli_dispatch(self) -> None:
+        recorded: List[List[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            recorded.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with mock.patch("rockport_cli.subprocess.run", side_effect=fake_run):
+            rc_xw = rockport_cli.main(
+                [
+                    "export-world",
+                    "--iso",
+                    "stock.iso",
+                    "--district",
+                    "all",
+                    "--out",
+                    "build/rockport_world",
+                    "--no-enhance-textures",
+                    "--json",
+                ]
+            )
+            rc_rt = rockport_cli.main(
+                [
+                    "metal-rt",
+                    "--world",
+                    "build/rockport_world/rosewood.rkpt",
+                    "--car",
+                    "m3_gtr",
+                    "--preset",
+                    "golden_hour",
+                    "--denoise",
+                    "metalfx",
+                    "--camera-mode",
+                    "chase",
+                    "--drive-bench",
+                    "30",
+                    "--hud",
+                    "--headless",
+                    "--out",
+                    "build/rockport_world/bench.png",
+                ]
+            )
+
+        self.assertEqual((rc_xw, rc_rt), (0, 0))
+        self.assertEqual(len(recorded), 3)
+
+        # 1. export-world -> export_rockport_world.py
+        self.assertEqual(Path(recorded[0][1]).name, "export_rockport_world.py")
+        self.assertIn("--district", recorded[0])
+        self.assertIn("all", recorded[0])
+        self.assertIn("--out-dir", recorded[0])
+        self.assertIn("build/rockport_world", recorded[0])
+        self.assertIn("--no-enhance-textures", recorded[0])
+        self.assertIn("--json", recorded[0])
+
+        # 2. metal-rt builds native_metal_rt into build/metal_rt_v06
+        self.assertEqual(recorded[1][0], "make")
+        self.assertTrue(any("OUT_DIR=" in a and "metal_rt_v06" in a for a in recorded[1]))
+
+        # 3. metal-rt launches RockportMetalRT with all v0.6 flags
+        self.assertEqual(Path(recorded[2][0]).name, "RockportMetalRT")
+        for tok in (
+            "--world",
+            "build/rockport_world/rosewood.rkpt",
+            "--car",
+            "m3_gtr",
+            "--preset",
+            "golden_hour",
+            "--denoise",
+            "metalfx",
+            "--camera-mode",
+            "chase",
+            "--drive-bench",
+            "30",
+            "--hud",
+            "--headless",
+            "--out",
+            "build/rockport_world/bench.png",
+        ):
+            self.assertIn(tok, recorded[2])
+
 
 if __name__ == "__main__":
     unittest.main()

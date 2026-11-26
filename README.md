@@ -1,4 +1,4 @@
-# NFSMW: Rockport 2026 — Open-Source PS2 Remaster & Modding Suite
+# NFSMW: Rockport 2026 — Open-Source PS2 Remaster & Native Metal 4 RT Suite
 
 > **Transforming *Need for Speed: Most Wanted – Black Edition* (2005, PS2 `SLUS-21351`) for modern 4K/5K hardware on PCSX2 & Apple Silicon — built 100% open-source, clean-room, and non-destructive.**
 
@@ -13,11 +13,29 @@
 
 Almost all *Need for Speed: Most Wanted (2005)* modding tools (`NFS-VltEd`, `OGVI`, `NFS-CarToolkit`, `Extra Options`) target the **Windows PC** version and fail on PlayStation 2 archives. Even PCSX2's official patch database for **Black Edition (`SLUS-21351`)** ships only visual toggles.
 
-**NFSMW: Rockport 2026 (`v0.5.0`)** is a dual-track open-source remaster & modding suite combining **live-QA-verified PS2 / PCSX2 v2.6.3 hardware remastering (`8.9 / 10`, `0 P0`, `0 P1`)** with a **native Apple Silicon Metal PBR & Hardware Ray Tracing renderer**:
+**NFSMW: Rockport 2026 (`v0.6.0`)** is a dual-track open-source remaster & modding suite combining:
+- **Track 1 (`v0.5.0`, `8.9 / 10` Live Video QA PASS)**: Full-stack PS2 ISO + PCSX2 v2.6.3 4K/60fps Metal remastering (84-car VU1 fleet, planar wet road reflections, 293-edit Forza Ultra lighting, 4× detail-preserving world BC7 textures, PINE RAM autopilot, and 4-panel MP4 video QA).
+- **Track 2 (`v0.6.0`, `8.7 / 10` Visual QA PASS)**: **Real Hardware-Ray-Traced Rockport City** on native Apple Silicon **Metal 4 / MSL 4.0** — streaming authentic Rosewood & Downtown PS2 city geometry (`TRACKS\L2RA.BUN` + `TRACKS\STREAML2RA.BUN`) into hardware BVH + **`MTLFXTemporalDenoisedScaler` MXU neural denoising** at **`52.9–57.0 FPS` (`~17.7–18.9 ms/frame`) @ `1920×1080` live driving**!
 
-### Verified `v0.5.0` Live 4-Panel Adversarial Video QA Scorecard (`iter_17`)
+---
 
-Every `v0.5.0` release candidate is captured end-to-end as a 60 FPS H.264 MP4 + 4K F8 snapshots (`2992×1683`) driven by our **20 Hz PINE IPC RAM-telemetry autopilot**, then audited independently across 4 specialist QA axes ([`docs/research/VIDEO_QA_RUBRIC.md`](docs/research/VIDEO_QA_RUBRIC.md)):
+## Verified `v0.6.0` Track 2 — Real Hardware-Ray-Traced Rockport City (`8.7 / 10`, `0 P0`)
+
+- **Streaming Binary World Extractor ([`tools/export_rockport_world.py`](tools/export_rockport_world.py))**:
+  - Reads `TRACKS\L2RA.BUN` + `TRACKS\STREAML2RA.BUN` strictly read-only (`'rb'`) from the user's PS2 ISO and packs compact memory-mapped `.rkpt` v1 city archives into gitignored `build/rockport_world/`:
+    - **`rosewood.rkpt`**: `96.59 MiB` | `25` streamed sections | `2,575` world instances | `339/339` authentic world textures resolved
+    - **`downtown.rkpt`**: `109.59 MiB` | `28` streamed sections | `3,498` world instances | `345/345` authentic world textures resolved
+  - Automatically filters **`855` Free-Roam-invisible neon chevron race barriers**, applies **`4×`/`8×` detail-preserving world texture enhancement**, and solves verified bidirectional boulevard spawns (`120m` forward / `40m` rear sightlines).
+- **Native Apple Silicon Metal 4 / MSL 4.0 + Hardware MXU MetalFX Neural Denoiser ([`native_metal_rt/`](native_metal_rt/))**:
+  - **`MTLFXTemporalDenoisedScaler`** (`[MetalFX] UBFNet/dBFNet fused-MXU path ACTIVE`) sustains **`52.9–57.0 FPS` (`~17.7–18.9 ms/frame`) at `1920×1080`** live Rosewood driving on Apple M5 Pro.
+  - **8-ray GPU BVH road/wall driving physics**, **bindless `MTLHeap` + `MTLResidencySet`** texture residency, grazing-angle 4-tap anisotropic world sampling, perceptual sRGB ACES filmic grading, night-rain glowing storefronts/streetlamps/twin projector headlights/raindrop ripples, plus pure vulcanized tires and crystal-clear glass headlights on authentic UV-mapped PS2 hero cars (`m3_gtr`, `carrera_gt`, `gallardo`).
+  - **Honest Visual QA Progression (`renders_v5`)**: **`5.9 → 6.9 → 8.2 → 8.7 / 10` (`0 P0`)** — clears the `>= 8.5 / 10` `v0.6.0` release gate (noting the minor M3 trunk plate cove surround & P2 polish backlog tracked for `v0.6.1`).
+
+---
+
+## Verified `v0.5.0` Track 1 — PS2 ISO + PCSX2 v2.6.3 Remaster (`8.9 / 10`, `0 P0`, `0 P1`)
+
+Every PS2 release candidate is captured end-to-end as a 60 FPS H.264 MP4 + 4K F8 snapshots (`2992×1683`) driven by our **20 Hz PINE IPC RAM-telemetry autopilot**, then audited independently across 4 specialist QA axes ([`docs/research/VIDEO_QA_RUBRIC.md`](docs/research/VIDEO_QA_RUBRIC.md)):
 
 | Adversarial QA Axis | Verified `v0.5.0` Score | Key Verified Proof (`iter_17`, 68.05s @ 59.95 fps) |
 | :--- | :---: | :--- |
@@ -27,42 +45,19 @@ Every `v0.5.0` release candidate is captured end-to-end as a 60 FPS H.264 MP4 + 
 | **QA-4: PINE Autopilot, Reverse, NOS & Video Health** | **`8.6 / 10`** (`0 P0`, `0 P1`) | `808.11 m` open-boulevard drive, `105.1 mph` peak, `647/647` live RPM/Gear/NOS ticks (`0.389 ms` read), `64` NOS-engaged ticks, clean `17.8 mph` `R` reverse, `4` unique traffic dodges, `0` health flags |
 | **Overall Release Gate (`>= 8.5 / 10`, `0 P0`, `0 P1`)** | **`8.9 / 10` — `RELEASE PASS`** | All 4 independent axes clear `>= 8.5 / 10` with `0 P0` blockers and `0 P1` majors |
 
----
-
-### Track 1 — PS2 ISO + PCSX2 v2.6.3 Max-Ceiling Remaster Toolchain
-
-1. **One-Command Modded ISO Builder & 9 Curated Profiles (`tools/rockport_cli.py`, `tools/build_modded_iso.py`)**
-   - Reads your clean `SLUS-21351` ISO strictly read-only (`'rb'`) and clones a separate bootable ISO via APFS copy-on-write with SHA-256 verification before & after.
-   - Dual-syncs `GLOBAL\GLOBALMEMORYFILE.BIN` Entry `[1]` (`ATTRIBUTES.BIN`) **and** Entry `[2]` (`GLOBALB.LZC` JDLZ v2), updates duplicated `ZDIR.BIN` rows, recomputes EA `bCalculateCrc32` checksums (`1,294 / 1,294` retail entries verified), and appends to `ZZDATA3.BIN` with ISO9660/PVD sizing.
-   - **Flagship & Preset Build Profiles (`patches/profiles/`):**
-     - `rockport2026_v0.5` *(Flagship — `8.9/10` Verified)* — All **9** flagship ELF patches (including `always_wet_road_reflections` & `high_detail_reflection_scenery`), 5 VLT recipes (`forza_hero_camera`, `modern_handling_tuning`, `full_roster_handling`, `pursuit_and_traffic`, `forza_ultra_look`), **`293`-edit `rockport2026_forza_ultra` lighting**, plus optional Wave-5 ZZDATA overrides for the wheel-safe **84-car VU1 fleet** (`2.83M` tris) & **4 tuned `Gnsu` v20 engine synths**.
-     - `rockport2026_v0.5_forza_autumn` — Alternate warm golden-hour autumn preset (`91` lighting edits).
-     - `rockport2026_v0.4`, `rockport2026_v0.3`, `rockport2026_golden_hour`, `rockport2026_purist_hd`, `rockport2026_ultrawide_21_9`, `rockport2026_sandbox`, `rockport2026_v0.2`.
-2. **Wheel-Safe 84-Car VU1 `.vutext` Geometry Compiler (`tools/geometry_compiler.py`, `tools/subdivide_car_mesh.py`, `tools/upgrade_car_fleet.py`)**
-   - Exact inverse of `tools/geometry_inspect.py` with **GF(2) VU1 `RINIT`/`RNEXT` 23-bit LFSR seed solver**, exact VU1 AABB/strip verification (`151,729` strips, `0` bad tags/overshoots), and crease-aware PN-triangle subdivision across **84 cars / 968 solids (`708K → 2.83M` triangles)** while safely excluding `GLOBALMEMORYFILE`-cached `BRAKES`, `WHEELS`, `SPOILER*`, and `ROOF` parts.
-3. **21 Binary-Verified MIPS Engine Patches (`patches/elf_patches.json`, `tools/elf_disasm.py`)**
-   - Native 16:9 / 21:9 / FOV, Brown Filter removal, bloom-preserving Motion Blur fix, High-LOD Cars & Wheels, 5-Face Car Reflections, ~3× Scenery Draw Distance, `UpdateAllScreenEFX` (`1/30f → 1/60f`) true 60 FPS pacing, plus Wave-5 **`always_wet_road_reflections`** (planar wet asphalt reflections) and **`high_detail_reflection_scenery`** (`2.67×` reflection draw distance).
-4. **Detail-Preserving 4× World Texture Enhancer & Native `arm64` Rust BC7 Encoder (`tools/enhance_world_dumps.py`, `tools/dds_encoder_rs/`)**
-   - Enhances dumped PCSX2 world textures (`170` BC7 `DXGI_FORMAT_BC7_UNORM` DDS in `world_enhanced_v2`: Rosewood road strips up to `512×2048`/`2048×2048`, masonry, sidewalks, foliage) while **preserving exact PS2 GS `0x80` alpha**, protecting UI/HUD/fonts/signage/car liveries with `0` leaks, and keeping `DumpReplaceableTextures = false` by default in generated per-game INIs.
-5. **PINE IPC Live RAM-Telemetry Autopilot & Native AVFoundation Video QA (`tools/pcsx2_pine_driver.py`, `tools/video_qa_pipeline.py`, `tools/race_flywheel.py`)**
-   - Closed-loop 20 Hz PINE IPC reader/driver (`0.389 ms` mean latency, disassembly-verified `PVehicle` `IEngine 0x1B4` / `ITransmission 0x1BC` / `NOS_ENGAGED 0x180`, `WRoadNav` lane tracking, obstacle avoidance, NOS bursts, and open-road reverse) paired with native macOS AVFoundation H.264 MP4 extraction, Pillow media validation, contact sheets, and exposure/motion telemetry.
-6. **SPU-ADPCM / `Gnsu` / `ABKC` Audio Modder, MIPS Code Caves & `ps2sdk` Template (`tools/audio_patcher.py`, `tools/mips_cave_builder.py`, `src/ps2_mod/`)**
-   - Pure-Python Sony SPU-ADPCM codec, `Gnsu` v20 hero engine synth tuning, verified zero-overlap MIPS R5900 code caves, and `ps2dev/ps2sdk` C plugin scaffold.
-
-### Track 2 — Native Apple Silicon Metal PBR, Hardware Ray Tracing & Decomp Bridge
-
-7. **Native Apple Silicon Metal 3.1 Hardware Ray Tracing Garage (`native_metal_rt/`)**
-   - Pure Swift + Metal 3.1 (`RockportMetalRT`) building GPU BLAS/TLAS acceleration structures (`metal::raytracing::intersector<triangle_data, instancing>`) with authentic UV-mapped 3-car extracted PS2 meshes (BMW M3 GTR, Carrera GT, Gallardo), clearcoat metallic paint, soft area shadows, RTR wet-asphalt reflections, and 1-bounce RTGI.
-   - **Honest Current State (`v0.5.0`)**: Builds cleanly on **Metal 3.1** using **offline progressive 64-SPP accumulation** on a **synthetic Rockport viaduct** scene (not yet real streamed city geometry or real-time 60 FPS driving denoising). See **`v0.6.0` Frontier Pivot** in [`docs/ROADMAP.md`](docs/ROADMAP.md) for the next leap to real `STREAML2RA.BUN` Rockport City geometry + real-time temporal/SVGF or MetalFX denoising.
-8. **Native Metal 2026 PBR Showcase & Decomp Bridge (`native_metal/`, `tools/decomp_bridge.py`)**
-   - Real-time 120Hz Cook-Torrance GGX + dual-lobe clearcoat showcase (`RockportMetalPBR`) plus C++20/Metal header codegen targeting `dbalatoni13/nfsmw` (CC0) and `SpeedBreakerProject/speedbreaker`.
+### Track 1 Core Capabilities
+1. **One-Command Modded ISO Builder & 9 Curated Profiles (`tools/rockport_cli.py`, `tools/build_modded_iso.py`)**: APFS copy-on-write clone of untouched `SLUS-21351` ISO with SHA-256 verification before/after, dual-synced `GLOBALMEMORYFILE.BIN` (`ATTRIBUTES.BIN` + `GLOBALB.LZC` JDLZ v2), `ZDIR.BIN` duplicate sync + `bCalculateCrc32` (`1,294 / 1,294` verified), and `ZZDATA3.BIN` append + ISO9660/PVD sizing. Flagship profile `rockport2026_v0.5` bundles all 9 flagship ELF patches, 5 VLT recipes, `293`-edit `forza_ultra` lighting, and 88 optional Wave-5 overrides (`84` wheel-safe cars + `4` `Gnsu` synths).
+2. **Wheel-Safe 84-Car VU1 `.vutext` Geometry Compiler (`tools/geometry_compiler.py`, `tools/upgrade_car_fleet.py`)**: GF(2) VU1 `RINIT`/`RNEXT` 23-bit LFSR seed solver, `151,729` verified strips (`0` bad tags/overshoots), `708K → 2.83M` triangles across 84 cars / 968 solids while excluding `GLOBALMEMORYFILE`-cached `BRAKES`, `WHEELS`, `SPOILER*`, and `ROOF`.
+3. **21 Binary-Verified MIPS Engine Patches (`patches/elf_patches.json`)**: Native 16:9 / 21:9, Brown Filter & smear removal, High-LOD cars, 5-face reflections, ~3× scenery draw distance, `UpdateAllScreenEFX` 60 FPS pacing, plus **`always_wet_road_reflections`** & **`high_detail_reflection_scenery`** (`2.67×`).
+4. **Detail-Preserving 4× World Texture Enhancer & Native `arm64` Rust BC7 Encoder (`tools/enhance_world_dumps.py`, `tools/dds_encoder_rs/`)**: Preserves exact PS2 GS `0x80` alpha, `0` UI/icon/sign/livery leaks, `DumpReplaceableTextures = false` by default in generated per-game INIs.
+5. **PINE IPC Autopilot, Native AVFoundation MP4 Video QA & Decomp Bridge (`tools/pcsx2_pine_driver.py`, `tools/video_qa_pipeline.py`, `tools/decomp_bridge.py`)**: Live RAM telemetry (`0.389 ms`), automated MP4 QA sheets/metrics, plus C++20/Metal header codegen targeting `dbalatoni13/nfsmw` (CC0) & `SpeedBreakerProject/speedbreaker`.
 
 ---
 
 ## Legal & "Bring Your Own ISO" Policy
 
 **This repository contains ZERO copyrighted Electronic Arts or Sony files.**
-- No `.iso`, `.bin`, `.bun`, `.elf`, BIOS, audio banks, `.obj` meshes, or original game textures are hosted here.
+- No `.iso`, `.bin`, `.bun`, `.elf`, `.rkpt`, BIOS, audio banks, `.obj` meshes, or original game textures are hosted here.
 - Automated CI (`tools/audit_repo_clean.py`) checks every commit so zero prohibited binaries, oversized files, or hardcoded personal paths enter Git.
 - See [ASSETS_LICENSE.md](ASSETS_LICENSE.md) for our strict CC0 / SIL OFL / MIT policy.
 
@@ -77,7 +72,27 @@ python3 tools/rockport_cli.py profiles
 python3 tools/rockport_cli.py verify
 ```
 
-### 2. One-Command Flagship `v0.5.0` Build + PCSX2 4K Metal 60 FPS Install
+### 2. Real Hardware-Ray-Traced Rockport City (`v0.6.0` — Native Metal 4 + MetalFX)
+```bash
+# Export authentic Rosewood & Downtown Rockport City (.rkpt v1) read-only from your clean PS2 ISO
+python3 tools/rockport_cli.py export-world --district all \
+  --iso "/path/to/Need for Speed - Most Wanted - Black Edition.iso" \
+  --out build/rockport_world
+
+# Launch interactive 1080p real-time Metal 4 RT + MetalFX MXU neural driving in Rosewood
+python3 tools/rockport_cli.py metal-rt \
+  --world build/rockport_world/rosewood.rkpt \
+  --car m3_gtr --preset golden_hour --denoise metalfx --camera-mode chase --hud
+
+# Or run a headless 30-frame 1080p driving benchmark
+python3 tools/rockport_cli.py metal-rt --headless \
+  --world build/rockport_world/rosewood.rkpt \
+  --car m3_gtr --preset golden_hour --denoise metalfx --camera-mode chase \
+  --drive-bench 30 --hud --out build/rockport_world/rosewood_drive_bench.png
+```
+*(Or simply `make export-world ISO="/path/to/iso"` followed by `make metal-rt-world`.)*
+
+### 3. One-Command Flagship PS2 ISO Build + PCSX2 4K Metal 60 FPS Install (`v0.5.0`)
 ```bash
 python3 tools/rockport_cli.py build \
   --profile rockport2026_v0.5 \
@@ -85,30 +100,15 @@ python3 tools/rockport_cli.py build \
   --install-pcsx2 \
   --renderer metal --upscale 6 --anisotropy 16 --ee-cycle-rate 2
 ```
-*(Or simply `make build-v0.5 ISO="/path/to/iso"`. Alternate presets: `rockport2026_v0.5_forza_autumn`, `rockport2026_purist_hd`, `rockport2026_ultrawide_21_9`, `rockport2026_sandbox`.)*
+*(Or `make build-v0.5 ISO="/path/to/iso"`. Optional Wave-5 extras: `python3 tools/rockport_cli.py upgrade-fleet --iso "/path/to/iso"` and `python3 tools/rockport_cli.py enhance-world --scale 4 --max-size 2048`.)*
 
-### 3. Wave-5 World Texture Enhancement, PINE Autopilot & Video QA
+### 4. PINE Telemetry Autopilot, Video QA & Decomp Bridge
 ```bash
-# Build optional 84-car wheel-safe VU1 fleet + 4 Gnsu audio synths locally into build/geom_wave5_full/
-python3 tools/rockport_cli.py upgrade-fleet --iso "/path/to/iso"
-
-# Enhance live PCSX2 world dumps to 4x BC7 DDS (preserving exact PS2 GS 0x80 alpha)
-python3 tools/rockport_cli.py enhance-world --scale 4 --max-size 2048
-
-# Probe live PCSX2 PINE RAM telemetry (slot 28011) or run closed-loop autopilot
+# Probe live PCSX2 PINE RAM telemetry (slot 28011)
 python3 tools/rockport_cli.py pine-drive probe --slot 28011 -- --json
 
 # Extract Pillow-validated QA frames, timeline contact sheets & telemetry from a capture MP4
 python3 tools/rockport_cli.py video-qa extract-qa -- path/to/session_video.mp4 --out-dir build/qa_out
-```
-
-### 4. Native Apple Silicon Metal Showcase, RT Garage & Decomp Bridge
-```bash
-# Launch native Metal 3.1 RT 3-car garage (offline 64-SPP accumulation on synthetic viaduct)
-python3 tools/rockport_cli.py metal-rt --preset golden_hour
-
-# Launch interactive 120Hz Metal PBR showcase
-python3 tools/rockport_cli.py metal-showcase --preset golden_hour
 
 # Export C++20 & Metal headers for dbalatoni13/nfsmw decomp & SpeedBreaker
 python3 tools/rockport_cli.py decomp-bridge --json
@@ -123,10 +123,10 @@ nfsmw-ps2-remaster/
 ├── .github/workflows/ci.yml                       # Automated Python 3.11/3.12 CI & hygiene checks
 ├── assets_cc0/                                    # 100% CC0/OFL audio, livery, & material rules
 ├── docs/
-│   ├── ROADMAP.md                                 # Completed v0.1–v0.5 milestones & v0.6.0 Frontier Pivot
+│   ├── ROADMAP.md                                 # Completed v0.1–v0.6.0 milestones & v0.6.1/v0.7+ plan
 │   └── research/                                  # Clean-room engineering specs & VIDEO_QA_RUBRIC.md
 ├── native_metal/                                  # Native Apple Silicon Swift + Metal PBR showcase
-├── native_metal_rt/                               # Native Metal 3.1 RT 3-car garage (BLAS/TLAS, 64-SPP)
+├── native_metal_rt/                               # Native Metal 4 / MSL 4.0 RT + MetalFX Rockport City engine
 ├── patches/
 │   ├── elf_caves.json                             # Verified SLUS_213.51 MIPS R5900 code caves
 │   ├── elf_patches.json                           # 21 binary-verified MIPS patches (incl. wet reflections)
@@ -137,7 +137,7 @@ nfsmw-ps2-remaster/
 ├── shaders/                                       # rockport2026_ssgi.slang & rockport2026_aces_grade.glsl
 ├── src/ps2_mod/                                   # Reproducible ps2dev/ps2sdk C plugin blueprint
 ├── tests/                                         # Automated unit & integration test suites
-├── tools/                                         # Pure-Python CLI suite + tools/dds_encoder_rs (Rust BC7)
+├── tools/                                         # Pure-Python CLI suite (incl. export_rockport_world.py) + Rust BC7
 ├── ASSETS_LICENSE.md
 ├── LICENSE
 └── Makefile

@@ -11,6 +11,7 @@ BIN = $(OUT_DIR)/RockportMetalRT
 METALLIB = $(OUT_DIR)/RockportMetalRT.metallib
 
 SWIFT_SRCS = \
+	RTWorldLoader.swift \
 	RTSceneBuilder.swift \
 	RTRenderer.swift \
 	main.swift
@@ -18,6 +19,7 @@ SWIFT_SRCS = \
 FRAMEWORKS = \
 	-framework Metal \
 	-framework MetalKit \
+	-framework MetalFX \
 	-framework AppKit \
 	-framework CoreGraphics \
 	-framework ImageIO \

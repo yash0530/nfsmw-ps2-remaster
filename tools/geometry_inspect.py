@@ -75,6 +75,19 @@ def _skip_11_padding(data: bytes, pos: int, end: int) -> int:
     return pos
 
 
+def _skip_11_word_padding(data: bytes, pos: int, end: int, max_pad: int = 12) -> int:
+    """Skip leading 4-byte EA bChunk 0x11111111 alignment words (0, 4, 8, or 12 bytes).
+
+    Safe for 0x00134011 (eSolid), 0x00134012 (TexTable), and 0x00134013 (MatTable)
+    inside world streaming sections, without risking false skips on single 0x11 hash bytes.
+    """
+    skipped = 0
+    while skipped < max_pad and pos + 4 <= end and data[pos : pos + 4] == b"\x11\x11\x11\x11":
+        pos += 4
+        skipped += 4
+    return pos
+
+
 def _vu_rnext(r: int) -> int:
     """Advance PS2 VU1 23-bit LFSR R register (RNEXT instruction)."""
     new_bit = ((r >> 4) ^ (r >> 22)) & 1
@@ -371,22 +384,25 @@ def _parse_solid_chunk(
         cid, csz = struct.unpack_from("<II", data, p)
         pay_off = p + 8
         pay_end = min(end, pay_off + csz)
-        if cid == CHUNK_ESOLID_HDR and pay_off + 0xA0 <= pay_end:
-            ver, _esw, flags, name_hash, hdr_polys, _hv, num_bones, num_tex, num_mat, num_markers = (
-                struct.unpack_from("<BBHIhhbbbb", data, pay_off + 0x0C)
-            )
-            aabb_min = [round(x, 6) for x in struct.unpack_from("<3f", data, pay_off + 0x20)]
-            aabb_max = [round(x, 6) for x in struct.unpack_from("<3f", data, pay_off + 0x30)]
-            if pay_off + 0xA0 <= pay_end:
-                volume, density = struct.unpack_from("<2f", data, pay_off + 0x98)
-            raw_name = data[pay_off + 0xA0 : pay_end].split(b"\x00", 1)[0]
-            name = raw_name.decode("ascii", errors="replace") or name
+        if cid == CHUNK_ESOLID_HDR:
+            hdr_off = _skip_11_word_padding(data, pay_off, pay_end)
+            if hdr_off + 0xA0 <= pay_end:
+                ver, _esw, flags, name_hash, hdr_polys, _hv, num_bones, num_tex, num_mat, num_markers = (
+                    struct.unpack_from("<BBHIhhbbbb", data, hdr_off + 0x0C)
+                )
+                aabb_min = [round(x, 6) for x in struct.unpack_from("<3f", data, hdr_off + 0x20)]
+                aabb_max = [round(x, 6) for x in struct.unpack_from("<3f", data, hdr_off + 0x30)]
+                volume, density = struct.unpack_from("<2f", data, hdr_off + 0x98)
+                raw_name = data[hdr_off + 0xA0 : pay_end].split(b"\x00", 1)[0]
+                name = raw_name.decode("ascii", errors="replace") or name
         elif cid == CHUNK_TEX_TABLE:
-            for q in range(pay_off, pay_end - 7, 8):
+            to = _skip_11_word_padding(data, pay_off, pay_end)
+            for q in range(to, pay_end - 7, 8):
                 th = struct.unpack_from("<I", data, q)[0]
                 tex_hashes.append(f"0x{th:08x}")
         elif cid == CHUNK_MAT_TABLE:
-            for q in range(pay_off, pay_end - 7, 8):
+            mo = _skip_11_word_padding(data, pay_off, pay_end)
+            for q in range(mo, pay_end - 7, 8):
                 mh = struct.unpack_from("<I", data, q)[0]
                 mat_hashes.append(f"0x{mh:08x}")
         elif cid == CHUNK_MESH_CONT:

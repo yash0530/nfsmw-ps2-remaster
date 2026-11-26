@@ -39,6 +39,13 @@ constant uint MAT_CAR_MISC_TRIM    = 29u;
 constant uint MAT_CAR_MISC_CHROME  = 30u;
 constant uint MAT_CAR_MISC_METAL   = 31u;
 
+constant uint TLAS_MASK_CAR          = 0x01u;
+constant uint TLAS_MASK_WORLD_OPAQUE = 0x02u;
+constant uint TLAS_MASK_ROAD         = 0x04u;
+constant uint TLAS_MASK_WALL         = 0x08u;
+constant uint TLAS_MASK_GLASS        = 0x10u;
+constant uint TLAS_MASK_SHADOW_ALL   = 0x0Fu;
+
 struct RTVertex {
     packed_float3 position;
     packed_float3 normal;
@@ -47,13 +54,40 @@ struct RTVertex {
     uint materialID;
 };
 
+struct RkptVertex {
+    packed_float3 position;
+    packed_float3 normal;
+    packed_float2 uv;
+    ushort matIndex;
+    uchar vertexAO;
+    uchar flags;
+};
+static_assert(sizeof(RkptVertex) == 36, "RkptVertex must match locked 36-byte .rkpt v1 contract");
+
+struct RkptMaterial {
+    uint diffuseTexIndex;
+    uint surfaceClass;
+    uint flags;
+    float roughnessHint;
+    float metallicHint;
+    float emissiveHint;
+    float bumpStrength;
+    uint tpkNameHash;
+};
+static_assert(sizeof(RkptMaterial) == 32, "RkptMaterial must match locked 32-byte .rkpt v1 contract");
+
+struct BindlessTexEntry {
+    texture2d<float> tex;
+};
+
 struct RTInstanceMeta {
     uint vertexOffset;
     uint indexOffset;
     uint triOffset;
-    uint flags; // bit 0: liveryEnabled, bit 1: isGlass, bit 2: isWorldEnv, bit 3: isScrollableRoad
+    uint flags; // bit0: livery, bit1: glass, bit2: procWorld, bit3: scrollRoad, bit4: rkptWorld, bit5: alphaCutout, bit6: skyPanorama
     float4x4 modelMatrix;
     float4x4 invTransposeMatrix;
+    float4x4 prevModelMatrix;
 };
 
 struct RTMaterial {
@@ -65,6 +99,8 @@ struct RTMaterial {
 
 struct RTFrameUniforms {
     float4x4 invViewProjMatrix;
+    float4x4 currViewProjMatrix;
+    float4x4 prevViewProjMatrix;
     float4 cameraPos;      // xyz, w = fovDeg
     float4 cameraForward;  // xyz, w = aspect
     float4 cameraRight;    // xyz, w = tanHalfFov
@@ -83,6 +119,22 @@ struct RTFrameUniforms {
     float4 carDynParams;   // x = steerRad, y = wheelSpinRad, z = carYawRad, w = carRollRad
     float4 driveParams;    // x = speedKmh, y = steerDeg, z = hasAuthenticCarTex, w = carSupportsLivery
     float4 hudParams;      // x = hudEnabled, y = rpmNorm (0..1), z = gear (0..6), w = carID (0=m3, 1=cgt, 2=gallardo)
+    float4 jitterParams;   // x = jitterX, y = jitterY, z = temporal1sppMode (0/1), w = worldTexCount
+    float4 carWorldPos;    // xyz = carWorldPos, w = hasRkptWorld (0/1)
+};
+
+struct RTPhysicsProbeInput {
+    float4 carPos;         // xyz = carPos, w = yawRad
+    float4 carForward;     // xyz = forward, w = halfTrackX
+    float4 carRight;       // xyz = right, w = frontAxleZ
+    float4 dims;           // x = rearAxleZ, y = wheelRadius, z = bodyHalfWidth, w = bodyHalfLength
+};
+
+struct RTPhysicsProbeOutput {
+    float4 wheelHitY;      // FL, FR, RL, RR world hit Y (-9999 on miss)
+    float4 wallDist;       // front, rear, left, right hit dist (999 on miss)
+    float4 wallNormalFront;// xyz = front wall normal, w = valid
+    float4 wallNormalSide; // xyz = nearest side wall normal, w = sideSign (-1 left, +1 right, 0 none)
 };
 
 // ---------------------------------------------------------------------------
@@ -534,6 +586,585 @@ struct HitSurface {
     float alpha;
 };
 
+struct TraceResult {
+    bool hit;
+    float distance;
+    uint instanceID;
+    uint primitiveID;
+    float2 bary;
+};
+
+static inline bool evaluateAlphaCutoutCandidate(
+    uint instanceID,
+    uint primitiveID,
+    float2 bary,
+    device const RTInstanceMeta* instances,
+    device const RkptVertex* worldVertices,
+    device const uint* worldIndices,
+    device const RkptMaterial* worldMaterials,
+    device const BindlessTexEntry* worldTextures,
+    uint worldTexCount,
+    sampler repeatSamp
+) {
+    RTInstanceMeta inst = instances[instanceID];
+    if ((inst.flags & (1u << 4)) == 0u) return true;
+    uint i0 = worldIndices[inst.indexOffset + primitiveID * 3u + 0u];
+    uint i1 = worldIndices[inst.indexOffset + primitiveID * 3u + 1u];
+    uint i2 = worldIndices[inst.indexOffset + primitiveID * 3u + 2u];
+    RkptVertex v0 = worldVertices[inst.vertexOffset + i0];
+    RkptVertex v1 = worldVertices[inst.vertexOffset + i1];
+    RkptVertex v2 = worldVertices[inst.vertexOffset + i2];
+    RkptMaterial wmat = worldMaterials[v0.matIndex];
+    if (wmat.diffuseTexIndex == 0xFFFFFFFFu || wmat.diffuseTexIndex >= worldTexCount) {
+        return true;
+    }
+    float w0 = 1.0f - bary.x - bary.y;
+    float2 uv = float2(v0.uv) * w0 + float2(v1.uv) * bary.x + float2(v2.uv) * bary.y;
+    float a = worldTextures[wmat.diffuseTexIndex].tex.sample(repeatSamp, uv, level(0.0f)).a;
+    return (a >= 0.48f);
+}
+
+static inline TraceResult traceSceneRay(
+    ray r,
+    instance_acceleration_structure tlas,
+    uint mask,
+    bool hasRkptWorld,
+    device const RTInstanceMeta* instances,
+    device const RkptVertex* worldVertices,
+    device const uint* worldIndices,
+    device const RkptMaterial* worldMaterials,
+    device const BindlessTexEntry* worldTextures,
+    uint worldTexCount,
+    sampler repeatSamp
+) {
+    TraceResult res;
+    res.hit = false;
+    res.distance = r.max_distance;
+    res.instanceID = 0u;
+    res.primitiveID = 0u;
+    res.bary = float2(0.0f);
+
+    if (!hasRkptWorld) {
+        intersector<triangle_data, instancing> rt;
+        rt.assume_geometry_type(geometry_type::triangle);
+        auto h = rt.intersect(r, tlas, mask);
+        if (h.type == intersection_type::triangle) {
+            res.hit = true;
+            res.distance = h.distance;
+            res.instanceID = h.instance_id;
+            res.primitiveID = h.primitive_id;
+            res.bary = h.triangle_barycentric_coord;
+        }
+        return res;
+    }
+
+    intersection_params params;
+    params.assume_geometry_type(geometry_type::triangle);
+    params.force_opacity(forced_opacity::none);
+
+    intersection_query<triangle_data, instancing> iq;
+    iq.reset(r, tlas, mask, params);
+    while (iq.next()) {
+        if (iq.get_candidate_intersection_type() == intersection_type::triangle) {
+            if (evaluateAlphaCutoutCandidate(
+                iq.get_candidate_instance_id(),
+                iq.get_candidate_primitive_id(),
+                iq.get_candidate_triangle_barycentric_coord(),
+                instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+            )) {
+                iq.commit_triangle_intersection();
+            }
+        }
+    }
+    if (iq.get_committed_intersection_type() == intersection_type::triangle) {
+        res.hit = true;
+        res.distance = iq.get_committed_distance();
+        res.instanceID = iq.get_committed_instance_id();
+        res.primitiveID = iq.get_committed_primitive_id();
+        res.bary = iq.get_committed_triangle_barycentric_coord();
+    }
+    return res;
+}
+
+static inline float traceShadowVisibility(
+    ray sr,
+    instance_acceleration_structure tlas,
+    uint mask,
+    bool hasRkptWorld,
+    device const RTInstanceMeta* instances,
+    device const RkptVertex* worldVertices,
+    device const uint* worldIndices,
+    device const RkptMaterial* worldMaterials,
+    device const BindlessTexEntry* worldTextures,
+    uint worldTexCount,
+    sampler repeatSamp
+) {
+    if (!hasRkptWorld) {
+        intersector<triangle_data, instancing> shadowRT;
+        shadowRT.assume_geometry_type(geometry_type::triangle);
+        shadowRT.accept_any_intersection(true);
+        auto sh = shadowRT.intersect(sr, tlas, mask);
+        return (sh.type == intersection_type::none) ? 1.0f : 0.0f;
+    }
+
+    intersection_params params;
+    params.assume_geometry_type(geometry_type::triangle);
+    params.force_opacity(forced_opacity::none);
+    params.accept_any_intersection(true);
+
+    intersection_query<triangle_data, instancing> iq;
+    iq.reset(sr, tlas, mask, params);
+    while (iq.next()) {
+        if (iq.get_candidate_intersection_type() == intersection_type::triangle) {
+            if (evaluateAlphaCutoutCandidate(
+                iq.get_candidate_instance_id(),
+                iq.get_candidate_primitive_id(),
+                iq.get_candidate_triangle_barycentric_coord(),
+                instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+            )) {
+                iq.commit_triangle_intersection();
+                return 0.0f;
+            }
+        }
+    }
+    return (iq.get_committed_intersection_type() == intersection_type::none) ? 1.0f : 0.0f;
+}
+
+// ---------------------------------------------------------------------------
+// World-Space Rockport Puddle Field + Raindrop Ripples + Anisotropic Sampler
+// ---------------------------------------------------------------------------
+
+static inline void evaluateRockportPuddleAndRipples(
+    float2 wp,
+    float worldNY,
+    float wetness,
+    float nightScale,
+    float rainTime,
+    float dist,
+    thread float& outPuddle,
+    thread float& outDamp,
+    thread float3& outRippleN
+) {
+    float upMask = smoothstep(0.58f, 0.90f, worldNY);
+    float2 warp = float2(fbm2D(wp * 0.09f), fbm2D(wp * 0.09f + float2(5.2f, 1.3f)));
+    float puddleField = fbm2D(wp * 0.135f + warp * 1.15f);
+    // Richer rain-soaked puddles in midnight rain so foreground intersections reflect city lights with circular ripples
+    float pThresh = mix(0.84f, (nightScale > 0.55f) ? 0.44f : 0.56f, wetness);
+    // Wide feathered smoothstep (pThresh ± 0.14) eliminates razor-sharp puddle boundaries
+    outPuddle = smoothstep(pThresh - 0.14f, pThresh + 0.14f, puddleField) * upMask;
+    outDamp   = smoothstep(pThresh - 0.36f, pThresh + 0.06f, puddleField) * upMask * wetness;
+    outRippleN = float3(0.0f, 1.0f, 0.0f);
+
+    // Crisp concentric circular raindrop ripple wavelets (0.18-0.55m rings) inside wet night puddles
+    if (outPuddle > 0.18f && wetness > 0.72f && nightScale > 0.55f && dist < 52.0f) {
+        float fade = smoothstep(52.0f, 5.0f, dist) * smoothstep(0.18f, 0.42f, outPuddle);
+        float2 ripGrad = float2(0.0f);
+        for (int layer = 0; layer < 2; ++layer) {
+            float scale = (layer == 0) ? 1.95f : 3.25f;
+            float2 p = wp * scale + float2(float(layer) * 17.3f, float(layer) * 9.1f);
+            float2 cell = floor(p);
+            float2 f = fract(p);
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    float2 nb = cell + float2(float(dx), float(dy));
+                    float3 rnd = hash33(float3(nb, float(layer) * 13.7f + 1.9f));
+                    float2 center = float2(float(dx), float(dy)) + (0.20f + 0.60f * rnd.xy);
+                    float2 diff = f - center;
+                    float r = length(diff);
+                    float cycle = fract(rainTime * (0.75f + 0.45f * rnd.z) + rnd.z * 6.2831f);
+                    float ringR = 0.14f + cycle * 0.80f;
+                    float band = r - ringR;
+                    float env = exp(-band * band * 76.0f) * (1.0f - cycle * 0.80f) * smoothstep(0.94f, 0.06f, r);
+                    float wave = cos(band * 52.0f) * env;
+                    float2 dir = diff / max(r, 0.005f);
+                    ripGrad += dir * wave * ((layer == 0) ? 0.275f : 0.185f);
+                }
+            }
+        }
+        outRippleN = normalize(float3(ripGrad.x * fade, 1.0f, ripGrad.y * fade));
+    }
+}
+
+static inline float4 sampleWorldAnisotropic(
+    texture2d<float> dTex,
+    sampler repeatSamp,
+    float2 uv,
+    float3 rayDir,
+    float3 worldN,
+    float3 p0,
+    float3 p1,
+    float3 p2,
+    float2 uv0,
+    float2 uv1,
+    float2 uv2,
+    float dist,
+    constant RTFrameUniforms& u,
+    thread float& outLod
+) {
+    float3 e1 = p1 - p0;
+    float3 e2 = p2 - p0;
+    float3 triCross = cross(e1, e2);
+    float area2 = max(dot(triCross, triCross), 1e-8f);
+    float3 gradW1 = cross(e2, triCross) / area2;
+    float3 gradW2 = cross(triCross, e1) / area2;
+    float2 duv1 = uv1 - uv0;
+    float2 duv2 = uv2 - uv0;
+
+    float pxWorld = dist * (2.0f * u.cameraRight.w / max(u.rtParams.y, 480.0f));
+    float cosInc = max(abs(dot(worldN, -rayDir)), 0.14f);
+    float aniso = clamp(1.0f / cosInc, 1.0f, 6.0f);
+
+    float3 viewProj = rayDir - worldN * dot(rayDir, worldN);
+    float vpLen = length(viewProj);
+    float3 majorDir = (vpLen > 1e-4f) ? (viewProj / vpLen) : normalize(e1 + float3(1e-5f, 0.0f, 0.0f));
+    float3 minorDir = normalize(cross(worldN, majorDir));
+
+    float2 dUV_major = (duv1 * dot(gradW1, majorDir) + duv2 * dot(gradW2, majorDir)) * (pxWorld * aniso);
+    float2 dUV_minor = (duv1 * dot(gradW1, minorDir) + duv2 * dot(gradW2, minorDir)) * pxWorld;
+
+    float2 texDims = float2(max(float(dTex.get_width()), 16.0f), max(float(dTex.get_height()), 16.0f));
+    float minorTexels = length(dUV_minor * texDims);
+    outLod = clamp(log2(max(minorTexels, 1.0f)), 0.0f, 6.0f);
+
+    float majorLen = length(dUV_major);
+    if (majorLen > 0.16f) {
+        dUV_major *= (0.16f / majorLen);
+    }
+
+    // 4-tap grazing-angle anisotropic filter eliminates PS2 64x512 road-strip corduroy washboard aliasing
+    float4 c0 = dTex.sample(repeatSamp, uv - dUV_major * 0.375f, level(outLod));
+    float4 c1 = dTex.sample(repeatSamp, uv - dUV_major * 0.125f, level(outLod));
+    float4 c2 = dTex.sample(repeatSamp, uv + dUV_major * 0.125f, level(outLod));
+    float4 c3 = dTex.sample(repeatSamp, uv + dUV_major * 0.375f, level(outLod));
+    return (c0 + c1 + c2 + c3) * 0.25f;
+}
+
+static HitSurface resolveWorldSurface(
+    float3 rayOrigin,
+    float3 rayDir,
+    float dist,
+    RTInstanceMeta inst,
+    uint primitiveID,
+    float2 bary,
+    device const RkptVertex* worldVertices,
+    device const uint* worldIndices,
+    device const RkptMaterial* worldMaterials,
+    device const BindlessTexEntry* worldTextures,
+    constant RTFrameUniforms& u,
+    sampler repeatSamp
+) {
+    uint i0 = worldIndices[inst.indexOffset + primitiveID * 3u + 0u];
+    uint i1 = worldIndices[inst.indexOffset + primitiveID * 3u + 1u];
+    uint i2 = worldIndices[inst.indexOffset + primitiveID * 3u + 2u];
+
+    RkptVertex v0 = worldVertices[inst.vertexOffset + i0];
+    RkptVertex v1 = worldVertices[inst.vertexOffset + i1];
+    RkptVertex v2 = worldVertices[inst.vertexOffset + i2];
+
+    float w0 = 1.0f - bary.x - bary.y;
+    float w1 = bary.x;
+    float w2 = bary.y;
+
+    float3 localPos = float3(v0.position) * w0 + float3(v1.position) * w1 + float3(v2.position) * w2;
+    float3 localN = float3(v0.normal) * w0 + float3(v1.normal) * w1 + float3(v2.normal) * w2;
+    float nLen = length(localN);
+    float3 p0 = (inst.modelMatrix * float4(float3(v0.position), 1.0f)).xyz;
+    float3 p1 = (inst.modelMatrix * float4(float3(v1.position), 1.0f)).xyz;
+    float3 p2 = (inst.modelMatrix * float4(float3(v2.position), 1.0f)).xyz;
+    float3 gN = cross(p1 - p0, p2 - p0);
+    float gLen = length(gN);
+    gN = (gLen > 1e-6f) ? (gN / gLen) : float3(0.0f, 1.0f, 0.0f);
+    float3 worldN = (nLen > 1e-5f) ? normalize((inst.invTransposeMatrix * float4(localN / nLen, 0.0f)).xyz) : gN;
+
+    // Double-sided world geometry normal flip (PS2 scenery frequently uses double-sided strips)
+    if (dot(gN, rayDir) > 0.0f) gN = -gN;
+    if (dot(worldN, rayDir) > 0.0f) worldN = -worldN;
+
+    HitSurface s;
+    s.worldPos = rayOrigin + rayDir * dist;
+    s.N = worldN;
+    s.clearcoatN = worldN;
+    s.geomN = gN;
+    s.uv = float2(v0.uv) * w0 + float2(v1.uv) * w1 + float2(v2.uv) * w2;
+    s.modelPos = localPos;
+    s.matID = MAT_URBAN_CONCRETE;
+    s.metallic = 0.0f;
+    s.roughness = 0.72f;
+    s.clearcoat = 0.0f;
+    s.ccRoughness = 0.04f;
+    s.ior = 1.48f;
+    s.emissive = float3(0.0f);
+    s.puddleMask = 0.0f;
+    s.alpha = 1.0f;
+
+    RkptMaterial wmat = worldMaterials[v0.matIndex];
+    uint texCount = uint(max(u.jitterParams.w, 1.0f));
+    float vAO = (float(v0.vertexAO) * w0 + float(v1.vertexAO) * w1 + float(v2.vertexAO) * w2) / 255.0f;
+    float aoMul = mix(0.54f, 1.0f, clamp(vAO, 0.0f, 1.0f));
+
+    float3 texCol = float3(0.42f, 0.43f, 0.45f);
+    float mipLod = clamp(log2(max(dist * 0.14f, 1.0f)), 0.0f, 6.0f);
+    bool hasTex = (wmat.diffuseTexIndex != 0xFFFFFFFFu && wmat.diffuseTexIndex < texCount);
+    bool useAniso = (wmat.surfaceClass == 0u || wmat.surfaceClass == 1u || wmat.surfaceClass == 2u);
+
+    if (hasTex) {
+        texture2d<float> dTex = worldTextures[wmat.diffuseTexIndex].tex;
+        float4 sampled;
+        if (useAniso) {
+            sampled = sampleWorldAnisotropic(
+                dTex, repeatSamp, s.uv, rayDir, worldN,
+                p0, p1, p2, float2(v0.uv), float2(v1.uv), float2(v2.uv),
+                dist, u, mipLod
+            );
+        } else {
+            sampled = dTex.sample(repeatSamp, s.uv, level(mipLod));
+        }
+        texCol = sampled.rgb;
+        s.alpha = sampled.a;
+
+        // 3x3 Sobel height-to-normal bump derivation from bindless diffuse texture luminance
+        // Suppress Sobel heavily on ROAD_ASPHALT / SIDEWALK (0.18x) so low-res PS2 texel rows never carve washboard stripes!
+        float classBumpBoost = (wmat.surfaceClass == 1u || wmat.surfaceClass == 2u)
+            ? 0.18f
+            : ((wmat.surfaceClass == 0u) ? 1.15f : 0.90f);
+        float bumpAmp = clamp(wmat.bumpStrength * classBumpBoost, 0.0f, 1.50f) * exp(-dist * 0.018f);
+        if (bumpAmp > 0.02f && wmat.surfaceClass != 7u) {
+            float2 texel = float2(1.0f / max(float(dTex.get_width()), 16.0f),
+                                  1.0f / max(float(dTex.get_height()), 16.0f)) * exp2(min(mipLod, 2.0f));
+            float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
+            float tl = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x, -texel.y), level(mipLod)).rgb, lumaW);
+            float tc = dot(dTex.sample(repeatSamp, s.uv + float2(    0.0f, -texel.y), level(mipLod)).rgb, lumaW);
+            float tr = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x, -texel.y), level(mipLod)).rgb, lumaW);
+            float ml = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x,     0.0f), level(mipLod)).rgb, lumaW);
+            float mr = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x,     0.0f), level(mipLod)).rgb, lumaW);
+            float bl = dot(dTex.sample(repeatSamp, s.uv + float2(-texel.x,  texel.y), level(mipLod)).rgb, lumaW);
+            float bc = dot(dTex.sample(repeatSamp, s.uv + float2(    0.0f,  texel.y), level(mipLod)).rgb, lumaW);
+            float br = dot(dTex.sample(repeatSamp, s.uv + float2( texel.x,  texel.y), level(mipLod)).rgb, lumaW);
+            float gx = (tr + 2.0f * mr + br) - (tl + 2.0f * ml + bl);
+            float gy = (bl + 2.0f * bc + br) - (tl + 2.0f * tc + tr);
+            float3 t, b;
+            buildONB(worldN, t, b);
+            s.N = normalize(worldN + (t * (-gx) + b * (-gy)) * (bumpAmp * 0.72f));
+        }
+    }
+
+    float lum = dot(texCol, float3(0.2126f, 0.7152f, 0.0722f));
+    float wetness = clamp(u.skyZenith.w, 0.0f, 1.0f);
+    float nightScale = u.neonParams.w;
+    // Strict true-night ramp (0.0 in golden_hour & daylight, 1.0 in night_neon) — prevents daytime checkerboard windows!
+    float isNight = smoothstep(0.032f, 0.015f, u.skyZenith.r);
+    float rainTime = u.envParams.y * 0.45f + u.rtParams.z * 0.04f;
+
+    s.baseAlbedo = texCol * aoMul;
+    s.roughness = clamp(wmat.roughnessHint > 0.01f ? wmat.roughnessHint : 0.72f, 0.04f, 0.96f);
+    s.metallic = clamp(wmat.metallicHint, 0.0f, 1.0f);
+
+    if (wmat.surfaceClass == 1u || wmat.surfaceClass == 2u) {
+        // ROAD_ASPHALT (1) / SIDEWALK (2): tactile multi-scale charcoal asphalt grit + continuous feathered rain puddles!
+        s.matID = MAT_WET_ASPHALT;
+        float2 wp = s.worldPos.xz;
+        float puddle = 0.0f, damp = 0.0f;
+        float3 rippleN = float3(0.0f, 1.0f, 0.0f);
+        evaluateRockportPuddleAndRipples(wp, worldN.y, wetness, isNight * nightScale, rainTime, dist, puddle, damp, rippleN);
+
+        // Multi-scale world-space asphalt aggregate (macro wear 3/m + medium tarmac grit 11.5/m + fine mineral chips 30/m)
+        // Visible from 2m to 45m without averaging out under 32-SPP AA!
+        float macroFade = exp(-dist * 0.012f);
+        float fineFade  = exp(-dist * 0.032f);
+        float aggMacro  = fbm2D(wp * 3.0f);
+        float aggMed    = noise2D(wp * 11.5f + float2(3.1f, 7.4f));
+        float aggFine   = noise2D(wp * 30.0f + float2(11.3f, 5.7f));
+        float aggDelta  = (aggMed - 0.5f) * 0.58f * macroFade + (aggFine - 0.5f) * 0.42f * fineFade;
+        float aggAlbedo = 1.0f + aggDelta * 0.46f + (aggMacro - 0.5f) * 0.24f;
+
+        float gxMed  = noise2D(wp * 13.0f + float2(0.14f, 0.0f)) - noise2D(wp * 13.0f - float2(0.14f, 0.0f));
+        float gzMed  = noise2D(wp * 13.0f + float2(0.0f, 0.14f)) - noise2D(wp * 13.0f - float2(0.0f, 0.14f));
+        float gxFine = noise2D(wp * 34.0f + float2(0.08f, 0.0f)) - noise2D(wp * 34.0f - float2(0.08f, 0.0f));
+        float gzFine = noise2D(wp * 34.0f + float2(0.0f, 0.08f)) - noise2D(wp * 34.0f - float2(0.0f, 0.08f));
+        float gxAgg  = gxMed * 0.65f * macroFade + gxFine * 0.55f * fineFade;
+        float gzAgg  = gzMed * 0.65f * macroFade + gzFine * 0.55f * fineFade;
+        float aggNStr = ((wmat.surfaceClass == 1u) ? 0.52f : 0.30f) * (1.0f - puddle * 0.85f);
+        float3 aggWorldN = normalize(s.N + float3(gxAgg, 0.0f, gzAgg) * aggNStr);
+
+        // Realistic dark charcoal tarmac (neutralizes clay/ice tint while keeping foreground wet pools legible, never pitch-black!)
+        float paintPreserve = smoothstep(0.30f, 0.62f, lum);
+        float3 roadTex = (wmat.surfaceClass == 1u)
+            ? mix(float3(lum * 0.96f, lum * 0.97f, lum * 1.00f), texCol, 0.42f + 0.58f * paintPreserve)
+            : texCol;
+        float dryGain = (wmat.surfaceClass == 1u)
+            ? mix(0.84f, 0.98f, paintPreserve)
+            : mix(0.92f, 1.00f, paintPreserve);
+        float wetGain = (wmat.surfaceClass == 1u)
+            ? mix(0.68f, 0.88f, paintPreserve)
+            : mix(0.72f, 0.90f, paintPreserve);
+        float albedoGain = mix(mix(dryGain, dryGain * 0.88f, damp), wetGain, puddle);
+        float3 charcoalFloor = (wmat.surfaceClass == 1u)
+            ? float3(0.040f, 0.042f, 0.046f) * aoMul * aggAlbedo
+            : float3(0.048f, 0.050f, 0.052f) * aoMul * aggAlbedo;
+        s.baseAlbedo = clamp(max(roadTex * aoMul * albedoGain * aggAlbedo, charcoalFloor), float3(0.0f), float3(0.92f));
+
+        float dryR    = (wmat.surfaceClass == 1u) ? 0.78f : 0.80f;
+        float dampR   = (wmat.surfaceClass == 1u) ? 0.48f : 0.52f;
+        float puddleR = (wmat.surfaceClass == 1u) ? 0.056f : 0.068f;
+        s.roughness   = clamp(mix(mix(dryR, dampR, damp), puddleR, puddle) + (aggMed - 0.5f) * 0.10f * (1.0f - puddle), 0.035f, 0.94f);
+        s.clearcoat   = max(puddle * 0.88f, damp * 0.08f);
+        s.ccRoughness = mix(0.14f, 0.028f, puddle);
+        s.puddleMask  = puddle;
+        float3 puddleSurfaceN = normalize(mix(worldN, rippleN, 0.85f));
+        s.N = normalize(mix(aggWorldN, puddleSurfaceN, puddle * 0.84f));
+        s.clearcoatN = normalize(mix(worldN, rippleN, puddle));
+    } else if (wmat.surfaceClass == 3u) {
+        // BUILDING_GLASS: mirror architectural reflections by day/dusk; refined mullioned warm interior offices at TRUE NIGHT!
+        s.matID = MAT_URBAN_GLASS;
+        s.roughness = 0.075f;
+        s.metallic = 0.24f;
+        s.clearcoat = 0.92f;
+        s.ccRoughness = 0.02f;
+        s.ior = 1.52f;
+        if (isNight > 0.05f) {
+            float horizCoord = (abs(worldN.x) > abs(worldN.z)) ? s.worldPos.z : s.worldPos.x;
+            float relY = s.worldPos.y - u.carWorldPos.y;
+            float2 paneUV = float2(horizCoord * 0.82f, relY * 0.40f);
+            float2 cell = floor(paneUV);
+            float2 f = fract(paneUV);
+            float outerFrame = smoothstep(0.08f, 0.15f, f.x) * smoothstep(0.92f, 0.85f, f.x)
+                             * smoothstep(0.11f, 0.20f, f.y) * smoothstep(0.89f, 0.80f, f.y);
+            // Crisp architectural cross-mullions (center stile + horizontal transom rail) inside each lit window pane
+            float innerMullionX = smoothstep(0.025f, 0.065f, abs(f.x - 0.50f));
+            float innerMullionY = smoothstep(0.030f, 0.075f, abs(f.y - 0.54f));
+            float mullion = outerFrame * innerMullionX * innerMullionY;
+            float roomGrad = mix(0.45f, 1.0f, smoothstep(0.10f, 0.85f, f.y));
+            float3 rnd = hash33(float3(cell, floor(dot(worldN.xz, float2(2.3f, 5.1f)) * 3.0f)));
+            float litOcc = step(0.56f, rnd.x); // ~44% of mullioned panes lit
+            float isStorefront = smoothstep(5.4f, 2.0f, relY);
+            float3 warmTung = mix(float3(1.00f, 0.64f, 0.26f), float3(1.00f, 0.82f, 0.56f), rnd.y);
+            float3 storeTint = (rnd.z > 0.82f) ? float3(0.24f, 0.78f, 0.98f)
+                             : ((rnd.z < 0.14f) ? float3(0.96f, 0.28f, 0.24f) : warmTung);
+            float3 winCol = mix(warmTung, storeTint, isStorefront * 0.35f);
+            s.emissive = winCol * mullion * roomGrad * litOcc * isNight * mix(0.42f, 0.78f, isStorefront) * (0.55f + 0.45f * rnd.y);
+        }
+    } else if (wmat.surfaceClass == 4u) {
+        // FOLIAGE_CUTOUT: crisp late-autumn / evergreen Rockport cypress & trees with fine needle/leaf cluster breakup
+        s.matID = MAT_FOLIAGE_AUTUMN;
+        s.roughness = 0.76f;
+        s.metallic = 0.0f;
+        float leafFade = exp(-dist * 0.018f);
+        float2 fp = float2(s.worldPos.x + s.worldPos.z, s.worldPos.y);
+        float c1 = noise2D(fp * 13.5f);
+        float c2 = noise2D(fp * 25.0f + float2(7.1f, 3.3f));
+        float gx = noise2D(fp * 18.0f + float2(0.12f, 0.0f)) - noise2D(fp * 18.0f - float2(0.12f, 0.0f));
+        float gy = noise2D(fp * 18.0f + float2(0.0f, 0.12f)) - noise2D(fp * 18.0f - float2(0.0f, 0.12f));
+        float3 ft, fb;
+        buildONB(worldN, ft, fb);
+        s.N = normalize(s.N + (ft * gx + fb * gy) * (0.48f * leafFade));
+        s.baseAlbedo *= (0.82f + 0.36f * (c1 * 0.55f + c2 * 0.45f));
+    } else if (wmat.surfaceClass == 5u) {
+        // METAL_BRIDGE: weathered painted/galvanized Rockport bridge girders & railings
+        s.matID = MAT_BRUSHED_ALUMINUM;
+        s.metallic = max(wmat.metallicHint, 0.78f);
+        s.roughness = clamp(wmat.roughnessHint > 0.01f ? wmat.roughnessHint : 0.36f, 0.16f, 0.62f);
+    } else if (wmat.surfaceClass == 6u || (wmat.flags & 8u) != 0u) {
+        // EMISSIVE_SIGN_LAMP: glowing streetlamps, traffic lights, storefront signs & neon billboards (capped to prevent whiteout)
+        s.matID = MAT_STREETLAMP_LED;
+        float emGain = max(wmat.emissiveHint, 0.65f) * mix(0.28f, 1.35f, isNight);
+        s.emissive = min(texCol * emGain * smoothstep(0.14f, 0.48f, lum), float3(1.55f));
+    } else if (wmat.surfaceClass == 7u) {
+        // WATER: Rockport coastal bay & harbor water with procedural ripples
+        s.matID = MAT_COASTAL_WATER;
+        float2 wp = s.worldPos.xz;
+        float wx = sin(wp.x * 0.65f + wp.y * 0.35f) * 0.045f + (noise2D(wp * 2.5f) - 0.5f) * 0.055f;
+        float wz = cos(wp.x * 1.05f - wp.y * 0.55f) * 0.045f + (noise2D(wp * 2.7f + 4.1f) - 0.5f) * 0.055f;
+        s.N = normalize(float3(wx, 1.0f, wz));
+        s.clearcoatN = s.N;
+        s.baseAlbedo = mix(float3(0.008f, 0.026f, 0.044f), texCol * 0.25f, 0.35f);
+        s.roughness = 0.032f;
+        s.ior = 1.333f;
+    } else if (wmat.surfaceClass == 8u) {
+        // TERRAIN_GRASS_DIRT
+        s.matID = MAT_AUTUMN_TERRAIN;
+        s.roughness = 0.86f;
+    } else {
+        // CONCRETE_WALL (0) & general Rockport masonry/buildings + horizontal plaza aprons
+        s.matID = MAT_URBAN_CONCRETE;
+        if (worldN.y > 0.82f) {
+            // Horizontal concrete plaza / curb apron shares the EXACT same continuous world-space puddle field!
+            float puddle = 0.0f, damp = 0.0f;
+            float3 rippleN = float3(0.0f, 1.0f, 0.0f);
+            evaluateRockportPuddleAndRipples(s.worldPos.xz, worldN.y, wetness, isNight * nightScale, rainTime, dist, puddle, damp, rippleN);
+            s.baseAlbedo = texCol * aoMul * mix(1.0f, 0.72f, max(puddle, damp * 0.50f));
+            s.roughness = mix(mix(0.80f, 0.50f, damp), 0.060f, puddle);
+            s.clearcoat = max(puddle * 0.86f, damp * 0.08f);
+            s.ccRoughness = mix(0.14f, 0.028f, puddle);
+            s.puddleMask = puddle;
+            float3 puddleSurfaceN = normalize(mix(worldN, rippleN, 0.85f));
+            s.N = normalize(mix(s.N, puddleSurfaceN, puddle * 0.84f));
+            s.clearcoatN = normalize(mix(worldN, rippleN, puddle));
+        } else {
+            float rainGloss = wetness * 0.20f;
+            s.roughness = clamp((wmat.roughnessHint > 0.01f ? wmat.roughnessHint : 0.78f) - rainGloss, 0.38f, 0.94f);
+            // Subtle architectural running-bond brick/mortar relief on close warm/red Downtown masonry walls
+            if (abs(worldN.y) < 0.35f && dist < 40.0f) {
+                float brickChroma = smoothstep(0.025f, 0.13f, texCol.r - texCol.b * 0.85f) * smoothstep(0.05f, 0.22f, lum);
+                if (brickChroma > 0.02f) {
+                    float horizB = (abs(worldN.x) > abs(worldN.z)) ? s.worldPos.z : s.worldPos.x;
+                    float rowY = s.worldPos.y * 11.0f;
+                    float rowIdx = floor(rowY);
+                    float colX = horizB * 4.4f + fmod(abs(rowIdx), 2.0f) * 0.5f;
+                    float fx = fract(colX);
+                    float fy = fract(rowY);
+                    float mX = smoothstep(0.055f, 0.018f, min(fx, 1.0f - fx));
+                    float mY = smoothstep(0.11f, 0.035f, min(fy, 1.0f - fy));
+                    float mortar = max(mX, mY);
+                    float bFade = smoothstep(40.0f, 8.0f, dist) * brickChroma;
+                    float brickVar = 0.92f + 0.16f * hash21(float2(floor(colX), rowIdx));
+                    s.baseAlbedo *= mix(1.0f, brickVar * (1.0f - mortar * 0.26f), bFade);
+                    float3 bt, bb;
+                    buildONB(worldN, bt, bb);
+                    float bNx = (smoothstep(0.07f, 0.02f, fx) - smoothstep(0.93f, 0.98f, fx)) * 0.34f;
+                    float bNy = (smoothstep(0.13f, 0.04f, fy) - smoothstep(0.87f, 0.96f, fy)) * 0.34f;
+                    s.N = normalize(s.N + (bt * bNx + bb * bNy) * bFade);
+                }
+            }
+            if (wmat.emissiveHint > 0.05f) {
+                s.emissive = min(texCol * wmat.emissiveHint * mix(0.20f, 0.85f, isNight), float3(1.25f));
+            }
+            // Refined mullioned Downtown night windows on recessed dark panes of vertical CONCRETE_WALL facades (TRUE NIGHT ONLY!)
+            if (u.carWorldPos.w > 0.5f && isNight > 0.05f && abs(worldN.y) < 0.35f) {
+                float relY = s.worldPos.y - u.carWorldPos.y;
+                if (relY > 1.4f && relY < 48.0f) {
+                    float horizCoord = (abs(worldN.x) > abs(worldN.z)) ? s.worldPos.z : s.worldPos.x;
+                    float2 bayGrid = float2(horizCoord * 0.82f, relY * 0.40f);
+                    float2 cell = floor(bayGrid);
+                    float2 f = fract(bayGrid);
+                    float paneFrame = smoothstep(0.12f, 0.22f, f.x) * smoothstep(0.88f, 0.78f, f.x)
+                                    * smoothstep(0.18f, 0.28f, f.y) * smoothstep(0.82f, 0.72f, f.y);
+                    // Strict dark recessed pane texture gate so solid concrete/brick walls never light up
+                    float darkWindowTex = smoothstep(0.18f, 0.07f, lum) * smoothstep(0.85f, 1.08f, (texCol.b + 0.015f) / (texCol.r + 0.020f));
+                    float3 rnd = hash33(float3(cell, floor(dot(worldN.xz, float2(3.1f, 7.7f)) * 4.0f)));
+                    float litChance = step(0.58f, rnd.x); // ~42% of dark recessed panes lit
+                    float isGroundStore = smoothstep(5.2f, 2.2f, relY);
+                    float winMask = paneFrame * darkWindowTex * litChance * isNight;
+                    if (winMask > 0.01f) {
+                        float3 warmTungsten = mix(float3(1.00f, 0.62f, 0.22f), float3(1.00f, 0.80f, 0.48f), rnd.y);
+                        float3 storefrontAccent = (rnd.z > 0.82f) ? float3(0.22f, 0.78f, 0.98f)
+                                                : ((rnd.z < 0.14f) ? float3(0.95f, 0.24f, 0.24f) : warmTungsten);
+                        float3 glowCol = mix(warmTungsten, storefrontAccent, isGroundStore * 0.35f);
+                        s.emissive += glowCol * winMask * mix(0.38f, 0.68f, isGroundStore) * (0.55f + 0.45f * rnd.y);
+                        s.roughness = mix(s.roughness, 0.12f, winMask);
+                        s.clearcoat = max(s.clearcoat, winMask * 0.65f);
+                    }
+                }
+            }
+        }
+    }
+
+    if ((inst.flags & (1u << 6)) != 0u) {
+        // Sky / distant panorama dome cards stay softly self-lit to match horizon haze
+        s.emissive = texCol * (0.35f + 0.35f * u.coronaColor.w);
+    }
+    return s;
+}
+
 static HitSurface resolveHitSurface(
     float3 rayOrigin,
     float3 rayDir,
@@ -546,6 +1177,10 @@ static HitSurface resolveHitSurface(
     device const uint* triMaterials,
     device const RTInstanceMeta* instances,
     device const RTMaterial* materials,
+    device const RkptVertex* worldVertices,
+    device const uint* worldIndices,
+    device const RkptMaterial* worldMaterials,
+    device const BindlessTexEntry* worldTextures,
     constant RTFrameUniforms& u,
     texture2d<float> asphaltDiffTex,
     texture2d<float> asphaltNormTex,
@@ -564,6 +1199,12 @@ static HitSurface resolveHitSurface(
     sampler repeatSamp
 ) {
     RTInstanceMeta inst = instances[instanceID];
+    if ((inst.flags & (1u << 4)) != 0u) {
+        return resolveWorldSurface(
+            rayOrigin, rayDir, dist, inst, primitiveID, bary,
+            worldVertices, worldIndices, worldMaterials, worldTextures, u, repeatSamp
+        );
+    }
     uint triIdx = inst.triOffset + primitiveID;
     uint i0 = indices[inst.indexOffset + primitiveID * 3u + 0u];
     uint i1 = indices[inst.indexOffset + primitiveID * 3u + 1u];
@@ -663,9 +1304,26 @@ static HitSurface resolveHitSurface(
         buildONB(worldN, t, b);
         s.N = normalize(worldN + (t * (flakeRand.y - 0.5f) + b * (flakeRand.z - 0.5f)) * flakeStrength);
         s.clearcoatN = worldN;
-        s.ccRoughness = clamp(u.envParams.z, 0.009f, 0.18f);
+        float nightWetBoost = smoothstep(0.65f, 0.92f, u.skyZenith.w) * smoothstep(0.45f, 1.10f, u.neonParams.w);
+        s.clearcoat = mix(s.clearcoat, 1.0f, nightWetBoost);
+        s.ccRoughness = mix(clamp(u.envParams.z, 0.009f, 0.18f), 0.010f, nightWetBoost);
+        s.ior = mix(s.ior, 1.62f, nightWetBoost * 0.65f);
+        // M3 GTR rear trunk plate pocket & handle lip (z < -1.80, |x| < 0.44, y in [0.64..0.93]):
+        // Match authentic cool BMW Titanium Silver metallic clearcoat (eliminates matte olive-tan diffuse cast & dark maroon overhang!)
+        if (carID == 0u && s.modelPos.z < -1.80f && abs(s.modelPos.x) < 0.44f && s.modelPos.y > 0.64f && s.modelPos.y < 0.93f) {
+            float upperStripe = stripeMask * step(0.865f, s.modelPos.y);
+            s.baseAlbedo = mix(float3(0.68f, 0.72f, 0.78f), mat.secondaryColor.rgb, upperStripe);
+            s.metallic = 0.84f;
+            s.roughness = 0.16f;
+            s.clearcoat = 1.0f;
+            s.ccRoughness = 0.015f;
+            if (worldN.y < -0.02f) {
+                s.N = normalize(float3(worldN.x, max(worldN.y, 0.10f), worldN.z));
+                s.clearcoatN = s.N;
+            }
+        }
     } else if (s.matID == MAT_CAR_PAINT_SILVER) {
-        // Secondary factory body paint (DIABLOHP: splitter lip, mirrors, trim matching base factory paint)
+        // Secondary factory body paint (DIABLOHP: splitter lip, mirrors, trim, M3 GTR rear license plate cove)
         s.baseAlbedo = mat.baseColor.rgb;
         if (carID == 2u) {
             float viewFacing = clamp(dot(worldN, -rayDir), 0.0f, 1.0f);
@@ -674,8 +1332,18 @@ static HitSurface resolveHitSurface(
         s.metallic   = mat.pbrParams.x;
         s.roughness  = clamp(mat.pbrParams.y, 0.12f, 0.30f);
         s.clearcoat  = 1.0f;
-        s.ccRoughness = clamp(u.envParams.z, 0.010f, 0.18f);
+        float nightWetBoost = smoothstep(0.65f, 0.92f, u.skyZenith.w) * smoothstep(0.45f, 1.10f, u.neonParams.w);
+        s.ccRoughness = mix(clamp(u.envParams.z, 0.010f, 0.18f), 0.010f, nightWetBoost);
+        s.ior = mix(s.ior, 1.62f, nightWetBoost * 0.65f);
         s.clearcoatN = worldN;
+        if (carID == 0u && s.modelPos.z < -1.80f && abs(s.modelPos.x) < 0.48f && s.modelPos.y > 0.62f && s.modelPos.y < 0.93f) {
+            // Crisp BMW Titanium Silver metallic clearcoat matching M3 trunk paint (zero olive-tan cast!)
+            s.baseAlbedo = float3(0.68f, 0.72f, 0.78f);
+            s.metallic = 0.84f;
+            s.roughness = 0.16f;
+            s.clearcoat = 1.0f;
+            s.ccRoughness = 0.015f;
+        }
     } else if (s.matID == MAT_CAR_BADGE) {
         // Real UV-mapped OEM badges & Carrera GT perforated stainless V10 engine-deck mesh!
         float4 badge = carBadgeTex.sample(repeatSamp, carUV, level(0.0f));
@@ -749,7 +1417,8 @@ static HitSurface resolveHitSurface(
             s.clearcoat  = 0.0f;
         }
     } else if (s.matID == MAT_RUBBER_TIRE) {
-        // Real OEM tire sidewall & tread driven by extracted per-car TIRE texture
+        // Pure authentic vulcanized carbon-black rubber + procedural rain grooves, angled shoulder tread blocks & sidewall molding ribs!
+        // (Does NOT sample EA's combined rim+tire atlas so metallic rim spokes never bleed onto tire shoulders!)
         float frontZ = (carID == 1u) ? 1.205f : ((carID == 2u) ? 1.160f : 1.595f);
         float rearZ  = (carID == 1u) ? -1.480f : ((carID == 2u) ? -1.390f : -1.1295f);
         float wz = (s.modelPos.z > 0.0f) ? frontZ : rearZ;
@@ -757,22 +1426,32 @@ static HitSurface resolveHitSurface(
         float2 relYZ = float2(s.modelPos.y - wy, s.modelPos.z - wz);
         float rad = length(relYZ);
         float theta = atan2(relYZ.x, relYZ.y);
-        float isSidewall = smoothstep(0.42f, 0.68f, abs(localNormal.x));
+        float isSidewall = smoothstep(0.45f, 0.72f, abs(localNormal.x));
         float3 t, b;
         buildONB(worldN, t, b);
-        float3 tTex = hasAuthenticTex ? carTireTex.sample(repeatSamp, carUV, level(0.0f)).rgb : float3(0.18f);
-        float microGrain = noise2D(float2(theta * 28.0f, rad * 180.0f));
-        float treadX = abs(s.modelPos.x);
-        float circGroove = smoothstep(0.18f, 0.38f, abs(fract(treadX * 26.0f) - 0.5f));
-        float treadPattern = mix(1.0f, mix(0.65f, 1.0f, circGroove), 1.0f - isSidewall);
 
-        float3 tireBase = hasAuthenticTex ? clamp(tTex * 0.24f + float3(0.020f), float3(0.026f), float3(0.11f)) : float3(0.044f, 0.046f, 0.050f);
-        s.baseAlbedo = tireBase * (0.90f + 0.20f * microGrain) * treadPattern;
+        float microGrain = noise2D(float2(theta * 36.0f, rad * 210.0f));
+        float treadX = abs(s.modelPos.x);
+        // 4 crisp circumferential performance rain grooves + angled herringbone shoulder blocks
+        float circGroove = smoothstep(0.11f, 0.24f, abs(fract(treadX * 22.0f) - 0.5f));
+        float slantPhase = fract(theta * 14.0f + treadX * 8.5f * sign(s.modelPos.x));
+        float shoulderBlock = smoothstep(0.08f, 0.22f, abs(slantPhase - 0.5f));
+        float treadRelief = mix(0.56f, 1.0f, circGroove * (0.68f + 0.32f * shoulderBlock));
+        // Subtle radial sidewall molding rings & faint raised sidewall lettering band
+        float swBand = smoothstep(0.018f, 0.004f, abs(rad - 0.268f)) * 0.18f;
+        float swRib  = (0.5f + 0.5f * sin(rad * 195.0f)) * smoothstep(0.22f, 0.25f, rad) * smoothstep(0.32f, 0.28f, rad);
+        float swDetail = 0.90f + 0.10f * swRib + swBand * (0.5f + 0.5f * sin(theta * 48.0f));
+
+        float3 carbonRubber = float3(0.032f, 0.034f, 0.038f);
+        float surfaceMod = mix(treadRelief, swDetail, isSidewall);
+        s.baseAlbedo = carbonRubber * (0.88f + 0.22f * microGrain) * surfaceMod;
         s.metallic   = 0.0f;
-        s.roughness  = 0.52f + (microGrain - 0.5f) * 0.06f;
+        s.roughness  = mix(0.62f, 0.52f, isSidewall) + (microGrain - 0.5f) * 0.06f;
         s.clearcoat  = 0.0f;
-        float bumpScale = mix(0.20f, 0.12f, isSidewall) * (1.0f - speedFrac * 0.5f);
-        s.N = normalize(worldN + t * ((microGrain - 0.5f) * bumpScale));
+        float treadBump = (1.0f - isSidewall) * ((1.0f - circGroove) * -0.28f + (shoulderBlock - 0.5f) * 0.22f);
+        float swBump = isSidewall * ((swRib - 0.5f) * 0.14f + (microGrain - 0.5f) * 0.10f);
+        float bumpScale = (1.0f - speedFrac * 0.55f);
+        s.N = normalize(worldN + (t * (treadBump + swBump) + b * ((microGrain - 0.5f) * 0.12f)) * bumpScale);
         s.clearcoatN = s.N;
     } else if (s.matID == MAT_ALLOY_RIM) {
         // Real OEM forged rims driven by extracted per-car TIRE texture (BBS / Carrera GT 5-spoke / Gallardo Cassiopeia)
@@ -881,19 +1560,26 @@ static HitSurface resolveHitSurface(
         float ledWash = smoothstep(0.12f, 0.95f, py) * outerPlate * (1.0f - textMask * 0.75f);
         s.emissive = float3(0.30f, 0.34f, 0.42f) * ledWash * (0.28f + 0.72f * u.skyGround.w);
     } else if (s.matID == MAT_HEADLIGHT_GLASS) {
+        s.baseAlbedo = float3(0.0f); // Clear dielectric lens — ZERO diffuse sunlight scattering!
         s.emissive = float3(0.0f);
         s.alpha = 0.04f;
-        s.roughness = 0.012f;
+        s.roughness = 0.010f;
+        s.ior = 1.54f;
     } else if (s.matID == MAT_HEADLIGHT_EMIT) {
-        // 100% AUTHENTIC UV-MAPPED PER-CAR PROJECTOR HEADLIGHTS (BMW E46 / Porsche Carrera GT / Lamborghini Gallardo)
+        // 100% AUTHENTIC UV-MAPPED PER-CAR PROJECTOR HEADLIGHTS — dark smoked gunmetal housing + neutral gleaming silver chrome bowls (zero beige/cream plastic!)
         float headOn = u.skyGround.w;
-        float forwardGate = smoothstep(0.05f, 0.28f, localNormal.z);
+        float forwardGate = smoothstep(-0.25f, 0.20f, localNormal.z);
         if (hasAuthenticTex) {
             float3 hlTex = carHeadlightTex.sample(repeatSamp, carUV, level(0.0f)).rgb;
-            float lum = dot(hlTex, float3(0.2126f, 0.7152f, 0.0722f));
-            s.baseAlbedo = pow(max(hlTex, float3(0.0f)), float3(1.25f)) * 0.88f;
-            s.metallic   = mix(0.15f, 0.88f, smoothstep(0.18f, 0.58f, lum));
-            s.roughness  = mix(0.58f, 0.12f, smoothstep(0.18f, 0.58f, lum));
+            float hlLuma = dot(hlTex, float3(0.2126f, 0.7152f, 0.0722f));
+            float amberMask = smoothstep(0.14f, 0.34f, hlTex.r - hlTex.b);
+            float bowlChrome = smoothstep(0.42f, 0.78f, hlLuma) * (1.0f - amberMask);
+            float3 gunmetalBase = float3(0.014f, 0.016f, 0.020f);
+            float3 silverChrome = float3(0.52f, 0.56f, 0.62f);
+            float3 amberLens    = float3(0.45f, 0.17f, 0.02f);
+            s.baseAlbedo = mix(mix(gunmetalBase, silverChrome, bowlChrome), amberLens, amberMask * 0.85f);
+            s.metallic   = mix(0.18f, 0.92f, bowlChrome);
+            s.roughness  = mix(0.46f, 0.10f, bowlChrome);
             s.clearcoat  = 0.40f;
 
             if (carID == 0u) {
@@ -903,7 +1589,7 @@ static HitSurface resolveHitSurface(
                 float xenonLens = smoothstep(0.19f, 0.06f, dXenon);
                 float xenonHalo = smoothstep(0.042f, 0.012f, abs(dXenon - 0.275f)) * smoothstep(0.08f, 0.25f, carUV.y);
                 float highBulb  = smoothstep(0.16f, 0.04f, dHigh);
-                float amberTurn = smoothstep(0.68f, 0.75f, carUV.x) * smoothstep(0.12f, 0.35f, hlTex.r - hlTex.b);
+                float amberTurn = smoothstep(0.68f, 0.75f, carUV.x) * amberMask;
                 s.emissive   = (float3(5.2f, 5.8f, 7.2f) * xenonLens
                              +  float3(2.8f, 3.2f, 4.0f) * xenonHalo * 0.65f
                              +  float3(2.6f, 2.3f, 1.8f) * highBulb * 0.75f
@@ -914,45 +1600,56 @@ static HitSurface resolveHitSurface(
                 float dHigh  = length(float2((carUV.x - 0.74f) * 1.50f, (carUV.y - 0.24f) * 1.55f));
                 float xenonLens = smoothstep(0.24f, 0.06f, dXenon);
                 float highBulb  = smoothstep(0.22f, 0.06f, dHigh);
-                float amberStrip = smoothstep(0.50f, 0.56f, carUV.y) * smoothstep(0.70f, 0.63f, carUV.y) * smoothstep(0.06f, 0.22f, hlTex.r - hlTex.b);
+                float amberStrip = smoothstep(0.50f, 0.56f, carUV.y) * smoothstep(0.70f, 0.63f, carUV.y) * amberMask;
                 s.emissive   = (float3(5.6f, 6.2f, 7.6f) * xenonLens
                              +  float3(2.8f, 2.6f, 2.3f) * highBulb * 0.70f
                              +  float3(2.6f, 0.95f, 0.10f) * amberStrip * 0.75f) * headOn * forwardGate;
             } else {
-                // Lamborghini Gallardo (001_GALLARDO_KIT00_HEADLIGH): bi-xenon projector (0.17, 0.68) + bright amber DRL/turn bowl (0.45, 0.68)
-                float dXenon = length(float2((carUV.x - 0.17f) * 2.20f, (carUV.y - 0.68f) * 1.25f));
-                float dAmber = length(float2((carUV.x - 0.45f) * 2.10f, (carUV.y - 0.68f) * 1.25f));
-                float xenonLens = smoothstep(0.28f, 0.06f, dXenon);
-                float amberBowl = smoothstep(0.32f, 0.08f, dAmber) * smoothstep(0.04f, 0.22f, hlTex.r - hlTex.b);
-                s.baseAlbedo = pow(max(hlTex, float3(0.0f)), float3(1.40f)) * 0.62f;
-                s.emissive   = (float3(6.2f, 6.8f, 8.2f) * xenonLens
-                             +  float3(5.2f, 2.05f, 0.15f) * amberBowl * 1.15f) * headOn * forwardGate;
+                // Lamborghini Gallardo (001_GALLARDO_KIT00_HEADLIGH): bi-xenon projector orb + bright amber DRL/turn bowl
+                float dXenon = min(
+                    length(float2((carUV.x - 0.165f) * 2.20f, (carUV.y - 0.68f) * 1.25f)),
+                    length(float2((carUV.x - 0.165f) * 2.20f, (carUV.y - 0.32f) * 1.25f))
+                );
+                float xenonLens = smoothstep(0.26f, 0.06f, dXenon);
+                s.emissive   = (float3(7.5f, 8.2f, 10.0f) * xenonLens
+                             +  float3(5.4f, 2.15f, 0.15f) * amberMask * 1.25f) * headOn * max(forwardGate, 0.45f);
             }
         } else {
-            s.baseAlbedo = float3(0.08f, 0.09f, 0.10f);
-            s.metallic   = 0.80f;
+            s.baseAlbedo = float3(0.015f, 0.017f, 0.022f);
+            s.metallic   = 0.70f;
             s.roughness  = 0.16f;
             s.emissive   = float3(3.8f, 4.2f, 5.0f) * headOn * forwardGate;
         }
     } else if (s.matID == MAT_TAILLIGHT_EMIT) {
-        // 100% AUTHENTIC UV-MAPPED BMW E46 M3 LED TAILLIGHTS (BMWM3GTRE46_KIT00_BRAKE)
-        float headOn = 0.82f + 0.55f * u.skyGround.w;
+        // 100% AUTHENTIC UV-MAPPED BMW E46 M3 LED TAILLIGHTS — crisp horizontal divider + discrete ruby-crimson LED dot matrix + dark bezel!
+        float headOn = 0.72f + 0.42f * u.skyGround.w;
         if (hasAuthenticTex) {
             float3 tlTex = carTaillightTex.sample(repeatSamp, carUV, level(0.0f)).rgb;
             float redDom = clamp((tlTex.r - max(tlTex.g, tlTex.b)) * 2.2f, 0.0f, 1.0f);
-            float whiteStrip = smoothstep(0.35f, 0.65f, min(tlTex.r, min(tlTex.g, tlTex.b)));
-            s.baseAlbedo  = mix(tlTex * 0.55f, float3(0.45f, 0.48f, 0.52f), whiteStrip * 0.5f);
-            s.metallic    = mix(0.08f, 0.30f, whiteStrip);
+            float whiteStrip = smoothstep(0.32f, 0.62f, min(tlTex.r, min(tlTex.g, tlTex.b)));
+            // Crisp dark horizontal divider between upper clear/amber strip and lower E46 LED brake cluster
+            float horizDivider = smoothstep(0.012f, 0.036f, abs(carUV.y - 0.38f));
+            // Discrete E46 LED emitter matrix (horizontal rows + fine LED dot diodes)
+            float ledRow = 0.55f + 0.45f * smoothstep(-0.35f, 0.55f, sin(carUV.y * 135.0f));
+            float ledDot = 0.72f + 0.28f * smoothstep(-0.20f, 0.65f, sin(carUV.x * 165.0f));
+            float ledMatrix = ledRow * ledDot * horizDivider;
+            float housingBezel = smoothstep(0.08f, 0.28f, max(redDom, whiteStrip));
+            s.baseAlbedo  = mix(float3(0.018f, 0.008f, 0.008f),
+                                mix(tlTex * 0.34f, float3(0.42f, 0.45f, 0.48f), whiteStrip * 0.65f),
+                                housingBezel * horizDivider);
+            s.metallic    = mix(0.12f, 0.38f, whiteStrip);
+            s.roughness   = 0.045f;
+            s.clearcoat   = 1.0f;
+            s.ccRoughness = 0.014f;
+            s.ior         = 1.54f;
+            // Deeper authentic ruby-crimson LED emission (avoids blown-out flat orange blobs!)
+            s.emissive    = (float3(4.2f, 0.042f, 0.022f) * pow(redDom, 1.35f) * ledMatrix
+                          +  float3(0.24f, 0.22f, 0.18f) * whiteStrip * horizDivider * 0.32f) * headOn;
+        } else {
+            s.baseAlbedo  = float3(0.12f, 0.006f, 0.006f);
             s.roughness   = 0.05f;
             s.clearcoat   = 1.0f;
-            s.ccRoughness = 0.015f;
-            s.ior         = 1.54f;
-            s.emissive    = (float3(5.8f, 0.09f, 0.03f) * pow(redDom, 1.25f) + float3(0.18f, 0.20f, 0.22f) * whiteStrip * 0.35f) * headOn;
-        } else {
-            s.baseAlbedo  = float3(0.16f, 0.008f, 0.006f);
-            s.roughness   = 0.06f;
-            s.clearcoat   = 1.0f;
-            s.emissive    = float3(4.5f, 0.10f, 0.04f) * headOn;
+            s.emissive    = float3(3.8f, 0.05f, 0.025f) * headOn;
         }
     } else if (s.matID == MAT_WET_ASPHALT) {
         float2 wp = float2(s.worldPos.x, s.worldPos.z + u.envParams.y);
@@ -1296,50 +1993,113 @@ static void evaluateLocalAreaLightsSplit(
         return float3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
     };
 
+    float3 carOrigin = u.carWorldPos.xyz;
+    float isNight = smoothstep(0.032f, 0.015f, u.skyZenith.r);
+    // Gate road headlight projection strictly on true night so Daylight & Golden Hour have ZERO chalky white smear on foreground asphalt!
+    float roadBeamGain = mix(0.0f, 1.0f, isNight);
     float3 carLights[4] = {
-        rotateCarLocal(float3(-0.635f, 0.59f,  2.48f)),
-        rotateCarLocal(float3( 0.635f, 0.59f,  2.48f)),
-        rotateCarLocal(float3(-0.56f,  0.76f, -2.06f)),
-        rotateCarLocal(float3( 0.56f,  0.76f, -2.06f))
+        carOrigin + rotateCarLocal(float3(-0.62f, 0.62f,  2.02f)),
+        carOrigin + rotateCarLocal(float3( 0.62f, 0.62f,  2.02f)),
+        carOrigin + rotateCarLocal(float3(-0.56f, 0.76f, -2.06f)),
+        carOrigin + rotateCarLocal(float3( 0.56f, 0.76f, -2.06f))
     };
     float3 carDirs[4] = {
-        normalize(rotateCarLocal(float3(0.0f, -0.10f,  1.0f))),
-        normalize(rotateCarLocal(float3(0.0f, -0.10f,  1.0f))),
-        normalize(rotateCarLocal(float3(0.0f, -0.22f, -1.0f))),
-        normalize(rotateCarLocal(float3(0.0f, -0.22f, -1.0f)))
+        normalize(rotateCarLocal(float3(0.0f, -0.24f,  1.0f))),
+        normalize(rotateCarLocal(float3(0.0f, -0.24f,  1.0f))),
+        normalize(rotateCarLocal(float3(0.0f, -0.24f, -1.0f))),
+        normalize(rotateCarLocal(float3(0.0f, -0.24f, -1.0f)))
     };
+    // Crisp 5800K dual-projector xenon night low-beams + clean restrained crimson taillight highlights (zero red road splats!)
     float3 carCols[4] = {
-        float3(0.84f, 0.90f, 1.02f) * (3.6f * headScale),
-        float3(0.84f, 0.90f, 1.02f) * (3.6f * headScale),
-        float3(1.55f, 0.055f, 0.022f) * (2.6f * (0.75f + 0.55f * headScale)),
-        float3(1.55f, 0.055f, 0.022f) * (2.6f * (0.75f + 0.55f * headScale))
+        float3(0.86f, 0.93f, 1.06f) * (15.5f * headScale * roadBeamGain),
+        float3(0.86f, 0.93f, 1.06f) * (15.5f * headScale * roadBeamGain),
+        float3(1.45f, 0.050f, 0.020f) * (0.85f * (0.65f + 0.50f * headScale)),
+        float3(1.45f, 0.050f, 0.020f) * (0.85f * (0.65f + 0.50f * headScale))
     };
 
     bool isCarExterior = (s.matID <= MAT_LICENSE_PLATE || s.matID >= MAT_CAR_PAINT_SILVER);
     for (int i = 0; i < 4; ++i) {
         // Prevent the car's own headlights/taillights from blasting point-light fireflies onto its own bumper/fenders
         if (isCarExterior) continue;
+        if (i < 2 && roadBeamGain < 0.01f) continue;
         float3 toL = carLights[i] - s.worldPos;
-        float d2 = dot(toL, toL) + 0.30f;
+        float d2 = dot(toL, toL) + ((i < 2) ? 0.35f : 0.45f);
         float d = sqrt(d2);
         float3 L = toL / d;
         float NdotL = max(dot(s.N, L), 0.0f);
         if (NdotL > 0.0f) {
-            float cone = (i < 2)
-                ? smoothstep(0.76f, 0.96f, dot(-L, carDirs[i]))
-                : smoothstep(0.18f, 0.80f, dot(-L, carDirs[i]));
-            float atten = cone / (1.0f + d2 * 0.19f);
+            float cone;
+            if (i < 2) {
+                // Crisp automotive dual-projector low-beam cone with horizontal upper cutoff
+                float beamCore = smoothstep(0.58f, 0.90f, dot(-L, carDirs[i]));
+                float upperCutoff = smoothstep(0.14f, -0.05f, (-L).y);
+                cone = beamCore * upperCutoff;
+            } else {
+                cone = smoothstep(0.36f, 0.88f, dot(-L, carDirs[i]));
+            }
+            float atten = cone / (1.0f + d2 * ((i < 2) ? 0.055f : 0.55f));
             float3 H = normalize(V + L);
             float specPow = mix(140.0f, 12.0f, s.roughness);
-            float spec = pow(max(dot(s.N, H), 0.0f), specPow) * mix(0.60f, 0.08f, s.roughness);
-            outDiffIrrad += (carCols[i] / PI) * NdotL * atten;
-            outSpec += min(float3(spec) * carCols[i] * NdotL * atten, float3(4.5f));
+            float spec = pow(max(dot(s.N, H), 0.0f), specPow) * mix(0.65f, 0.08f, s.roughness);
+            float diffMul = (i < 2) ? 1.0f : 0.28f;
+            float specMul = (i < 2) ? 1.0f : 0.80f;
+            outDiffIrrad += (carCols[i] / PI) * NdotL * atten * diffMul;
+            outSpec += min(float3(spec) * carCols[i] * NdotL * atten * specMul, float3(4.5f));
         }
     }
 
-    // Dynamic Scrolling Highway Sodium Lamps (x = +4.15, y = 6.55) + Industrial Warehouse Pendant Lamps (x = +7.45, y = 4.70)
     float lampPower = u.neonParams.w;
-    if (lampPower > 0.02f) {
+    if (isNight > 0.15f && lampPower > 0.35f && u.carWorldPos.w > 0.5f) {
+        // Analytic Rockport Downtown/Rosewood overhead sodium-vapor avenue streetlamps (22m grid, sidewalk offsets ±8.5m, +6.8m height)
+        float3 fwdAxis = normalize(rotateCarLocal(float3(0.0f, 0.0f, 1.0f)));
+        float3 rightAxis = normalize(rotateCarLocal(float3(1.0f, 0.0f, 0.0f)));
+        float3 relCar = s.worldPos - carOrigin;
+        float along = dot(relCar, fwdAxis);
+        const float spacing = 22.0f;
+        float nearestSlot = round(along / spacing) * spacing;
+        float3 lampTint = mix(float3(1.00f, 0.64f, 0.24f), u.neonParams.rgb, 0.35f) * (17.5f * lampPower * isNight);
+
+        for (int k = -1; k <= 1; ++k) {
+            float sAlong = nearestSlot + float(k) * spacing;
+            for (int side = -1; side <= 1; side += 2) {
+                float3 lPos = carOrigin + fwdAxis * sAlong + rightAxis * (float(side) * 8.5f) + float3(0.0f, 6.8f, 0.0f);
+                float3 toL = lPos - s.worldPos;
+                float d2 = dot(toL, toL) + 1.4f;
+                float d = sqrt(d2);
+                float3 L = toL / d;
+                float NdotL = max(dot(s.N, L), 0.0f);
+                if (NdotL > 0.0f) {
+                    float downCone = smoothstep(-0.08f, 0.48f, -L.y);
+                    float atten = downCone / (1.0f + d2 * 0.018f);
+                    float3 H = normalize(V + L);
+                    float NdotV = max(dot(s.N, V), 1e-4f);
+                    float NdotH = max(dot(s.N, H), 0.0f);
+                    float3 F0 = mix(float3(0.04f), s.baseAlbedo, s.metallic);
+                    float3 F = F_Schlick(max(dot(V, H), 0.0f), F0);
+                    float lampRough = max(s.roughness, 0.06f);
+                    float D = D_GGX(NdotH, max(lampRough * lampRough, 0.004f));
+                    float G = G_SmithGGX(NdotV, NdotL, lampRough);
+                    float3 specBRDF = (D * G * F) / max(4.0f * NdotV * NdotL, 1e-4f);
+                    outDiffIrrad += (lampTint / PI) * NdotL * atten;
+                    outSpec += min(specBRDF * lampTint * NdotL * atten, float3(4.2f));
+                    if (s.clearcoat > 0.05f) {
+                        float ccNdotL = max(dot(s.clearcoatN, L), 0.0f);
+                        float ccNdotV = max(dot(s.clearcoatN, V), 1e-4f);
+                        float ccNdotH = max(dot(s.clearcoatN, H), 0.0f);
+                        float ccR = max(s.ccRoughness, 0.045f);
+                        float f0_cc = pow((s.ior - 1.0f) / (s.ior + 1.0f), 2.0f);
+                        float F_cc = F_SchlickScalar(max(dot(V, H), 0.0f), f0_cc) * s.clearcoat;
+                        float specCC = (D_GGX(ccNdotH, ccR * ccR) * G_SmithGGX(ccNdotV, ccNdotL, ccR) * F_cc)
+                                     / max(4.0f * ccNdotV * ccNdotL, 1e-4f);
+                        outSpec += min(float3(specCC) * lampTint * ccNdotL * atten, float3(4.0f));
+                    }
+                }
+            }
+        }
+    }
+
+    // Dynamic Scrolling Highway Sodium Lamps (procedural overpass only)
+    if (lampPower > 0.02f && u.carWorldPos.w < 0.5f) {
         const float spacing = 16.0f;
         const float span = spacing * 12.0f;
         float scrollOffset = fmod(u.envParams.y, spacing);
@@ -1398,6 +2158,12 @@ static float3 evaluateSecondaryHitRadiance(
     float3 hitDir,
     HitSurface s,
     instance_acceleration_structure tlas,
+    device const RTInstanceMeta* instances,
+    device const RkptVertex* worldVertices,
+    device const uint* worldIndices,
+    device const RkptMaterial* worldMaterials,
+    device const BindlessTexEntry* worldTextures,
+    sampler repeatSamp,
     constant RTFrameUniforms& u,
     float2 xiShadow
 ) {
@@ -1405,17 +2171,16 @@ static float3 evaluateSecondaryHitRadiance(
     float3 L = normalize(u.sunDir.xyz);
     float3 sunRad = u.sunColor.rgb * u.sunDir.w;
 
-    intersector<triangle_data, instancing> shadowRT;
-    shadowRT.assume_geometry_type(geometry_type::triangle);
-    shadowRT.accept_any_intersection(true);
-
     ray sr;
     sr.origin = s.worldPos + s.geomN * 0.004f;
     sr.direction = sampleCone(L, u.sunColor.w * 0.5f, xiShadow);
     sr.min_distance = 0.002f;
-    sr.max_distance = 80.0f;
-    auto sh = shadowRT.intersect(sr, tlas, 0x01u);
-    float vis = (sh.type == intersection_type::none) ? 1.0f : 0.0f;
+    sr.max_distance = 120.0f;
+    float vis = traceShadowVisibility(
+        sr, tlas, TLAS_MASK_SHADOW_ALL, (u.carWorldPos.w > 0.5f),
+        instances, worldVertices, worldIndices, worldMaterials, worldTextures,
+        uint(max(u.jitterParams.w, 1.0f)), repeatSamp
+    );
 
     float3 direct = evaluateDirectSunBRDF(s, V, L, sunRad) * vis;
     float3 envUp = sampleSkyDome(reflect(-V, s.N), u, false, false) * u.coronaColor.w;
@@ -1423,19 +2188,23 @@ static float3 evaluateSecondaryHitRadiance(
     float3 F = F_Schlick(max(dot(s.N, V), 0.0f), F0);
     float3 ambient = (1.0f - F) * (1.0f - s.metallic) * s.baseAlbedo * (u.skyZenith.rgb * 0.35f + u.skyHorizon.rgb * 0.45f) * u.coronaColor.w * 0.42f;
     float3 reflApprox = F * envUp;
-    // Recessed smoked headlight housings sit deep under the hood/bezel overhang — apply cavity occlusion
-    // so bright daylight sky never washes the optical bowl into milky grey!
+    // Recessed optical cavity occlusion: keeps dark gunmetal housing jet-dark while letting gleaming silver chrome bowls catch crisp glints!
     if (s.matID == MAT_HEADLIGHT_EMIT) {
-        direct *= 0.22f;
-        ambient *= 0.16f;
-        reflApprox *= 0.14f;
+        float chromeFrac = smoothstep(0.45f, 0.90f, s.metallic);
+        direct *= mix(0.16f, 0.42f, chromeFrac);
+        ambient *= 0.08f;
+        reflApprox *= mix(0.05f, 0.32f, chromeFrac);
     }
 
     float3 localDiff, localSpec;
     evaluateLocalAreaLightsSplit(s, V, u, localDiff, localSpec);
     float3 localTotal = localDiff * (1.0f - F) * (1.0f - s.metallic) * s.baseAlbedo + localSpec;
 
-    return min(direct + ambient + reflApprox + min(s.emissive, float3(3.8f)) + localTotal, float3(9.0f));
+    // Clamp secondary taillight radiance <= 1.4 so wet road puddles & trunk lip never smear into blurry red smudges!
+    float3 bounceEmissive = (s.matID == MAT_TAILLIGHT_EMIT)
+        ? min(s.emissive, float3(1.4f))
+        : min(s.emissive, float3(3.8f));
+    return min(direct + ambient + reflApprox + bounceEmissive + localTotal, float3(9.0f));
 }
 
 // ---------------------------------------------------------------------------
@@ -1464,6 +2233,11 @@ kernel void raytraceKernel(
     texture2d<float> carTaillightTex [[texture(17)]],
     texture2d<float> carTireTex [[texture(18)]],
     texture2d<float> carInteriorTex [[texture(19)]],
+    texture2d<float, access::write> gColorTex [[texture(20)]],
+    texture2d<float, access::write> gMotionTex [[texture(21)]],
+    texture2d<float, access::write> gSpecAlbedoTex [[texture(22)]],
+    texture2d<float, access::write> gRoughnessTex [[texture(23)]],
+    texture2d<float, access::write> gReactiveTex [[texture(24)]],
     sampler repeatSamp [[sampler(0)]],
     constant RTFrameUniforms& u [[buffer(0)]],
     instance_acceleration_structure tlas [[buffer(1)]],
@@ -1471,13 +2245,21 @@ kernel void raytraceKernel(
     device const uint* indices [[buffer(3)]],
     device const uint* triMaterials [[buffer(4)]],
     device const RTInstanceMeta* instances [[buffer(5)]],
-    device const RTMaterial* materials [[buffer(6)]]
+    device const RTMaterial* materials [[buffer(6)]],
+    device const RkptVertex* worldVertices [[buffer(7)]],
+    device const uint* worldIndices [[buffer(8)]],
+    device const RkptMaterial* worldMaterials [[buffer(9)]],
+    device const BindlessTexEntry* worldTextures [[buffer(10)]]
 ) {
     uint width = uint(u.rtParams.x);
     uint height = uint(u.rtParams.y);
     if (gid.x >= width || gid.y >= height) return;
 
     uint sampleIdx = uint(u.rtParams.z);
+    bool temporal1SPP = (u.jitterParams.z > 0.5f);
+    bool hasRkptWorld = (u.carWorldPos.w > 0.5f);
+    uint worldTexCount = uint(max(u.jitterParams.w, 1.0f));
+
     float2 cpShift = float2(hash21(float2(gid)), hash21(float2(gid) + float2(71.3f, 19.7f)));
     float2 xiAA   = r2Sequence(sampleIdx, cpShift);
     float2 xiShad = r2Sequence(sampleIdx + 37u, fract(cpShift + float2(0.37f, 0.71f)));
@@ -1496,13 +2278,21 @@ kernel void raytraceKernel(
             gNormalRoughTex.write(float4(0.0f, 1.0f, 0.0f, -1.0f), gid);
             gDepthTex.write(float4(240.0f), gid);
             gEmissiveTex.write(float4(0.0f), gid);
+            gColorTex.write(float4(2.5f, 2.5f, 2.5f, 1.0f), gid);
+            gMotionTex.write(float4(0.0f), gid);
+            gSpecAlbedoTex.write(float4(0.0f), gid);
+            gRoughnessTex.write(float4(1.0f), gid);
+            gReactiveTex.write(float4(0.0f), gid);
             return;
         }
         useRT = (gid.x > splitX);
     }
 
-    float2 jitter = (sampleIdx == 0u && !useRT) ? float2(0.5f, 0.5f) : xiAA;
-    float2 uv = (float2(gid) + jitter) / float2(float(width), float(height));
+    float2 resF = float2(float(width), float(height));
+    float2 pixelJitter = temporal1SPP
+        ? (float2(0.5f, 0.5f) + u.jitterParams.xy)
+        : ((sampleIdx == 0u && !useRT) ? float2(0.5f, 0.5f) : xiAA);
+    float2 uv = (float2(gid) + pixelJitter) / resF;
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
 
     float4 worldFar = u.invViewProjMatrix * float4(ndc, 1.0f, 1.0f);
@@ -1510,31 +2300,46 @@ kernel void raytraceKernel(
     float3 rayOrigin = u.cameraPos.xyz;
     float3 rayDir = normalize(targetPt - rayOrigin);
 
-    intersector<triangle_data, instancing> rt;
-    rt.assume_geometry_type(geometry_type::triangle);
-
     ray r;
     r.origin = rayOrigin;
     r.direction = rayDir;
     r.min_distance = 0.02f;
-    r.max_distance = 250.0f;
+    r.max_distance = hasRkptWorld ? 650.0f : 250.0f;
 
-    auto hit = rt.intersect(r, tlas, 0xFFu);
+    TraceResult hit = traceSceneRay(
+        r, tlas, 0xFFu, hasRkptWorld,
+        instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+    );
 
     float3 outDiffIrrad = float3(0.0f);
     float3 outSpecRad   = float3(0.0f);
     float3 gAlbedo      = float3(0.0f);
+    float3 gSpecAlbedo  = float3(0.0f);
     float4 gNormRough   = float4(0.0f, 1.0f, 0.0f, -1.0f);
-    float  gDepth       = 250.0f;
+    float  gDepth       = r.max_distance;
+    float  clipDepth    = 0.0f; // Reverse-Z (far/sky = 0.0, near = 1.0) matching MTLFXTemporalDenoisedScaler
     float3 gEmissive    = float3(0.0f);
+    float  gRoughVal    = 1.0f;
+    float  gReactiveVal = 0.0f;
+    float2 motionPx     = float2(0.0f);
 
-    if (hit.type == intersection_type::none) {
+    float2 currPx = float2(gid) + float2(0.5f, 0.5f);
+
+    if (!hit.hit) {
         outSpecRad = sampleSkyDome(rayDir, u, true, true);
+        // Far-plane sky motion vector so clouds/horizon never smear during turns
+        float4 prevSkyClip = u.prevViewProjMatrix * float4(rayOrigin + rayDir * 400.0f, 1.0f);
+        if (prevSkyClip.w > 1e-4f) {
+            float2 prevNDC = prevSkyClip.xy / prevSkyClip.w;
+            float2 prevUV = float2(prevNDC.x * 0.5f + 0.5f, 0.5f - prevNDC.y * 0.5f);
+            motionPx = prevUV * resF - currPx;
+        }
     } else {
         HitSurface s = resolveHitSurface(
             rayOrigin, rayDir, hit.distance,
-            hit.instance_id, hit.primitive_id, hit.triangle_barycentric_coord,
-            vertices, indices, triMaterials, instances, materials, u,
+            hit.instanceID, hit.primitiveID, hit.bary,
+            vertices, indices, triMaterials, instances, materials,
+            worldVertices, worldIndices, worldMaterials, worldTextures, u,
             asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
             concreteDiffTex, concreteNormTex,
             carbonDiffTex, carbonNormTex,
@@ -1542,6 +2347,21 @@ kernel void raytraceKernel(
             carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
             repeatSamp
         );
+
+        // Exact Reverse-Z depth (nearZ=0.20, farZ=800.0 -> 1.0 at near, 0.0 at far) + static/dynamic motion vectors
+        RTInstanceMeta hitInst = instances[hit.instanceID];
+        float4 currClip = u.currViewProjMatrix * float4(s.worldPos, 1.0f);
+        float viewZ = max(currClip.w, 0.20f);
+        clipDepth = clamp((0.20f * (800.0f - viewZ)) / (viewZ * 799.8f), 0.0f, 1.0f);
+        float3 prevWorldPos = (hitInst.prevModelMatrix * float4(s.modelPos, 1.0f)).xyz;
+        float4 prevClip = u.prevViewProjMatrix * float4(prevWorldPos, 1.0f);
+        if (prevClip.w > 1e-4f) {
+            float2 prevNDC = prevClip.xy / prevClip.w;
+            float2 prevUV = float2(prevNDC.x * 0.5f + 0.5f, 0.5f - prevNDC.y * 0.5f);
+            float2 currNDC = currClip.xy / max(currClip.w, 1e-5f);
+            float2 currUnjitUV = float2(currNDC.x * 0.5f + 0.5f, 0.5f - currNDC.y * 0.5f);
+            motionPx = (prevUV - currUnjitUV) * resF;
+        }
 
         float3 V = -rayDir;
         gDepth = hit.distance;
@@ -1551,7 +2371,7 @@ kernel void raytraceKernel(
             float f0 = pow((s.ior - 1.0f) / (s.ior + 1.0f), 2.0f);
             float F_glass = F_SchlickScalar(NdotV, f0);
             float reflWeight = (s.matID == MAT_HEADLIGHT_GLASS)
-                ? clamp(F_glass * 0.075f, 0.006f, 0.046f)
+                ? clamp(F_glass * 0.055f, 0.005f, 0.036f)
                 : clamp(F_glass + 0.16f, 0.14f, 0.90f);
 
             float3 reflDir = (s.matID == MAT_SMOKED_GLASS && useRT)
@@ -1564,13 +2384,17 @@ kernel void raytraceKernel(
                 rr.origin = s.worldPos + s.geomN * 0.004f;
                 rr.direction = normalize(reflDir);
                 rr.min_distance = 0.002f;
-                rr.max_distance = 120.0f;
-                auto rh = rt.intersect(rr, tlas, 0xFFu);
-                if (rh.type == intersection_type::triangle) {
+                rr.max_distance = 140.0f;
+                TraceResult rh = traceSceneRay(
+                    rr, tlas, 0xFFu, hasRkptWorld,
+                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                );
+                if (rh.hit) {
                     HitSurface rs = resolveHitSurface(
                         rr.origin, rr.direction, rh.distance,
-                        rh.instance_id, rh.primitive_id, rh.triangle_barycentric_coord,
-                        vertices, indices, triMaterials, instances, materials, u,
+                        rh.instanceID, rh.primitiveID, rh.bary,
+                        vertices, indices, triMaterials, instances, materials,
+                        worldVertices, worldIndices, worldMaterials, worldTextures, u,
                         asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                         concreteDiffTex, concreteNormTex,
                         carbonDiffTex, carbonNormTex,
@@ -1578,11 +2402,16 @@ kernel void raytraceKernel(
                         carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
                         repeatSamp
                     );
-                    reflCol = evaluateSecondaryHitRadiance(rr.origin, rr.direction, rs, tlas, u, xiShad);
+                    reflCol = evaluateSecondaryHitRadiance(
+                        rr.origin, rr.direction, rs, tlas,
+                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                    );
                 }
             }
             if (s.matID == MAT_SMOKED_GLASS) {
                 reflCol = min(reflCol, float3(1.55f));
+            } else {
+                reflCol = min(reflCol, float3(0.72f));
             }
 
             ray tr;
@@ -1590,13 +2419,18 @@ kernel void raytraceKernel(
             tr.direction = rayDir;
             tr.min_distance = 0.002f;
             tr.max_distance = 60.0f;
-            auto th = rt.intersect(tr, tlas, 0xFFu);
+            // Exclude TLAS_MASK_GLASS on transmission rays so curved/double-layer headlight lenses NEVER self-intersect into opaque white glass!
+            TraceResult th = traceSceneRay(
+                tr, tlas, (0xFFu & ~TLAS_MASK_GLASS), hasRkptWorld,
+                instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+            );
             float3 transCol = sampleSkyDome(rayDir, u, false, false);
-            if (th.type == intersection_type::triangle) {
+            if (th.hit) {
                 HitSurface ts = resolveHitSurface(
                     tr.origin, tr.direction, th.distance,
-                    th.instance_id, th.primitive_id, th.triangle_barycentric_coord,
-                    vertices, indices, triMaterials, instances, materials, u,
+                    th.instanceID, th.primitiveID, th.bary,
+                    vertices, indices, triMaterials, instances, materials,
+                    worldVertices, worldIndices, worldMaterials, worldTextures, u,
                     asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                     concreteDiffTex, concreteNormTex,
                     carbonDiffTex, carbonNormTex,
@@ -1604,35 +2438,54 @@ kernel void raytraceKernel(
                     carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
                     repeatSamp
                 );
-                transCol = evaluateSecondaryHitRadiance(tr.origin, tr.direction, ts, tlas, u, xiShad);
+                transCol = evaluateSecondaryHitRadiance(
+                    tr.origin, tr.direction, ts, tlas,
+                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                );
             }
 
             float3 L = normalize(u.sunDir.xyz);
-            float3 sunSpec = evaluateDirectSunBRDF(s, V, L, u.sunColor.rgb * u.sunDir.w) * ((s.matID == MAT_HEADLIGHT_GLASS) ? 0.14f : 1.0f);
+            float sunVisGlass = 1.0f;
+            if (useRT) {
+                ray gsr;
+                gsr.origin = s.worldPos + s.geomN * 0.004f;
+                gsr.direction = sampleCone(L, u.sunColor.w, xiShad);
+                gsr.min_distance = 0.002f;
+                gsr.max_distance = 180.0f;
+                sunVisGlass = traceShadowVisibility(
+                    gsr, tlas, TLAS_MASK_SHADOW_ALL, hasRkptWorld,
+                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                );
+            }
+            // Pure specular glint ONLY on clear/smoked glass (ZERO diffuse golden sunlight leak on MAT_HEADLIGHT_GLASS!)
+            float3 glassDiff, glassSpec;
+            evaluateDirectSunSplit(s, V, L, u.sunColor.rgb * u.sunDir.w, sunVisGlass, glassDiff, glassSpec);
+            float3 sunSpec = glassSpec * ((s.matID == MAT_HEADLIGHT_GLASS) ? 0.35f : 1.0f);
             float3 tint = (s.matID == MAT_HEADLIGHT_GLASS)
-                ? float3(0.88f, 0.92f, 0.98f)
+                ? float3(0.95f, 0.98f, 1.00f)
                 : mix(s.baseAlbedo * 0.72f + float3(0.18f), float3(1.0f), 1.0f - s.alpha);
 
             outSpecRad = mix(transCol * tint, reflCol, reflWeight) + sunSpec;
+            gSpecAlbedo = float3(reflWeight);
             gEmissive = s.emissive;
             gNormRough = float4(s.N, 0.02f);
+            gRoughVal = 0.02f;
+            gReactiveVal = 0.92f;
         } else {
             float3 L = normalize(u.sunDir.xyz);
             float3 sunRad = u.sunColor.rgb * u.sunDir.w;
 
             float sunVis = 1.0f;
             if (useRT) {
-                intersector<triangle_data, instancing> shadowRT;
-                shadowRT.assume_geometry_type(geometry_type::triangle);
-                shadowRT.accept_any_intersection(true);
-
                 ray sr;
                 sr.origin = s.worldPos + s.geomN * 0.004f;
                 sr.direction = sampleCone(L, u.sunColor.w, xiShad);
                 sr.min_distance = 0.002f;
-                sr.max_distance = 160.0f;
-                auto sh = shadowRT.intersect(sr, tlas, 0x01u);
-                sunVis = (sh.type == intersection_type::none) ? 1.0f : 0.0f;
+                sr.max_distance = 220.0f;
+                sunVis = traceShadowVisibility(
+                    sr, tlas, TLAS_MASK_SHADOW_ALL, hasRkptWorld,
+                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                );
             }
 
             float3 directDiffIrrad, directSpec;
@@ -1660,17 +2513,19 @@ kernel void raytraceKernel(
                 rr.origin = s.worldPos + s.geomN * 0.004f;
                 rr.direction = normalize(R_base);
                 rr.min_distance = 0.003f;
-                rr.max_distance = 140.0f;
-                auto rh = rt.intersect(rr, tlas, 0xFFu);
-                if (rh.type == intersection_type::none) {
-                    // Direct sun/moon lighting is already evaluated analytically via evaluateDirectSunSplit;
-                    // setting includeSunDisc = false eliminates double-counted sun/moon specular firefly glints!
+                rr.max_distance = 160.0f;
+                TraceResult rh = traceSceneRay(
+                    rr, tlas, 0xFFu, hasRkptWorld,
+                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                );
+                if (!rh.hit) {
                     baseSpecRefl = sampleSkyDome(rr.direction, u, false, false) * u.coronaColor.w;
                 } else {
                     HitSurface rs = resolveHitSurface(
                         rr.origin, rr.direction, rh.distance,
-                        rh.instance_id, rh.primitive_id, rh.triangle_barycentric_coord,
-                        vertices, indices, triMaterials, instances, materials, u,
+                        rh.instanceID, rh.primitiveID, rh.bary,
+                        vertices, indices, triMaterials, instances, materials,
+                        worldVertices, worldIndices, worldMaterials, worldTextures, u,
                         asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                         concreteDiffTex, concreteNormTex,
                         carbonDiffTex, carbonNormTex,
@@ -1678,7 +2533,10 @@ kernel void raytraceKernel(
                         carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
                         repeatSamp
                     );
-                    baseSpecRefl = evaluateSecondaryHitRadiance(rr.origin, rr.direction, rs, tlas, u, xiShad);
+                    baseSpecRefl = evaluateSecondaryHitRadiance(
+                        rr.origin, rr.direction, rs, tlas,
+                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                    );
                 }
                 baseSpecRefl = min(baseSpecRefl, float3(10.0f));
 
@@ -1691,15 +2549,19 @@ kernel void raytraceKernel(
                     cr.origin = s.worldPos + s.geomN * 0.004f;
                     cr.direction = normalize(R_cc);
                     cr.min_distance = 0.003f;
-                    cr.max_distance = 140.0f;
-                    auto ch = rt.intersect(cr, tlas, 0xFFu);
-                    if (ch.type == intersection_type::none) {
+                    cr.max_distance = 160.0f;
+                    TraceResult ch = traceSceneRay(
+                        cr, tlas, 0xFFu, hasRkptWorld,
+                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                    );
+                    if (!ch.hit) {
                         ccSpecRefl = sampleSkyDome(cr.direction, u, false, false) * u.coronaColor.w;
                     } else {
                         HitSurface cs = resolveHitSurface(
                             cr.origin, cr.direction, ch.distance,
-                            ch.instance_id, ch.primitive_id, ch.triangle_barycentric_coord,
-                            vertices, indices, triMaterials, instances, materials, u,
+                            ch.instanceID, ch.primitiveID, ch.bary,
+                            vertices, indices, triMaterials, instances, materials,
+                            worldVertices, worldIndices, worldMaterials, worldTextures, u,
                             asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                             concreteDiffTex, concreteNormTex,
                             carbonDiffTex, carbonNormTex,
@@ -1707,7 +2569,10 @@ kernel void raytraceKernel(
                             carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
                             repeatSamp
                         );
-                        ccSpecRefl = evaluateSecondaryHitRadiance(cr.origin, cr.direction, cs, tlas, u, xiShad);
+                        ccSpecRefl = evaluateSecondaryHitRadiance(
+                            cr.origin, cr.direction, cs, tlas,
+                            instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                        );
                     }
                     ccSpecRefl = min(ccSpecRefl, float3(10.0f));
                 }
@@ -1724,17 +2589,21 @@ kernel void raytraceKernel(
                 gr.origin = s.worldPos + s.geomN * 0.004f;
                 gr.direction = giDir;
                 gr.min_distance = 0.003f;
-                gr.max_distance = 24.0f;
-                auto gh = rt.intersect(gr, tlas, 0x01u);
+                gr.max_distance = 28.0f;
+                TraceResult gh = traceSceneRay(
+                    gr, tlas, TLAS_MASK_SHADOW_ALL, hasRkptWorld,
+                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                );
 
-                if (gh.type == intersection_type::none) {
+                if (!gh.hit) {
                     giIrrad = sampleSkyDome(giDir, u, false, false) * u.coronaColor.w * 0.62f;
                 } else {
                     float ao = smoothstep(0.02f, 2.2f, gh.distance);
                     HitSurface gs = resolveHitSurface(
                         gr.origin, gr.direction, gh.distance,
-                        gh.instance_id, gh.primitive_id, gh.triangle_barycentric_coord,
-                        vertices, indices, triMaterials, instances, materials, u,
+                        gh.instanceID, gh.primitiveID, gh.bary,
+                        vertices, indices, triMaterials, instances, materials,
+                        worldVertices, worldIndices, worldMaterials, worldTextures, u,
                         asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                         concreteDiffTex, concreteNormTex,
                         carbonDiffTex, carbonNormTex,
@@ -1742,32 +2611,116 @@ kernel void raytraceKernel(
                         carHeadlightTex, carTaillightTex, carTireTex, carInteriorTex,
                         repeatSamp
                     );
-                    float3 bounceRad = min(evaluateSecondaryHitRadiance(gr.origin, gr.direction, gs, tlas, u, xiShad), float3(6.5f));
+                    float3 bounceRad = min(evaluateSecondaryHitRadiance(
+                        gr.origin, gr.direction, gs, tlas,
+                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, repeatSamp, u, xiShad
+                    ), float3(6.5f));
                     giIrrad = bounceRad * 0.68f + sampleSkyDome(s.N, u, false, false) * 0.14f * ao;
                 }
             } else {
                 giIrrad = sampleSkyDome(s.N, u, false, false) * u.coronaColor.w * 0.48f;
             }
 
-            float3 diffK = (1.0f - F_env) * (1.0f - s.metallic) * s.baseAlbedo;
-            outDiffIrrad = directDiffIrrad + localDiffIrrad + giIrrad * (1.0f - F_cc);
-            outSpecRad = (directSpec + localSpec + F_env * baseSpecRefl) * (1.0f - F_cc) + ccSpecRefl * F_cc;
+            bool isWorldGeom = ((hitInst.flags & (1u << 4)) != 0u);
+            bool isDynamicCar = (!isWorldGeom && (hitInst.flags & 4u) == 0u);
+            float3 skyFill = (u.skyZenith.rgb * 0.55f + u.skyHorizon.rgb * 0.45f) * u.coronaColor.w * 0.28f;
+            if (isWorldGeom) {
+                // Attenuate skyFill on ROAD_ASPHALT (0.35x) to keep tarmac rich charcoal; lift shaded walls/foliage (+36%)
+                float roadAtten = (s.matID == MAT_WET_ASPHALT) ? 0.35f : 1.0f;
+                float giBoost = (s.matID == MAT_WET_ASPHALT) ? 1.06f : 1.36f;
+                giIrrad = giIrrad * giBoost + skyFill * roadAtten * (0.55f + 0.45f * max(s.N.y, 0.0f));
+                // Keep subtle under-car bounce fill on road near car while preserving tight tire contact shadow
+                float2 dCarXZ = s.worldPos.xz - u.carWorldPos.xz;
+                float carNear = smoothstep(3.8f, 1.4f, length(dCarXZ));
+                float contactTight = smoothstep(0.06f, 0.28f, s.worldPos.y - u.carWorldPos.y + 0.22f);
+                giIrrad = max(giIrrad, skyFill * (0.14f * carNear * contactTight));
+            } else if (isDynamicCar) {
+                // Physically grounded ambient bounce floor under lower bumper, wheel wells & tires (>= 0.14 * skyFill)
+                float tireContactKeep = smoothstep(0.02f, 0.16f, s.worldPos.y - u.carWorldPos.y);
+                giIrrad = max(giIrrad, skyFill * (0.14f + 0.10f * tireContactKeep));
+            }
 
-            float fog = 1.0f - exp(-pow(hit.distance * u.skyHorizon.w * 1.05f, 1.45f));
-            fog = clamp(fog, 0.0f, 0.85f);
-            float3 fogCol = sampleSkyDome(normalize(float3(rayDir.x, 0.025f, rayDir.z)), u, false, false);
+            float3 diffK = (1.0f - F_env) * (1.0f - s.metallic) * s.baseAlbedo;
+            // Physical rough-surface grazing Fresnel attenuation on dry matte asphalt (eliminates pale blue ice-road sheen in daylight!)
+            float3 F_envSpec = (s.matID == MAT_WET_ASPHALT)
+                ? F_env * mix(1.0f, 0.28f, smoothstep(0.32f, 0.76f, s.roughness))
+                : F_env;
+            outDiffIrrad = directDiffIrrad + localDiffIrrad + giIrrad * (1.0f - F_cc);
+            outSpecRad = (directSpec + localSpec + F_envSpec * baseSpecRefl) * (1.0f - F_cc) + ccSpecRefl * F_cc;
+
+            float fog;
+            float3 fogCol;
+            if (hasRkptWorld) {
+                // Open-city aerial perspective (0.22x viaduct density): buildings stay razor-clear 150-300m down Rosewood & Downtown!
+                float distFog = 1.0f - exp(-hit.distance * u.skyHorizon.w * 0.22f);
+                fog = clamp(distFog, 0.0f, 0.52f);
+                float isNight = smoothstep(0.032f, 0.015f, u.skyZenith.r);
+                float sunAlign = max(dot(rayDir, normalize(u.sunDir.xyz)), 0.0f);
+                // Natural pale cool-blue atmospheric perspective away from sun, subtle pale champagne near sun (zero mustard-yellow soup!)
+                float3 dayCoolHaze = mix(u.skyZenith.rgb * 1.15f + float3(0.24f, 0.30f, 0.38f),
+                                         float3(0.46f, 0.50f, 0.54f), 0.48f);
+                float3 dayWarmSun  = mix(dayCoolHaze, u.sunColor.rgb * 0.42f + float3(0.24f, 0.22f, 0.18f),
+                                         pow(sunAlign, 5.0f) * 0.42f);
+                float3 nightHaze   = u.skyHorizon.rgb * 0.92f + float3(0.012f, 0.018f, 0.030f);
+                fogCol = mix(dayWarmSun, nightHaze, isNight);
+            } else {
+                fog = 1.0f - exp(-pow(hit.distance * u.skyHorizon.w * 1.05f, 1.45f));
+                fog = clamp(fog, 0.0f, 0.85f);
+                fogCol = sampleSkyDome(normalize(float3(rayDir.x, 0.025f, rayDir.z)), u, false, false);
+            }
 
             gAlbedo = diffK * (1.0f - fog);
+            gSpecAlbedo = (F_envSpec * (1.0f - F_cc) + float3(F_cc)) * (1.0f - fog);
             outSpecRad = outSpecRad * (1.0f - fog) + fogCol * fog;
             gEmissive = s.emissive * (1.0f - fog);
-            gNormRough = float4(s.N, s.roughness);
+            // For offline progressive renders on mirror-clearcoat car paint, write ccRoughness (<=0.03) so atrous4 skips wavy specular blur!
+            float gDenoiseRough = (!temporal1SPP && s.clearcoat > 0.65f && s.ccRoughness < 0.06f)
+                ? min(s.roughness, s.ccRoughness)
+                : s.roughness;
+            gNormRough = float4(s.N, gDenoiseRough);
+            gRoughVal = s.roughness;
+            // High reactivity on thin wing & emissives (zero ghosting); moderate reactivity on rigid-tracked tires/rims (zero 1-SPP speckle!)
+            bool highReactivePart = (s.matID == MAT_CARBON_FIBER || s.matID == MAT_TAILLIGHT_EMIT || s.matID == MAT_HEADLIGHT_EMIT);
+            bool wheelPart = (s.matID == MAT_RUBBER_TIRE || s.matID == MAT_ALLOY_RIM);
+            gReactiveVal = highReactivePart
+                ? 0.92f
+                : (wheelPart ? 0.38f : ((length(gEmissive) > 0.5f) ? 0.82f : (isDynamicCar ? 0.42f : 0.0f)));
         }
     }
 
-    // Subtle high-speed rear-tire wet mist / spray veil behind rear wheels when driving fast (--drive-demo)
+    // Subtle atmospheric diagonal falling rain streaks in wet Rockport night_rain scenes (TRUE NIGHT ONLY)
+    float rainNightGate = smoothstep(0.032f, 0.015f, u.skyZenith.r);
+    if (hasRkptWorld && rainNightGate > 0.45f && u.skyZenith.w > 0.72f) {
+        float rainStreak = 0.0f;
+        float2 pxNorm = float2(gid) / resF;
+        // 12-degree wind-slanted rain coordinates across 2 depth parallax planes
+        float2 slantUV = float2(pxNorm.x * u.cameraForward.w + pxNorm.y * 0.21f, pxNorm.y);
+        float tRain = u.envParams.y * 0.22f + float(sampleIdx) * 0.07f;
+        for (int rl = 0; rl < 2; ++rl) {
+            float cols = (rl == 0) ? 135.0f : 215.0f;
+            float rows = (rl == 0) ? 11.0f : 18.0f;
+            float2 rp = float2(slantUV.x * cols + float(rl) * 37.1f, slantUV.y * rows - tRain * (2.2f + float(rl)));
+            float2 cell = floor(rp);
+            float2 f = fract(rp);
+            float3 rnd = hash33(float3(cell, float(rl) * 19.3f + 3.1f));
+            if (rnd.x > 0.78f) {
+                float xCenter = 0.25f + 0.50f * rnd.y;
+                float xMask = smoothstep(0.065f, 0.015f, abs(f.x - xCenter));
+                float yMask = smoothstep(0.04f, 0.45f, f.y) * smoothstep(0.96f, 0.55f, f.y);
+                float depthGate = (rl == 0) ? smoothstep(2.0f, 8.0f, gDepth) : smoothstep(5.0f, 18.0f, gDepth);
+                rainStreak += xMask * yMask * depthGate * ((rl == 0) ? 0.14f : 0.09f) * (0.45f + 0.55f * rnd.z);
+            }
+        }
+        if (rainStreak > 0.002f) {
+            float3 rainCol = mix(float3(0.58f, 0.72f, 0.92f), float3(1.00f, 0.80f, 0.48f), 0.34f);
+            outSpecRad += rainCol * min(rainStreak, 0.24f) * rainNightGate;
+            gReactiveVal = max(gReactiveVal, 0.65f);
+        }
+    }
+
+    // Subtle high-speed rear-tire wet mist / spray veil behind rear wheels when driving fast (procedural overpass)
     float driveSpd = clamp(u.driveParams.x / 180.0f, 0.0f, 1.0f);
-    if (driveSpd > 0.30f && rayOrigin.z < -2.2f && rayDir.z > 0.35f) {
-        // Evaluate subtle volumetric spray plume in two slices behind the rear tires (z = -2.25m and z = -2.85m)
+    if (!hasRkptWorld && driveSpd > 0.30f && rayOrigin.z < -2.2f && rayDir.z > 0.35f) {
         float sprayAccum = 0.0f;
         float3 sprayColAccum = float3(0.0f);
         const float sliceZs[2] = { -2.28f, -2.95f };
@@ -1781,7 +2734,6 @@ kernel void raytraceKernel(
                     float plume = max(exp(-dL * dL * 1.4f), exp(-dR * dR * 1.4f));
                     float wisp = fbm2D(float2(sp.x * 3.8f, sp.y * 5.2f + u.envParams.y * 0.45f + float(sl) * 3.1f));
                     float dens = plume * smoothstep(0.28f, 0.82f, wisp) * driveSpd * clamp(u.skyZenith.w, 0.2f, 1.0f) * 0.115f;
-                    // Sunlit golden mist + subtle crimson taillight scatter near upper wake
                     float tailNear = smoothstep(0.10f, 0.45f, sp.y) * smoothstep(1.20f, 0.55f, abs(sp.x));
                     float3 mistTint = mix(u.skyHorizon.rgb * 0.72f + u.sunColor.rgb * 0.32f, float3(1.10f, 0.12f, 0.05f), tailNear * 0.36f);
                     sprayColAccum += mistTint * dens;
@@ -1793,13 +2745,28 @@ kernel void raytraceKernel(
         if (sprayAccum > 0.002f) {
             gAlbedo *= (1.0f - sprayAccum * 0.65f);
             outSpecRad = outSpecRad * (1.0f - sprayAccum * 0.65f) + sprayColAccum;
+            gReactiveVal = max(gReactiveVal, 0.65f);
         }
     }
 
     outDiffIrrad = clamp(outDiffIrrad, float3(0.0f), float3(18.0f));
     outSpecRad   = clamp(outSpecRad,   float3(0.0f), float3(16.0f));
 
-    if (sampleIdx == 0u) {
+    if (temporal1SPP) {
+        // Real-time 1-SPP temporal driving path (MetalFX TemporalDenoisedScaler or SVGF)
+        float3 modulatedHDR = outDiffIrrad * gAlbedo + outSpecRad + gEmissive;
+        accumDiffTex.write(float4(outDiffIrrad, 1.0f), gid);
+        accumSpecTex.write(float4(outSpecRad, 1.0f), gid);
+        gAlbedoTex.write(float4(gAlbedo, (gNormRough.w >= 0.0f) ? 1.0f : 0.0f), gid);
+        gNormalRoughTex.write(gNormRough, gid);
+        gDepthTex.write(float4(clipDepth, 0.0f, 0.0f, 1.0f), gid);
+        gEmissiveTex.write(float4(gEmissive, 1.0f), gid);
+        gColorTex.write(float4(modulatedHDR, 1.0f), gid);
+        gMotionTex.write(float4(motionPx, 0.0f, 0.0f), gid);
+        gSpecAlbedoTex.write(float4(gSpecAlbedo, 1.0f), gid);
+        gRoughnessTex.write(float4(gRoughVal, 0.0f, 0.0f, 1.0f), gid);
+        gReactiveTex.write(float4(gReactiveVal, 0.0f, 0.0f, 1.0f), gid);
+    } else if (sampleIdx == 0u) {
         accumDiffTex.write(float4(outDiffIrrad, 1.0f), gid);
         accumSpecTex.write(float4(outSpecRad, 1.0f), gid);
         gAlbedoTex.write(float4(gAlbedo, (gNormRough.w >= 0.0f) ? 1.0f : 0.0f), gid);
@@ -1817,6 +2784,151 @@ kernel void raytraceKernel(
         gAlbedoTex.write(float4(mix(prevAlb.rgb, gAlbedo, w), prevAlb.a), gid);
         gEmissiveTex.write(float4(mix(prevEm, gEmissive, w), 1.0f), gid);
     }
+}
+
+// ---------------------------------------------------------------------------
+// SVGF Temporal Reprojection Kernel (Clean Fallback when MetalFX is disabled)
+// ---------------------------------------------------------------------------
+
+kernel void svgfTemporalKernel(
+    uint2 gid [[thread_position_in_grid]],
+    texture2d<float, access::read> currDiffTex [[texture(0)]],
+    texture2d<float, access::read> currSpecTex [[texture(1)]],
+    texture2d<float, access::read> prevDiffTex [[texture(2)]],
+    texture2d<float, access::read> prevSpecTex [[texture(3)]],
+    texture2d<float, access::read> motionTex [[texture(4)]],
+    texture2d<float, access::read> currNormRoughTex [[texture(5)]],
+    texture2d<float, access::read> currDepthTex [[texture(6)]],
+    texture2d<float, access::read> prevNormRoughTex [[texture(7)]],
+    texture2d<float, access::read> prevDepthTex [[texture(8)]],
+    texture2d<float, access::write> outDiffTex [[texture(9)]],
+    texture2d<float, access::write> outSpecTex [[texture(10)]],
+    constant uint& resetHistory [[buffer(0)]]
+) {
+    int w = int(outDiffTex.get_width());
+    int h = int(outDiffTex.get_height());
+    if (int(gid.x) >= w || int(gid.y) >= h) return;
+
+    float3 cDiff = currDiffTex.read(gid).rgb;
+    float3 cSpec = currSpecTex.read(gid).rgb;
+    float4 cNR = currNormRoughTex.read(gid);
+
+    if (resetHistory != 0u || cNR.w < 0.0f) {
+        outDiffTex.write(float4(cDiff, 1.0f), gid);
+        outSpecTex.write(float4(cSpec, 1.0f), gid);
+        return;
+    }
+
+    float2 mv = motionTex.read(gid).xy;
+    int2 prevCoord = int2(round(float2(gid) + mv));
+    if (prevCoord.x < 0 || prevCoord.x >= w || prevCoord.y < 0 || prevCoord.y >= h) {
+        outDiffTex.write(float4(cDiff, 1.0f), gid);
+        outSpecTex.write(float4(cSpec, 1.0f), gid);
+        return;
+    }
+
+    float4 pNR = prevNormRoughTex.read(uint2(prevCoord));
+    float cZ = currDepthTex.read(gid).r;
+    float pZ = prevDepthTex.read(uint2(prevCoord)).r;
+    bool valid = (pNR.w >= 0.0f) && (dot(normalize(cNR.xyz), normalize(pNR.xyz)) > 0.85f) && (abs(cZ - pZ) < 0.03f);
+
+    if (!valid) {
+        outDiffTex.write(float4(cDiff, 1.0f), gid);
+        outSpecTex.write(float4(cSpec, 1.0f), gid);
+        return;
+    }
+
+    // 3x3 neighborhood color clamp to prevent ghosting on moving headlights/wheels
+    float3 dMin = cDiff, dMax = cDiff;
+    float3 sMin = cSpec, sMax = cSpec;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            uint2 q = uint2(clamp(int2(gid) + int2(dx, dy), int2(0), int2(w - 1, h - 1)));
+            float3 qd = currDiffTex.read(q).rgb;
+            float3 qs = currSpecTex.read(q).rgb;
+            dMin = min(dMin, qd); dMax = max(dMax, qd);
+            sMin = min(sMin, qs); sMax = max(sMax, qs);
+        }
+    }
+
+    float3 hDiff = clamp(prevDiffTex.read(uint2(prevCoord)).rgb, dMin * 0.85f, dMax * 1.15f + float3(0.05f));
+    float3 hSpec = clamp(prevSpecTex.read(uint2(prevCoord)).rgb, sMin * 0.85f, sMax * 1.15f + float3(0.05f));
+    outDiffTex.write(float4(mix(hDiff, cDiff, 0.16f), 1.0f), gid);
+    outSpecTex.write(float4(mix(hSpec, cSpec, 0.18f), 1.0f), gid);
+}
+
+// ---------------------------------------------------------------------------
+// 8-Ray GPU BVH Physics Probe (4 Wheel Road Drops + 4 Horizontal Wall Rays)
+// ---------------------------------------------------------------------------
+
+kernel void physicsProbeKernel(
+    uint gid [[thread_position_in_grid]],
+    instance_acceleration_structure tlas [[buffer(0)]],
+    constant RTPhysicsProbeInput& inP [[buffer(1)]],
+    device RTPhysicsProbeOutput* outP [[buffer(2)]]
+) {
+    if (gid != 0u) return;
+
+    float3 pos = inP.carPos.xyz;
+    float3 fwd = normalize(inP.carForward.xyz);
+    float3 right = normalize(inP.carRight.xyz);
+    float halfTrack = inP.carForward.w;
+    float frontZ = inP.carRight.w;
+    float rearZ  = inP.dims.x;
+
+    intersector<triangle_data, instancing> probeRT;
+    probeRT.assume_geometry_type(geometry_type::triangle);
+
+    float3 wheelOffsets[4] = {
+        -right * halfTrack + fwd * frontZ, // FL
+         right * halfTrack + fwd * frontZ, // FR
+        -right * halfTrack + fwd * rearZ,  // RL
+         right * halfTrack + fwd * rearZ   // RR
+    };
+
+    float wheelY[4] = { -9999.0f, -9999.0f, -9999.0f, -9999.0f };
+    for (int w = 0; w < 4; ++w) {
+        ray dr;
+        dr.origin = pos + wheelOffsets[w] + float3(0.0f, 3.0f, 0.0f);
+        dr.direction = float3(0.0f, -1.0f, 0.0f);
+        dr.min_distance = 0.05f;
+        dr.max_distance = 10.0f;
+        auto h = probeRT.intersect(dr, tlas, TLAS_MASK_ROAD);
+        if (h.type == intersection_type::none) {
+            h = probeRT.intersect(dr, tlas, TLAS_MASK_WORLD_OPAQUE);
+        }
+        if (h.type == intersection_type::triangle) {
+            wheelY[w] = dr.origin.y - h.distance;
+        }
+    }
+
+    float3 wallDirs[4] = { fwd, -fwd, -right, right };
+    float wDist[4] = { 999.0f, 999.0f, 999.0f, 999.0f };
+    float3 wNorm[4] = { -fwd, fwd, right, -right };
+    for (int k = 0; k < 4; ++k) {
+        ray wr;
+        wr.origin = pos + float3(0.0f, 0.55f, 0.0f);
+        wr.direction = wallDirs[k];
+        wr.min_distance = 0.25f;
+        wr.max_distance = 4.5f;
+        auto h = probeRT.intersect(wr, tlas, TLAS_MASK_WALL);
+        if (h.type == intersection_type::triangle) {
+            wDist[k] = h.distance;
+        }
+    }
+
+    RTPhysicsProbeOutput res;
+    res.wheelHitY = float4(wheelY[0], wheelY[1], wheelY[2], wheelY[3]);
+    res.wallDist  = float4(wDist[0], wDist[1], wDist[2], wDist[3]);
+    res.wallNormalFront = float4(wNorm[0], (wDist[0] < 900.0f) ? 1.0f : 0.0f);
+    if (wDist[2] <= wDist[3] && wDist[2] < 900.0f) {
+        res.wallNormalSide = float4(wNorm[2], -1.0f);
+    } else if (wDist[3] < 900.0f) {
+        res.wallNormalSide = float4(wNorm[3], 1.0f);
+    } else {
+        res.wallNormalSide = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    outP[0] = res;
 }
 
 // ---------------------------------------------------------------------------
@@ -1856,8 +2968,10 @@ kernel void denoiseAtrousKernel(
     float lumDiffP = dot(cDiffP, float3(0.2126f, 0.7152f, 0.0722f));
     float lumSpecP = dot(cSpecP, float3(0.2126f, 0.7152f, 0.0722f));
 
-    float specRadiusScale = smoothstep(0.018f, 0.14f, roughP);
-    if (stepSize > 2 && specRadiusScale < 0.08f) {
+    float isGlossy = smoothstep(0.26f, 0.16f, roughP);
+    float isMirrorCC = (roughP < 0.045f) ? 1.0f : 0.0f;
+    float specRadiusScale = (roughP < 0.045f) ? 0.0f : smoothstep(0.045f, 0.18f, roughP);
+    if (stepSize > 2 && (specRadiusScale < 0.08f || roughP < 0.24f)) {
         specRadiusScale = 0.0f;
     }
 
@@ -1869,9 +2983,11 @@ kernel void denoiseAtrousKernel(
     float3 sumSpec = cSpecP * (kernelW[0] * kernelW[0]);
     float  wSumSpec = kernelW[0] * kernelW[0];
 
-    float sigmaLumDiff = 0.55f + 0.18f * float(stepSize);
-    float sigmaLumSpec = 0.75f + 0.25f * float(stepSize);
-    float depthSigma = max(0.06f * zP, 0.025f);
+    float sigmaLumDiff = mix(0.55f + 0.18f * float(stepSize), 0.24f + 0.08f * float(stepSize), isMirrorCC);
+    float sigmaLumSpec = mix(0.75f + 0.25f * float(stepSize), 0.22f + 0.08f * float(stepSize), isGlossy);
+    float normalExp    = mix(mix(48.0f, 96.0f, isGlossy), 128.0f, isMirrorCC);
+    float roughSigma   = mix(14.0f, 32.0f, isGlossy);
+    float depthSigma   = max(0.06f * zP, 0.025f);
 
     int2 p = int2(gid);
     for (int dy = -2; dy <= 2; ++dy) {
@@ -1889,7 +3005,7 @@ kernel void denoiseAtrousKernel(
             float3 nQ = normalize(nrQ.xyz);
             float zQ = gDepthTex.read(uint2(q)).r;
 
-            float wN = pow(max(dot(nP, nQ), 0.0f), 48.0f);
+            float wN = pow(max(dot(nP, nQ), 0.0f), normalExp);
             float wZ = exp(-abs(zP - zQ) / depthSigma);
             float kW = kernelW[abs(dx)] * kernelW[abs(dy)];
             float geomW = kW * wN * wZ;
@@ -1903,7 +3019,7 @@ kernel void denoiseAtrousKernel(
             wSumDiff += wD;
 
             if (specRadiusScale > 0.01f) {
-                float wR = exp(-abs(roughP - nrQ.w) * 14.0f);
+                float wR = exp(-abs(roughP - nrQ.w) * roughSigma);
                 float3 cSpecQ = srcSpecTex.read(uint2(q)).rgb;
                 float lumSpecQ = dot(cSpecQ, float3(0.2126f, 0.7152f, 0.0722f));
                 float wLS = exp(-abs(lumSpecP - lumSpecQ) / sigmaLumSpec);
@@ -2002,6 +3118,12 @@ static inline float3 linearToSRGB(float3 c) {
     float3 lo = c * 12.92f;
     float3 hi = 1.055f * pow(max(c, float3(0.0f)), float3(1.0f / 2.4f)) - 0.055f;
     return select(hi, lo, c <= 0.0031308f);
+}
+
+static inline float3 srgbToLinear(float3 c) {
+    float3 lo = c / 12.92f;
+    float3 hi = pow(max((c + 0.055f) / 1.055f, float3(0.0f)), float3(2.4f));
+    return select(hi, lo, c <= 0.04045f);
 }
 
 static inline float sdRoundedBoxHUD(float2 p, float2 b, float r) {
@@ -2140,7 +3262,7 @@ static inline float3 compositeDigitalDrivingHUD(float3 baseCol, float2 px, float
         float2 dp = (rel - float2(digCentersX[k], -13.0f)) / float2(30.0f, 27.0f);
         if (abs(dp.x) < 0.7f && abs(dp.y) < 1.2f) {
             float segGhost = evalSevenSegDigit(dp, 8, 0.105f);
-            glassBg = mix(glassBg, float3(0.11f, 0.12f, 0.15f), segGhost * 0.55f);
+            glassBg = mix(glassBg, float3(0.055f, 0.060f, 0.072f), segGhost * 0.28f);
             if (showDig[k]) {
                 float segOn = evalSevenSegDigit(dp, digits[k], 0.105f);
                 glassBg = mix(glassBg, float3(0.98f, 0.99f, 1.00f), segOn);
@@ -2181,18 +3303,21 @@ kernel void compositeKernel(
 
     float3 mapped = acesFilmic(combined);
 
+    // Convert to perceptual sRGB BEFORE applying shadow-safe S-curve contrast & saturation
+    // (eliminates linear-space black crush that clipped dark asphalt & tire shadows to #000000!)
+    float3 srgb = linearToSRGB(mapped);
     float contrast = clamp(u.gradeParams.y, 0.5f, 1.8f);
     float sat = clamp(u.gradeParams.z, 0.2f, 1.8f);
-    mapped = clamp((mapped - 0.5f) * contrast + 0.5f, 0.0f, 1.0f);
-    float lum = dot(mapped, float3(0.2126f, 0.7152f, 0.0722f));
-    mapped = clamp(mix(float3(lum), mapped, sat), 0.0f, 1.0f);
+    float sCurveW = clamp((contrast - 1.0f) * 0.65f, -0.45f, 0.65f);
+    float3 sCurved = srgb * srgb * (3.0f - 2.0f * srgb);
+    srgb = clamp(mix(srgb, sCurved, sCurveW), 0.0f, 1.0f);
+    float lum = dot(srgb, float3(0.2126f, 0.7152f, 0.0722f));
+    srgb = clamp(mix(float3(lum), srgb, sat), 0.0f, 1.0f);
 
     if (u.hudParams.x > 0.5f) {
-        mapped = compositeDigitalDrivingHUD(mapped, float2(gid) + 0.5f, float2(float(w), float(h)), u);
+        srgb = compositeDigitalDrivingHUD(srgb, float2(gid) + 0.5f, float2(float(w), float(h)), u);
     }
 
-    if (encodeSRGB != 0u) {
-        mapped = linearToSRGB(mapped);
-    }
-    outTex.write(float4(mapped, 1.0f), gid);
+    float3 outRGB = (encodeSRGB != 0u) ? srgb : srgbToLinear(srgb);
+    outTex.write(float4(outRGB, 1.0f), gid);
 }
