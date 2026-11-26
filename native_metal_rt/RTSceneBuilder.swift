@@ -215,21 +215,12 @@ enum RTCarCatalog {
     static func ensureCachedScenePath(for entry: RTCarCatalogEntry) -> String? {
         let fm = FileManager.default
         let cacheScene = "build/car_cache/\(entry.canonicalName)/scene.json"
-        // Prefer 58k-tri flagship hq_m3_gtr for M3 GTR and 512px-tex hq_gallardo for Gallardo;
-        // prefer smooth-welded car_cache for Carrera GT & all other 40 garage cars!
-        if entry.canonicalName == "BMWM3GTRE46" && fm.fileExists(atPath: "build/flywheel/hq_m3_gtr/scene.json") {
-            return "build/flywheel/hq_m3_gtr/scene.json"
-        }
-        if entry.canonicalName == "GALLARDO" && fm.fileExists(atPath: "build/flywheel/hq_gallardo/scene.json") {
-            return "build/flywheel/hq_gallardo/scene.json"
-        }
+        // Always prefer fresh build/car_cache/<CAR>/scene.json (smooth-welded, Loop-smoothed mirrors,
+        // 512-1024px upscaled OEM textures & calibrated wheel_bounds) over legacy flywheel packs!
         if fm.fileExists(atPath: cacheScene) {
             return cacheScene
         }
-        if entry.canonicalName == "CARRERAGT" && fm.fileExists(atPath: "build/flywheel/hq_carrera_gt/scene.json") {
-            return "build/flywheel/hq_carrera_gt/scene.json"
-        }
-        // On-demand ~0.3s ISO extraction via tools/extract_rt_car.py!
+        // On-demand ~0.4s ISO extraction via tools/extract_rt_car.py!
         let extractor = "tools/extract_rt_car.py"
         if fm.fileExists(atPath: extractor) {
             let proc = Process()
@@ -244,8 +235,18 @@ enum RTCarCatalog {
                     return cacheScene
                 }
             } catch {
-                // Fall through to legacy paths
+                // Fall through to legacy flywheel paths
             }
+        }
+        // Legacy fallback paths when car_cache and ISO are unavailable
+        if entry.canonicalName == "BMWM3GTRE46" && fm.fileExists(atPath: "build/flywheel/hq_m3_gtr/scene.json") {
+            return "build/flywheel/hq_m3_gtr/scene.json"
+        }
+        if entry.canonicalName == "CARRERAGT" && fm.fileExists(atPath: "build/flywheel/hq_carrera_gt/scene.json") {
+            return "build/flywheel/hq_carrera_gt/scene.json"
+        }
+        if entry.canonicalName == "GALLARDO" && fm.fileExists(atPath: "build/flywheel/hq_gallardo/scene.json") {
+            return "build/flywheel/hq_gallardo/scene.json"
         }
         return nil
     }

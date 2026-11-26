@@ -1257,16 +1257,86 @@ static HitSurface resolveWorldSurface(
         float emGain = max(wmat.emissiveHint, 0.65f) * mix(0.28f, 1.35f, isNight) * lowConcreteGuard;
         s.emissive = min(texCol * emGain * smoothstep(0.28f, 0.64f, lum), float3(1.55f));
     } else if (wmat.surfaceClass == 7u) {
-        // WATER: Rockport coastal bay & harbor water with procedural ripples
+        // v1.4.0 WATER: 6-Wave Directional Gerstner + Micro-Capillary Ripples + Beer-Lambert Teal-Navy Absorption + Shoreline/Crest Foam!
         s.matID = MAT_COASTAL_WATER;
         float2 wp = s.worldPos.xz;
-        float wx = sin(wp.x * 0.65f + wp.y * 0.35f) * 0.045f + (noise2D(wp * 2.5f) - 0.5f) * 0.055f;
-        float wz = cos(wp.x * 1.05f - wp.y * 0.55f) * 0.045f + (noise2D(wp * 2.7f + 4.1f) - 0.5f) * 0.055f;
-        s.N = normalize(float3(wx, 1.0f, wz));
-        s.clearcoatN = s.N;
-        s.baseAlbedo = mix(float3(0.008f, 0.026f, 0.044f), texCol * 0.25f, 0.35f);
-        s.roughness = 0.032f;
-        s.ior = 1.333f;
+        float tW = dynFX.timeWeather.x;
+        // Distance attenuation keeps far bay glints crisp without high-frequency subpixel aliasing
+        float detailFade = exp(-dist * 0.0045f);
+        float swellFade  = exp(-dist * 0.00065f);
+
+        // 6 non-commensurate directional Gerstner waves (ocean swell + harbor chop + wind waves)
+        const float2 wDir[6] = {
+            float2( 0.866f,  0.500f),
+            float2( 0.545f, -0.838f),
+            float2(-0.788f,  0.616f),
+            float2( 0.966f, -0.259f),
+            float2(-0.375f, -0.927f),
+            float2( 0.242f,  0.970f)
+        };
+        const float wLen[6] = { 19.5f, 12.2f, 7.4f, 4.3f, 2.35f, 1.25f };
+        const float wAmp[6] = { 0.145f, 0.095f, 0.058f, 0.036f, 0.021f, 0.012f };
+        const float wSteep[6] = { 0.42f, 0.38f, 0.34f, 0.28f, 0.24f, 0.20f };
+
+        float2 dH = float2(0.0f);
+        float crestSum = 0.0f;
+        float waveHeight = 0.0f;
+        for (int wi = 0; wi < 6; ++wi) {
+            float k = 6.2831853f / wLen[wi];
+            float speed = sqrt(9.81f * k); // Deep-water gravity-wave dispersion
+            float phase = dot(wDir[wi], wp) * k + tW * speed * 0.58f + float(wi) * 1.73f;
+            float sP = sin(phase);
+            float cP = cos(phase);
+            float amp = wAmp[wi] * ((wi < 3) ? swellFade : detailFade);
+            float slope = k * amp * cP / max(1.0f - wSteep[wi] * k * amp * sP, 0.35f);
+            dH += wDir[wi] * slope;
+            waveHeight += amp * sP;
+            // Steep peak pinching drives natural harbor whitecap cresting
+            crestSum += max(0.0f, sP - 0.48f) * wSteep[wi] * ((wi < 4) ? 1.0f : 0.45f);
+        }
+
+        // 2-octave wind-driven micro-capillary ripple normal spectrum for sparkling GGX sun/moon glints
+        if (isPrimary && detailFade > 0.04f) {
+            float2 capUV1 = wp * 2.65f + float2(tW * 0.48f, -tW * 0.31f);
+            float2 capUV2 = wp * 6.40f + float2(-tW * 0.62f, tW * 0.54f);
+            float gx1 = noise2D(capUV1 + float2(0.14f, 0.0f)) - noise2D(capUV1 - float2(0.14f, 0.0f));
+            float gz1 = noise2D(capUV1 + float2(0.0f, 0.14f)) - noise2D(capUV1 - float2(0.0f, 0.14f));
+            float gx2 = noise2D(capUV2 + float2(0.10f, 0.0f)) - noise2D(capUV2 - float2(0.10f, 0.0f));
+            float gz2 = noise2D(capUV2 + float2(0.0f, 0.10f)) - noise2D(capUV2 - float2(0.0f, 0.10f));
+            dH += (float2(gx1, gz1) * 0.20f + float2(gx2, gz2) * 0.13f) * detailFade;
+        }
+
+        float3 waveN = normalize(float3(-dH.x, 1.0f, -dH.y));
+
+        // Beer-Lambert depth absorption: shallow coastal piers/beaches glow translucent emerald-teal -> deep bay navy
+        float shoreHint = clamp((1.0f - aoMul) * 1.45f + smoothstep(0.32f, 0.72f, lum) * 0.75f, 0.0f, 1.0f);
+        float estDepthM = mix(11.5f, 0.75f, shoreHint);
+        float viewPath = estDepthM / max(abs(rayDir.y), 0.18f);
+        float3 beerTrans = exp(-viewPath * float3(0.42f, 0.14f, 0.085f));
+        float3 deepNavy   = float3(0.004f, 0.018f, 0.040f);
+        float3 shallowTeal = float3(0.024f, 0.135f, 0.155f);
+        float3 waterBody  = mix(deepNavy, shallowTeal, clamp(beerTrans.g * 0.85f + shoreHint * 0.25f, 0.0f, 1.0f));
+        // Subtle subsurface emerald sun-scatter glowing through thin wave crests toward the sun
+        float3 sunDirW = normalize(u.sunDir.xyz);
+        float sssPhase = pow(max(dot(rayDir, sunDirW), 0.0f), 3.0f) * smoothstep(0.02f, 0.24f, waveHeight + 0.10f);
+        waterBody += float3(0.022f, 0.145f, 0.135f) * sssPhase * u.sunDir.w * 0.26f * (1.0f - isNight);
+
+        // Shoreline / pier breakwater foam + bubbly sea-foam lacing on steep Gerstner wave crests
+        float foamNoise1 = fbm2D(wp * 0.65f + float2(tW * 0.14f, -tW * 0.09f));
+        float foamNoise2 = noise2D(wp * 3.10f + float2(-tW * 0.22f, tW * 0.17f));
+        float shoreFoam  = smoothstep(0.48f, 0.86f, shoreHint) * smoothstep(0.34f, 0.72f, foamNoise1 * 0.72f + foamNoise2 * 0.28f);
+        float crestFoam  = smoothstep(0.38f, 0.78f, crestSum) * smoothstep(0.42f, 0.76f, foamNoise1 * 0.60f + foamNoise2 * 0.40f) * detailFade;
+        float foamMask   = clamp(max(shoreFoam * 0.88f, crestFoam * 0.68f), 0.0f, 0.92f);
+
+        float3 foamCol = mix(float3(0.76f, 0.84f, 0.88f), float3(0.95f, 0.93f, 0.89f), 0.45f * (1.0f - isNight));
+        s.baseAlbedo  = mix(mix(waterBody, texCol * 0.18f, 0.18f), foamCol, foamMask);
+        s.N           = normalize(mix(waveN, float3(0.0f, 1.0f, 0.0f), foamMask * 0.55f));
+        s.clearcoatN  = waveN;
+        s.roughness   = mix(mix(0.022f, 0.052f, smoothstep(80.0f, 950.0f, dist)), 0.62f, foamMask);
+        s.metallic    = 0.0f;
+        s.clearcoat   = (1.0f - foamMask * 0.88f);
+        s.ccRoughness = mix(0.016f, 0.042f, smoothstep(100.0f, 1200.0f, dist));
+        s.ior         = 1.333f;
     } else if (wmat.surfaceClass == 8u) {
         // TERRAIN_GRASS_DIRT
         s.matID = MAT_AUTUMN_TERRAIN;
@@ -3182,18 +3252,19 @@ static inline void evaluateDriftVFXPrimary(
         float sParam = clamp((e - b * d) / denom, 0.0f, 1.0f);
         float3 segPt = pTail + seg * sParam;
         float tRay = dot(segPt - rayOrigin, rayDir);
-        if (tRay > 1.25f && tRay < gDepth + 0.04f) {
+        // Strict tRay < gDepth - 0.04f occlusion (#113 P2-2) + tightened ~22% needle core so sparks never bleed over bumper!
+        if (tRay > 1.25f && tRay < gDepth - 0.04f) {
             float3 diff = (rayOrigin + rayDir * tRay) - segPt;
             float distSq = dot(diff, diff);
-            float coreR = 0.0068f + tRay * 0.00055f;
+            float coreR = 0.0052f + tRay * 0.00042f;
             float coreR2 = max(coreR * coreR, 1e-6f);
             if (distSq < coreR2 * 22.0f) {
                 float core = exp(-distSq / coreR2);
-                float halo = exp(-distSq / (coreR2 * 4.5f)) * 0.32f;
+                float halo = exp(-distSq / (coreR2 * 4.2f)) * 0.28f;
                 float taper = smoothstep(0.0f, 0.28f, sParam) * (0.42f + 0.58f * sParam);
                 float temp = clamp(sp.velTemp.w, 0.0f, 1.0f);
-                float3 sparkCol = mix(float3(1.00f, 0.30f, 0.03f), float3(1.00f, 0.86f, 0.40f), temp * (0.35f + 0.65f * core));
-                float intensity = (core * 6.2f + halo * 1.9f) * taper * smoothstep(0.0f, 0.18f, life);
+                float3 sparkCol = mix(float3(1.00f, 0.32f, 0.03f), float3(1.00f, 0.88f, 0.44f), temp * (0.35f + 0.65f * core));
+                float intensity = (core * 6.8f + halo * 1.8f) * taper * smoothstep(0.0f, 0.18f, life);
                 outSparkRGB += sparkCol * intensity;
             }
         }
@@ -3209,8 +3280,8 @@ static inline void evaluateDriftVFXPrimary(
         float isNight = smoothstep(0.036f, 0.015f, u.skyZenith.r);
         float3 sunDir = normalize(u.sunDir.xyz);
         float sunPhase = 0.55f + 0.45f * clamp(dot(rayDir, sunDir), -1.0f, 1.0f);
-        float3 baseSmokeLight = (u.skyZenith.rgb * 0.65f + u.skyHorizon.rgb * 0.78f) * max(u.coronaColor.w, 0.40f) * 0.72f
-                              + u.sunColor.rgb * u.sunDir.w * (0.32f * sunPhase)
+        float3 baseSmokeLight = (u.skyZenith.rgb * 0.72f + u.skyHorizon.rgb * 0.88f) * max(u.coronaColor.w, 0.42f) * 0.78f
+                              + u.sunColor.rgb * u.sunDir.w * (0.42f * sunPhase)
                               + float3(0.065f, 0.072f, 0.088f) * isNight;
         float smokeDensityAccum = 0.0f;
         float3 smokeLightAccum = float3(0.0f);
@@ -3235,15 +3306,16 @@ static inline void evaluateDriftVFXPrimary(
             float chord = (t1 - t0) / max(2.0f * rad, 0.1f);
             float3 pMid = rayOrigin + rayDir * (0.5f * (t0 + t1));
             float radialNorm = length(pMid - sm.posRadius.xyz) / rad;
-            float radialFalloff = pow(max(0.0f, 1.0f - radialNorm * radialNorm), 1.85f);
-            float nearCamFade = smoothstep(1.35f, 3.0f, 0.5f * (t0 + t1));
+            float radialFalloff = pow(max(0.0f, 1.0f - radialNorm * radialNorm), 1.65f);
+            float nearCamFade = smoothstep(1.30f, 2.8f, 0.5f * (t0 + t1));
 
             // Fast 1-octave billowing curl in 1-SPP real-time driving (4x faster than fbm2D!), full FBM in Photo Mode
             float2 wUV = pMid.xz * 1.55f + float2(pMid.y * 1.15f - simT * 0.45f, float(i) * 2.31f);
             float billow = temporal1SPP
-                ? (0.56f + 0.44f * noise2D(wUV))
-                : (0.56f + 0.44f * fbm2D(wUV));
-            float localDens = chord * radialFalloff * nearCamFade * billow * alpha * 1.65f;
+                ? (0.58f + 0.42f * noise2D(wUV))
+                : (0.58f + 0.42f * fbm2D(wUV));
+            // Boost golden-hour tire smoke readability ~25% (#113 P2-2) while preserving silky FI stability
+            float localDens = chord * radialFalloff * nearCamFade * billow * alpha * 2.05f;
             if (localDens <= 0.003f) continue;
 
             // Local crimson taillight + red/blue cop strobe scattering inside tire smoke!
@@ -3258,13 +3330,13 @@ static inline void evaluateDriftVFXPrimary(
                     puffLight += dynFX.copLightCol[cIdx].rgb * (strobe * 1.5f / (1.0f + dCop2 * 0.06f));
                 }
             }
-            float3 smokeAlbedo = mix(float3(0.74f, 0.76f, 0.80f), float3(0.92f, 0.93f, 0.95f), billow);
+            float3 smokeAlbedo = mix(float3(0.76f, 0.78f, 0.82f), float3(0.95f, 0.96f, 0.97f), billow);
             smokeLightAccum += smokeAlbedo * puffLight * localDens;
             smokeDensityAccum += localDens;
         }
 
         if (smokeDensityAccum > 0.004f) {
-            float T = exp(-min(smokeDensityAccum, 1.15f));
+            float T = exp(-min(smokeDensityAccum, 1.38f));
             outSmokeTransmittance = T;
             outSmokeRGB = (smokeLightAccum / max(smokeDensityAccum, 1e-4f)) * (1.0f - T);
             outReactive = max(outReactive, clamp((1.0f - T) * 2.2f, 0.0f, 1.0f));
@@ -3413,7 +3485,8 @@ kernel void raytraceKernel(
     r.origin = rayOrigin;
     r.direction = rayDir;
     r.min_distance = 0.02f;
-    r.max_distance = hasRkptWorld ? 650.0f : 250.0f;
+    // Full 5.2 km primary ray range so EA PVS 2.0-4.6 km cross-bay & Highway 99 vistas render completely unclipped!
+    r.max_distance = hasRkptWorld ? 5200.0f : 250.0f;
 
     uint primaryMask = 0xFFu;
     bool cockpitCamActive = ((vfx.counts.w & 1u) != 0u);
@@ -3492,15 +3565,25 @@ kernel void raytraceKernel(
             repeatSamp
         );
 
-        // Exact Reverse-Z depth (nearZ=0.20, farZ=800.0 -> 1.0 at near, 0.0 at far) + static/dynamic motion vectors
+        // Exact Reverse-Z depth (nearZ=0.20, farZ=5200.0 -> 1.0 at near, 0.0 at far) + static/dynamic motion vectors
         RTInstanceMeta hitInst = instances[hit.instanceID];
+        // #113 P2-1 Cure: in Cockpit POV, suppress player headlight-back / cowl leak dots seen from inside the cabin!
+        if (cockpitCamActive && ((hitInst.flags & ((1u << 4) | (1u << 7) | 4u)) == 0u) && hit.distance < 2.65f &&
+            (s.matID == MAT_HEADLIGHT_EMIT || s.matID == MAT_HEADLIGHT_GLASS)) {
+            s.matID = MAT_MATTE_TRIM;
+            s.baseAlbedo = float3(0.014f, 0.015f, 0.018f);
+            s.emissive = float3(0.0f);
+            s.metallic = 0.05f;
+            s.roughness = 0.78f;
+            s.clearcoat = 0.0f;
+        }
         // Persistent analytical drift skidmarks (<=128, road asphalt only, <32-45m, 1-instruction AABB early-out)
         if ((hitInst.flags & (1u << 4)) != 0u && s.matID == MAT_WET_ASPHALT) {
             applyRoadSkidmarks(s, hit.distance, temporal1SPP, vfx);
         }
         float4 currClip = u.currViewProjMatrix * float4(s.worldPos, 1.0f);
         float viewZ = max(currClip.w, 0.20f);
-        clipDepth = clamp((0.20f * (800.0f - viewZ)) / (viewZ * 799.8f), 0.0f, 1.0f);
+        clipDepth = clamp((0.20f * (5200.0f - viewZ)) / (viewZ * 5199.8f), 0.0f, 1.0f);
         float3 prevWorldPos = (hitInst.prevModelMatrix * float4(s.modelPos, 1.0f)).xyz;
         float4 prevClip = u.prevViewProjMatrix * float4(prevWorldPos, 1.0f);
         if (prevClip.w > 1e-4f) {
@@ -3912,9 +3995,10 @@ kernel void raytraceKernel(
             float fog;
             float3 fogCol;
             if (hasRkptWorld) {
-                // Open-city aerial perspective (0.22x viaduct density): buildings stay razor-clear 150-300m down Rosewood & Downtown!
+                // Open-city aerial perspective (0.22x near density, graceful atmospheric haze across 2-4.6 km PVS vistas!)
                 float distFog = 1.0f - exp(-hit.distance * u.skyHorizon.w * 0.22f);
-                fog = clamp(distFog, 0.0f, 0.52f);
+                float farVistaHaze = smoothstep(750.0f, 3800.0f, hit.distance) * 0.34f;
+                fog = clamp(max(distFog, farVistaHaze), 0.0f, 0.72f);
                 float isNight = smoothstep(0.032f, 0.015f, u.skyZenith.r);
                 float sunAlign = max(dot(rayDir, normalize(u.sunDir.xyz)), 0.0f);
                 // Natural pale cool-blue atmospheric perspective away from sun, subtle pale champagne near sun (zero mustard-yellow soup!)

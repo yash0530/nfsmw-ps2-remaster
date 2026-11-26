@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 TOOLS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TOOLS_DIR.parent
@@ -468,6 +468,28 @@ PLAYABLE_CAR_CATALOG: Dict[str, Dict[str, Any]] = {
 
 assert len(PLAYABLE_CAR_CATALOG) == 40, f"Expected 40 playable cars, got {len(PLAYABLE_CAR_CATALOG)}"
 
+# Top-15 Iconic Flagship & Blacklist Roster (verified in tests/test_top15_cars.py)
+TOP15_FLAGSHIP_CARS: Tuple[str, ...] = (
+    "BMWM3GTRE46",
+    "CARRERAGT",
+    "GALLARDO",
+    "CORVETTEC6R",
+    "FORDGT",
+    "RX7",
+    "SLR",
+    "DB9",
+    "VIPER",
+    "CORVETTE",
+    "CLK500",
+    "MUSTANGGT",
+    "LANCEREVO8",
+    "CAYMANS",
+    "SUPRA",
+)
+
+# Vehicles with authentic stock flush pop-up headlights (zero KIT00_HEADLIGHT_B parts in PS2 ISO)
+POPUP_HEADLIGHT_CARS = frozenset({"RX7"})
+
 # Lookup alias -> canonical ISO car name
 CAR_ALIAS_MAP: Dict[str, str] = {}
 for _canon, _meta in PLAYABLE_CAR_CATALOG.items():
@@ -722,19 +744,43 @@ def filter_wheel_billboard_quads(
     ), removed
 
 
+def _upscale_car_texture(img: Image.Image, slot: str) -> Image.Image:
+    """Cleanly upscale low-res PS2 OEM car textures (128-256px) to crisp 512-1024px RT assets."""
+    target_max = 1024 if slot == "car_misc" else 512
+    w, h = img.size
+    longest = max(w, h)
+    if longest <= 0 or longest >= target_max:
+        return img
+    scale = min(4.0, float(target_max) / float(longest))
+    nw = max(w, int(round(w * scale)))
+    nh = max(h, int(round(h * scale)))
+    if img.mode == "RGBA":
+        rgb = img.convert("RGB").resize((nw, nh), Image.Resampling.LANCZOS)
+        rgb = rgb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=75, threshold=2))
+        alpha = img.getchannel("A").resize((nw, nh), Image.Resampling.LANCZOS)
+        out = rgb.convert("RGBA")
+        out.putalpha(alpha)
+        return out
+    up = img.convert("RGB").resize((nw, nh), Image.Resampling.LANCZOS)
+    return up.filter(ImageFilter.UnsharpMask(radius=1.0, percent=75, threshold=2))
+
+
 def weld_smooth_normals_yup(
     mesh: gi.DecodedMesh,
     *,
-    crease_deg: float = 38.0,
+    crease_deg: float = 48.0,
     part_info: Optional[gi.SolidPartInfo] = None,
     mat_lookup: Optional[Dict[str, str]] = None,
     only_paint_materials: bool = False,
+    laplacian_iters: int = 0,
 ) -> gi.DecodedMesh:
-    """Recompute crease-aware area-weighted smooth vertex normals in Y-up space.
+    """Recompute outward-consistent crease-aware area-weighted smooth vertex normals in Y-up space.
 
-    Crucially merges vertices by quantized 3D position across material boundaries
-    between `car_paint_hero` and `car_paint_silver` (eliminating Carrera GT's
-    hard vertical fender-door luminance wall) and smooths low-poly side mirrors!
+    Orients every triangle's geometric face normal against its authored PS2 vertex normal first
+    (preventing opposite-facing inner shells on thin mirrors or vents from corrupting outer paint),
+    welds coincident / <=4.2mm panel-boundary vertices using signed dot >= cos(crease_deg), and
+    optionally runs crease-locked Laplacian normal diffusion so flat low-poly automotive fender
+    panels inherit authentic vertical body curvature without crossing hard trim/vent creases.
     """
     n_verts = len(mesh.vertices)
     if n_verts == 0 or not mesh.triangles:
@@ -752,12 +798,12 @@ def weld_smooth_normals_yup(
             return mn in ("CARBODY", "DIABLOHP")
         return False
 
-    # Compute face area normals & group vertex indices by 2.5mm spatial grid (3x3x3 neighbor lookup welds
-    # sub-millimeter EA panel boundary vertices like Carrera GT's front fender/door seam!)
     cell_scale = 400.0
     max_weld_dist_sq = 0.0042 * 0.0042
     pos_groups: Dict[Tuple[int, int, int], List[int]] = {}
-    vert_faces: List[List[Tuple[Tuple[float, float, float], bool]]] = [[] for _ in range(n_verts)]
+    vert_faces: List[List[Tuple[Tuple[float, float, float], float, bool, int]]] = [[] for _ in range(n_verts)]
+    adj_edges: List[set[int]] = [set() for _ in range(n_verts)] if laplacian_iters > 0 else []
+
     for i0, i1, i2, _tx, lm in mesh.triangles:
         p0, p1, p2 = mesh.vertices[i0], mesh.vertices[i1], mesh.vertices[i2]
         e1 = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
@@ -770,33 +816,49 @@ def weld_smooth_normals_yup(
         mag = math.sqrt(fn[0] * fn[0] + fn[1] * fn[1] + fn[2] * fn[2])
         if mag < 1e-12:
             continue
+        # Orient face normal consistently outward using the triangle's authored normals
+        onx = mesh.normals[i0][0] + mesh.normals[i1][0] + mesh.normals[i2][0]
+        ony = mesh.normals[i0][1] + mesh.normals[i1][1] + mesh.normals[i2][1]
+        onz = mesh.normals[i0][2] + mesh.normals[i1][2] + mesh.normals[i2][2]
+        if (fn[0] * onx + fn[1] * ony + fn[2] * onz) < 0.0:
+            fn = (-fn[0], -fn[1], -fn[2])
+
         is_paint = _is_paint_lm(lm)
+        if laplacian_iters > 0 and is_paint:
+            adj_edges[i0].add(i1); adj_edges[i0].add(i2)
+            adj_edges[i1].add(i0); adj_edges[i1].add(i2)
+            adj_edges[i2].add(i0); adj_edges[i2].add(i1)
+
         for idx in (i0, i1, i2):
-            vert_faces[idx].append((fn, is_paint))
+            vert_faces[idx].append((fn, mag, is_paint, lm))
             vx, vy, vz = mesh.vertices[idx]
             qk = (int(math.floor(vx * cell_scale)), int(math.floor(vy * cell_scale)), int(math.floor(vz * cell_scale)))
             pos_groups.setdefault(qk, []).append(idx)
 
-    # Deduplicate index lists per cell
     for qk, lst in pos_groups.items():
         pos_groups[qk] = list(set(lst))
 
+    # Precompute neighbor spatial clusters per vertex for fast welding & diffusion
     new_norms = list(mesh.normals)
+    is_target_vert = [False] * n_verts
     for idx in range(n_verts):
         own_faces = vert_faces[idx]
         if not own_faces:
             continue
-        if only_paint_materials and not any(ip for _, ip in own_faces):
+        if only_paint_materials and not any(ip for _, _, ip, _ in own_faces):
             continue
-        ox, oy, oz = mesh.normals[idx]
+        is_target_vert[idx] = True
+
+        # Reference outward normal from own incident faces (already outward-aligned!)
         rx, ry, rz = 0.0, 0.0, 0.0
-        for fn, ip in own_faces:
+        own_lms = set()
+        for fn, _mag, ip, lm in own_faces:
             if only_paint_materials and not ip:
                 continue
-            sign = -1.0 if (fn[0] * ox + fn[1] * oy + fn[2] * oz) < 0.0 else 1.0
-            rx += fn[0] * sign
-            ry += fn[1] * sign
-            rz += fn[2] * sign
+            own_lms.add(lm)
+            rx += fn[0]
+            ry += fn[1]
+            rz += fn[2]
         rmag = math.sqrt(rx * rx + ry * ry + rz * rz)
         if rmag < 1e-10:
             continue
@@ -815,21 +877,95 @@ def weld_smooth_normals_yup(
                         ddx, ddy, ddz = nx_ - vx, ny_ - vy, nz_ - vz
                         if ddx * ddx + ddy * ddy + ddz * ddz > max_weld_dist_sq:
                             continue
-                        for fn, ip in vert_faces[nb_idx]:
-                            if only_paint_materials and not ip:
-                                continue
-                            fmag = math.sqrt(fn[0] * fn[0] + fn[1] * fn[1] + fn[2] * fn[2])
-                            if fmag < 1e-12:
+                        for fn, fmag, ip, lm in vert_faces[nb_idx]:
+                            if only_paint_materials:
+                                if not ip:
+                                    continue
+                            elif lm not in own_lms:
+                                # Keep non-paint sub-materials separated (e.g. mirror chrome glass vs painted cap)
                                 continue
                             dot = (fn[0] * rx + fn[1] * ry + fn[2] * rz) / fmag
-                            if abs(dot) >= cos_thresh:
-                                sign = 1.0 if dot >= 0.0 else -1.0
-                                ax += fn[0] * sign
-                                ay += fn[1] * sign
-                                az += fn[2] * sign
+                            # Signed dot check (NEVER abs(dot)!) prevents inner mirror/vent backfaces from flipping paint!
+                            if dot >= cos_thresh:
+                                ax += fn[0]
+                                ay += fn[1]
+                                az += fn[2]
         amag = math.sqrt(ax * ax + ay * ay + az * az)
         if amag > 1e-10:
             new_norms[idx] = (ax / amag, ay / amag, az / amag)
+
+    # Optional crease-locked Laplacian normal diffusion across connected smooth paint edges
+    if laplacian_iters > 0:
+        # Link coincident vertices AND bridge narrow surface-tangent trim slits (<=3.8cm wide, <=1.4cm out-of-plane,
+        # e.g. Carrera GT's 2cm fender side-marker strake) so smooth body curvature flows naturally across flat panels
+        # without ever jumping across deep vents or 90-deg body steps!
+        slit_scale = 25.0  # 4cm spatial grid
+        slit_grid: Dict[Tuple[int, int, int], List[int]] = {}
+        for v_idx in range(n_verts):
+            if not is_target_vert[v_idx]:
+                continue
+            vx, vy, vz = mesh.vertices[v_idx]
+            sk = (int(math.floor(vx * slit_scale)), int(math.floor(vy * slit_scale)), int(math.floor(vz * slit_scale)))
+            slit_grid.setdefault(sk, []).append(v_idx)
+
+        slit_max_d2 = 0.040 * 0.040
+        slit_cos = math.cos(math.radians(44.0))
+        for (gx, gy, gz), group in slit_grid.items():
+            neigh_verts: List[int] = []
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        neigh_verts.extend(slit_grid.get((gx + dx, gy + dy, gz + dz), ()))
+            for a in group:
+                va = mesh.vertices[a]
+                na = new_norms[a]
+                for b in neigh_verts:
+                    if b <= a or b in adj_edges[a]:
+                        continue
+                    vb = mesh.vertices[b]
+                    ddx, ddy, ddz = vb[0] - va[0], vb[1] - va[1], vb[2] - va[2]
+                    d2 = ddx * ddx + ddy * ddy + ddz * ddz
+                    if d2 <= max_weld_dist_sq:
+                        adj_edges[a].add(b)
+                        adj_edges[b].add(a)
+                    elif only_paint_materials and d2 <= slit_max_d2:
+                        nb = new_norms[b]
+                        if (na[0] * nb[0] + na[1] * nb[1] + na[2] * nb[2]) >= slit_cos:
+                            # Ensure both vertices lie on the same outer body skin (minimal out-of-plane step)
+                            amx = 0.5 * (na[0] + nb[0])
+                            amy = 0.5 * (na[1] + nb[1])
+                            amz = 0.5 * (na[2] + nb[2])
+                            am = math.sqrt(amx * amx + amy * amy + amz * amz) + 1e-9
+                            out_step = abs(ddx * amx + ddy * amy + ddz * amz) / am
+                            if out_step <= 0.014:
+                                adj_edges[a].add(b)
+                                adj_edges[b].add(a)
+
+        diff_cos = math.cos(math.radians(min(crease_deg, 48.0)))
+        cur_norms = list(new_norms)
+        for _ in range(laplacian_iters):
+            nxt_norms = list(cur_norms)
+            for idx in range(n_verts):
+                if not is_target_vert[idx] or not adj_edges[idx]:
+                    continue
+                nx0, ny0, nz0 = cur_norms[idx]
+                sx, sy, sz = nx0 * 0.75, ny0 * 0.75, nz0 * 0.75
+                cnt = 0
+                for nb in adj_edges[idx]:
+                    if not is_target_vert[nb]:
+                        continue
+                    nbx, nby, nbz = cur_norms[nb]
+                    if (nx0 * nbx + ny0 * nby + nz0 * nbz) >= diff_cos:
+                        sx += nbx
+                        sy += nby
+                        sz += nbz
+                        cnt += 1
+                if cnt > 0:
+                    sm = math.sqrt(sx * sx + sy * sy + sz * sz)
+                    if sm > 1e-10:
+                        nxt_norms[idx] = (sx / sm, sy / sm, sz / sm)
+            cur_norms = nxt_norms
+        new_norms = cur_norms
 
     return gi.DecodedMesh(
         vertices=list(mesh.vertices),
@@ -965,34 +1101,62 @@ def compute_car_wheel_anchors(
     half_w = anchors["half_width"]
     mid_x_body = 0.5 * (bmin[0] + bmax[0])
 
-    # Primary geometric method: detect exact front/rear circular wheel-arch cutouts in lower outer fender skin.
-    # Verified to <2 mm accuracy against real-world wheelbases (Gallardo 2.55m, Ford GT 2.710m, Corvette C6.R 2.688m).
-    z_lo = bmin[2] + 0.035
-    z_hi = bmin[2] + min(0.26, max(0.18, tire_r * 0.68))
-    outer_xs = sorted(
-        x for x, y, z in body_mesh.vertices
-        if abs(y) >= 0.80 * half_w and z_lo <= z <= z_hi
+    # Primary geometric method: detect exact front/rear circular wheel-arch cutouts in lower outer fender skin
+    # across multiple clean height/width slices (guards low race splitters like Corvette C6.R while matching VLT wheelbase).
+    vlt_wb = 0.0
+    if vlt_entry and isinstance(vlt_entry.get("chassis"), dict):
+        vlt_wb = float(vlt_entry["chassis"].get("wheel_base", 0.0))
+
+    cutout_candidates: List[Tuple[float, float, float]] = []  # (gap_sum, front_x, rear_x)
+    slice_specs = (
+        (0.80, 0.035, min(0.26, max(0.18, tire_r * 0.68))),
+        (0.80, 0.045, min(0.28, max(0.22, tire_r * 0.76))),
+        (0.76, 0.040, min(0.26, max(0.21, tire_r * 0.72))),
+        (0.84, 0.035, min(0.26, max(0.20, tire_r * 0.70))),
     )
-    front_cutouts: List[Tuple[float, float]] = []
-    rear_cutouts: List[Tuple[float, float]] = []
-    for i in range(len(outer_xs) - 1):
-        x0, x1 = outer_xs[i], outer_xs[i + 1]
-        gap = x1 - x0
-        if 0.50 <= gap <= 1.05:
-            cx = 0.5 * (x0 + x1)
-            if cx > mid_x_body + 0.35:
-                front_cutouts.append((gap, cx))
-            elif cx < mid_x_body - 0.35:
-                rear_cutouts.append((gap, cx))
+    for w_frac, dz_lo, dz_hi in slice_specs:
+        z_lo = bmin[2] + dz_lo
+        z_hi = bmin[2] + dz_hi
+        outer_xs = sorted(
+            x for x, y, z in body_mesh.vertices
+            if abs(y) >= w_frac * half_w and z_lo <= z <= z_hi
+        )
+        front_cutouts: List[Tuple[float, float]] = []
+        rear_cutouts: List[Tuple[float, float]] = []
+        for i in range(len(outer_xs) - 1):
+            x0, x1 = outer_xs[i], outer_xs[i + 1]
+            gap = x1 - x0
+            if 0.50 <= gap <= 1.05:
+                cx = 0.5 * (x0 + x1)
+                if cx > mid_x_body + 0.35:
+                    front_cutouts.append((gap, cx))
+                elif cx < mid_x_body - 0.35:
+                    rear_cutouts.append((gap, cx))
+        if front_cutouts and rear_cutouts:
+            fg, fx = max(front_cutouts, key=lambda item: item[0])
+            rg, rx = max(rear_cutouts, key=lambda item: item[0])
+            est_wb = fx - rx
+            if 2.05 <= est_wb <= 3.35:
+                cutout_candidates.append((fg + rg, fx, rx))
 
     used_cutouts = False
-    if front_cutouts and rear_cutouts:
-        best_front = max(front_cutouts, key=lambda item: item[0])[1]
-        best_rear = max(rear_cutouts, key=lambda item: item[0])[1]
-        est_wb = best_front - best_rear
-        if 2.05 <= est_wb <= 3.35:
-            anchors["front_x"] = best_front
-            anchors["rear_x"] = best_rear
+    if cutout_candidates:
+        if 2.1 <= vlt_wb <= 3.3:
+            # Prefer a genuine geometric cutout pair closely matching the VLT chassis wheelbase
+            best = min(cutout_candidates, key=lambda item: abs((item[1] - item[2]) - vlt_wb))
+            if abs((best[1] - best[2]) - vlt_wb) <= 0.16:
+                anchors["front_x"] = best[1]
+                anchors["rear_x"] = best[2]
+                used_cutouts = True
+            else:
+                best_gap = max(cutout_candidates, key=lambda item: item[0])
+                anchors["front_x"] = best_gap[1]
+                anchors["rear_x"] = best_gap[2]
+                used_cutouts = True
+        else:
+            best_gap = max(cutout_candidates, key=lambda item: item[0])
+            anchors["front_x"] = best_gap[1]
+            anchors["rear_x"] = best_gap[2]
             used_cutouts = True
 
     # Re-measure arch_top_z directly above the detected front/rear axle centers
@@ -1018,10 +1182,24 @@ def compute_car_wheel_anchors(
                 anchors["front_x"] = mid_x + vlt_wb * 0.5
                 anchors["rear_x"] = mid_x - vlt_wb * 0.5
 
-    # Ensure arch_top_z sits cleanly above tire radius so car never sinks through tarmac
-    min_arch_top = tire_r + 0.06
-    if anchors["arch_top_z"] < min_arch_top or anchors["arch_top_z"] > tire_r + 0.36:
-        anchors["arch_top_z"] = max(min_arch_top, bmin[2] + tire_r * 1.48)
+    # Ensure arch_top_z respects the true wheel-arch apex lip and realistic sports/GT ride height [4.8cm .. 12.5cm]
+    # (prevents fender-shoulder tuck on CLK500/Supra and monster-truck ride height on Lancer Evo VIII!)
+    apex_zs: List[float] = []
+    for ax_x in (anchors["front_x"], anchors["rear_x"]):
+        cand = [
+            z for x, y, z in body_mesh.vertices
+            if abs(x - ax_x) <= 0.14 and abs(y) >= 0.86 * half_w and z > (bmin[2] + 0.34)
+        ]
+        if cand:
+            apex_zs.append(min(cand))
+    if apex_zs:
+        avg_apex = sum(apex_zs) / len(apex_zs)
+        anchors["arch_top_z"] = min(anchors["arch_top_z"], avg_apex + 0.095)
+
+    # Bound resulting body ground clearance clr = bmin[2] - (arch_top_z - 2*tire_r - 0.040) to [0.048m, 0.120m]
+    arch_for_min_clr = bmin[2] + 2.0 * tire_r + 0.040 - 0.048
+    arch_for_max_clr = bmin[2] + 2.0 * tire_r + 0.040 - 0.120
+    anchors["arch_top_z"] = max(arch_for_max_clr, min(arch_for_min_clr, anchors["arch_top_z"]))
     return anchors
 
 
@@ -1234,7 +1412,8 @@ def extract_rt_car(
         if tex.image is None:
             continue
         out_png = tex_dir / f"{slug}_{slot_file_suffix[slot]}"
-        tex.image.save(out_png, format="PNG")
+        upscaled = _upscale_car_texture(tex.image, slot)
+        upscaled.save(out_png, format="PNG")
         try:
             textures_manifest[slot] = str(out_png.resolve().relative_to(REPO_ROOT.resolve()))
         except ValueError:
@@ -1279,16 +1458,53 @@ def extract_rt_car(
     body_part = selected_parts[0]
     body_mesh_ps2 = decoded_meshes[body_part.index]
 
+    def _maybe_subdivide(mesh_ps2: gi.DecodedMesh, pname: str) -> gi.DecodedMesh:
+        if not subdivide or len(mesh_ps2.triangles) == 0:
+            return mesh_ps2
+        pu = pname.upper()
+        if any(k in pu for k in ("WINDOW", "HEADLIGHT", "BRAKELIGHT", "INTERIOR", "BRAKE")):
+            return mesh_ps2
+        mode = "pn"
+        if "MIRROR" in pu:
+            # Loop subdivision relaxes coarse PS2 mirror shells into smooth aerodynamic teardrops (zero PN pinching!)
+            mode = "loop"
+            levels, crease = (2 if len(mesh_ps2.triangles) <= 500 else 1), 68.0
+        elif "SPOILER" in pu or "HOOD" in pu:
+            levels, crease = (2 if len(mesh_ps2.triangles) <= 500 else 1), 44.0
+        elif "TIRE" in pu or "WHEEL" in pu:
+            levels, crease = 1, 40.0
+        elif "BODY" in pu or "BASE" in pu:
+            levels, crease = 1, 42.0
+        else:
+            return mesh_ps2
+        comp, _ = scm.subdivide_compiled_mesh(
+            _decoded_to_compiled(mesh_ps2),
+            crease_deg=crease,
+            mode=mode,
+            levels=levels,
+            preserve_aabb=True,
+            lock_material_seams=True,
+        )
+        return _compiled_to_decoded(comp)
+
     raw_wheel_mesh = external_wheel_mesh if external_wheel_mesh is not None else decoded_meshes[wheel_part.index]
     raw_wheel_mesh, wheel_quads_stripped = filter_wheel_billboard_quads(raw_wheel_mesh, wheel_part, mat_lookup)
+    hq_wheel_ps2 = _maybe_subdivide(raw_wheel_mesh, wheel_part.name)
+    rear_w_ps2 = hq_wheel_ps2
+    rear_w_info = wheel_part
+    if rear_wheel_part is not None and rear_wheel_part.index in decoded_meshes:
+        rw_clean, _ = filter_wheel_billboard_quads(decoded_meshes[rear_wheel_part.index], rear_wheel_part, mat_lookup)
+        rear_w_ps2 = _maybe_subdivide(rw_clean, rear_wheel_part.name)
+        rear_w_info = rear_wheel_part
 
     wheel_r = max(abs(wheel_part.aabb_min[2]), abs(wheel_part.aabb_max[2]), 0.31)
     vlt_table = _load_vlt_table()
     vlt_entry = vlt_table.get(canon.lower())
     anchors = compute_car_wheel_anchors(body_mesh_ps2, body_part, wheel_r, vlt_entry=vlt_entry)
 
-    # Compute exact wheel Z & ground offset so tires rest cleanly at Y=0.000
-    wheel_min_z = min(v[2] for v in raw_wheel_mesh.vertices) if raw_wheel_mesh.vertices else -wheel_r
+    # Compute exact wheel Z & ground offset from the SUBDIVIDED wheels so all 4 tires seat at Y=0.0000m!
+    sub_wheel_zs = [v[2] for v in hq_wheel_ps2.vertices] + [v[2] for v in rear_w_ps2.vertices]
+    wheel_min_z = min(sub_wheel_zs) if sub_wheel_zs else -wheel_r
     arch_clearance = 0.040
     wheel_z = anchors["arch_top_z"] - wheel_r - arch_clearance
     ground_z_ps2 = wheel_z + wheel_min_z
@@ -1333,41 +1549,18 @@ def extract_rt_car(
             }
         )
 
-    def _maybe_subdivide(mesh_ps2: gi.DecodedMesh, pname: str) -> gi.DecodedMesh:
-        if not subdivide or len(mesh_ps2.triangles) == 0:
-            return mesh_ps2
-        pu = pname.upper()
-        if any(k in pu for k in ("WINDOW", "HEADLIGHT", "BRAKELIGHT", "INTERIOR", "BRAKE")):
-            return mesh_ps2
-        if "MIRROR" in pu:
-            levels, crease = (2 if len(mesh_ps2.triangles) <= 500 else 1), 78.0
-        elif "SPOILER" in pu or "HOOD" in pu:
-            levels, crease = (2 if len(mesh_ps2.triangles) <= 500 else 1), 40.0
-        elif "TIRE" in pu or "WHEEL" in pu:
-            levels, crease = 1, 40.0
-        elif "BODY" in pu or "BASE" in pu:
-            levels, crease = 1, 28.0
-        else:
-            return mesh_ps2
-        comp, _ = scm.subdivide_compiled_mesh(
-            _decoded_to_compiled(mesh_ps2),
-            crease_deg=crease,
-            mode="pn",
-            levels=levels,
-            preserve_aabb=True,
-            lock_material_seams=True,
-        )
-        return _compiled_to_decoded(comp)
-
     body_min_y = 0.14
     light_parts_all = [p for p in selected_parts if "BRAKELIGHT" in p.name.upper() or "HEADLIGHT" in p.name.upper()]
     for part in selected_parts:
-        raw_ps2 = decoded_meshes[part.index]
+        raw_ps2 = decoded_meshes.get(part.index)
+        if raw_ps2 is None or not raw_ps2.triangles:
+            continue
         pu = part.name.upper()
         if "BODY" in pu:
             raw_ps2, _ = strip_occluding_light_decals(raw_ps2, part, light_parts_all, mat_lookup)
-            # For non-M3 OEM cars (e.g. Carrera GT), unify DIABLOHP triangle lm index into CARBODY BEFORE PN subdivision
-            # so lock_material_seams never creates an artificial fender-door luminance jump!
+        if any(k in pu for k in ("BODY", "BASE", "HOOD", "SPOILER")):
+            # For non-M3 OEM cars (e.g. Carrera GT), unify BOTH (tx, lm) of DIABLOHP (DOORLINE) into CARBODY
+            # BEFORE PN subdivision so lock_material_seams never creates an artificial fender-door seam!
             if not canon.startswith("BMWM3") and part.light_material_hashes:
                 carbody_lm = next(
                     (i for i, h in enumerate(part.light_material_hashes) if mat_lookup.get(h.lower(), "").upper() == "CARBODY"),
@@ -1377,26 +1570,30 @@ def extract_rt_car(
                     i for i, h in enumerate(part.light_material_hashes) if mat_lookup.get(h.lower(), "").upper() == "DIABLOHP"
                 }
                 if carbody_lm is not None and diablo_lms:
+                    carbody_tx = next((tx for _i0, _i1, _i2, tx, lm in raw_ps2.triangles if lm == carbody_lm), 0)
                     raw_ps2 = gi.DecodedMesh(
                         vertices=list(raw_ps2.vertices),
                         normals=list(raw_ps2.normals),
                         uvs=list(raw_ps2.uvs),
                         triangles=[
-                            (i0, i1, i2, tx, carbody_lm if lm in diablo_lms else lm)
+                            (i0, i1, i2, carbody_tx if lm in diablo_lms else tx, carbody_lm if lm in diablo_lms else lm)
                             for i0, i1, i2, tx, lm in raw_ps2.triangles
                         ],
                     )
         src_ps2 = _maybe_subdivide(raw_ps2, part.name)
         ymesh = eps.transform_ps2_mesh_to_yup(src_ps2, ground_z_ps2=ground_z_ps2)
         if "MIRROR" in pu:
-            # High-angle smooth normal re-weld turns low-poly polygonal mirrors into silky curved housings
-            ymesh = weld_smooth_normals_yup(ymesh, crease_deg=82.0)
-        elif "BODY" in pu:
-            # Weld cross-material normals between CARBODY and DIABLOHP (eliminates Carrera GT fender-door seam!)
+            # Outward-consistent smooth welding on Loop-subdivided mirrors eliminates wrinkled-foil PN facets
             ymesh = weld_smooth_normals_yup(
-                ymesh, crease_deg=44.0, part_info=part, mat_lookup=mat_lookup, only_paint_materials=True
+                ymesh, crease_deg=68.0, part_info=part, mat_lookup=mat_lookup, only_paint_materials=False, laplacian_iters=2
             )
-            if ymesh.vertices:
+        elif any(k in pu for k in ("BODY", "BASE", "HOOD", "SPOILER")):
+            # Outward-consistent cross-material normal weld + 12-pass crease-locked Laplacian diffusion
+            # cures Carrera GT's flat fender-door luminance jump & A-pillar flatness while keeping vents/lips sharp!
+            ymesh = weld_smooth_normals_yup(
+                ymesh, crease_deg=50.0, part_info=part, mat_lookup=mat_lookup, only_paint_materials=True, laplacian_iters=12
+            )
+            if "BODY" in pu and ymesh.vertices:
                 body_min_y = min(v[1] for v in ymesh.vertices)
         is_glass = ("WINDOW" in pu) or ("HEADLIGHT_GLASS" in pu)
         role = (
@@ -1406,14 +1603,7 @@ def extract_rt_car(
         )
         _emit_part(part.name, ymesh, part, role=role, transparent=is_glass, visible=True)
 
-    # Emit 4x OEM wheels + front/rear brakes
-    hq_wheel_ps2 = _maybe_subdivide(raw_wheel_mesh, wheel_part.name)
-    rear_w_ps2 = hq_wheel_ps2
-    rear_w_info = wheel_part
-    if rear_wheel_part is not None and rear_wheel_part.index in decoded_meshes:
-        rw_clean, _ = filter_wheel_billboard_quads(decoded_meshes[rear_wheel_part.index], rear_wheel_part, mat_lookup)
-        rear_w_ps2 = _maybe_subdivide(rw_clean, rear_wheel_part.name)
-        rear_w_info = rear_wheel_part
+    # Emit 4x OEM wheels + front/rear brakes (already subdivided above for exact Y=0.0000m grounding)
 
     wheel_specs = [
         ("WHEEL_FL", (anchors["front_x"], +wheel_y_offset, wheel_z), True, hq_wheel_ps2, wheel_part, front_brake_part),
@@ -1616,6 +1806,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--iso", type=Path, default=None, help="Path to untouched PS2 ISO (read-only 'rb').")
     p.add_argument("--car", type=str, default=None, help="Single playable car name or alias to extract.")
     p.add_argument("--cars", nargs="+", default=None, help="Multiple playable car names/aliases to extract.")
+    p.add_argument("--top15", action="store_true", help="Extract all Top-15 flagship & Blacklist cars into cache.")
     p.add_argument("--all", action="store_true", help="Extract all 40 playable cars into cache.")
     p.add_argument("--out-dir", type=Path, default=None, help="Override output directory (single car) or cache root.")
     p.add_argument("--list", action="store_true", help="List all 40 playable cars and aliases.")
@@ -1663,12 +1854,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     targets: List[str] = []
     if args.all:
         targets = list(PLAYABLE_CAR_CATALOG.keys())
+    elif args.top15:
+        targets = list(TOP15_FLAGSHIP_CARS)
     elif args.cars:
         targets = [canonicalize_car_name(c) for c in args.cars]
     elif args.car:
         targets = [canonicalize_car_name(args.car)]
     else:
-        print("Specify --list, --verify-all-manifest, --car <NAME>, --cars ..., or --all.", file=sys.stderr)
+        print("Specify --list, --verify-all-manifest, --car <NAME>, --cars ..., --top15, or --all.", file=sys.stderr)
         return 2
 
     if args.synthetic:

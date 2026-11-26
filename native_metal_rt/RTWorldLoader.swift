@@ -18,6 +18,7 @@ enum RkptHeaderFlags {
     static let hasV2Ext: UInt32     = 1 << 0
     static let bc7Textures: UInt32  = 1 << 1
     static let hasPanorama: UInt32  = 1 << 2
+    static let hasPVS: UInt32       = 1 << 3
 }
 
 struct RkptHeader {
@@ -49,6 +50,7 @@ struct RkptHeader {
     var hasV2Ext: Bool    { version >= 2 && (flags & RkptHeaderFlags.hasV2Ext) != 0 }
     var hasBC7: Bool      { (flags & RkptHeaderFlags.bc7Textures) != 0 }
     var hasPanorama: Bool { (flags & RkptHeaderFlags.hasPanorama) != 0 }
+    var hasPVS: Bool      { version >= 2 && (flags & RkptHeaderFlags.hasPVS) != 0 }
 
     static let byteSize = 160
 }
@@ -61,16 +63,16 @@ struct RkptV2ExtHeader {
     let landmarkCount: UInt32
     let spatialSectionCount: UInt32
     let panoramaSectionCount: UInt32
-    let reserved0: UInt32
-    let reserved1: UInt32
+    let pvsZoneCount: UInt32       // reserved0 when HAS_PVS == 0
+    let pvsEntryCount: UInt32      // reserved1 when HAS_PVS == 0
     let roadNodesOffset: UInt64
     let roadSegmentsOffset: UInt64
     let worldLightsOffset: UInt64
     let landmarksOffset: UInt64
-    let reservedOff0: UInt64
-    let reservedOff1: UInt64
-    let reservedOff2: UInt64
-    let reservedOff3: UInt64
+    let pvsZonesOffset: UInt64     // reservedOff0 when HAS_PVS == 0
+    let pvsVertsOffset: UInt64     // reservedOff1 when HAS_PVS == 0
+    let pvsEntriesOffset: UInt64   // reservedOff2 when HAS_PVS == 0
+    let pvsVertCount: UInt64       // reservedOff3 when HAS_PVS == 0
 
     static let byteSize = 96
 }
@@ -228,6 +230,20 @@ struct RkptLandmark {
     static let byteSize = 64
 }
 
+// 32-byte EA PVS visibility zone decoded from L2RA.BUN 0x80034150 (0x00034152 + 0x00034153)
+struct RkptPvsZone {
+    let minX: Float
+    let minZ: Float
+    let maxX: Float
+    let maxZ: Float
+    let firstVert: UInt32
+    let vertCount: UInt32
+    let firstSecEntry: UInt32
+    let secEntryCount: UInt32
+
+    static let byteSize = 32
+}
+
 struct RTWorldPackage {
     let url: URL
     let header: RkptHeader
@@ -253,10 +269,14 @@ struct RTWorldPackage {
     let roadSegments: [RkptRoadSegment]
     let worldLights: [RTWorldLight]
     let landmarks: [RkptLandmark]
+    let pvsZones: [RkptPvsZone]
+    let pvsVerts: [SIMD2<Float>]
+    let pvsEntries: [UInt16]
     let spatialSectionCount: Int
     let panoramaSectionCount: Int
     let estimatedVRAMBytes: Int
 
+    var hasPVS: Bool { header.hasPVS && !pvsZones.isEmpty }
     var spawnPos: SIMD3<Float> { header.spawnPos }
     var spawnYawRad: Float { header.spawnYawRad }
 }
@@ -414,16 +434,16 @@ enum RTWorldLoader {
                     landmarkCount: cur.readUInt32(e + 12),
                     spatialSectionCount: cur.readUInt32(e + 16),
                     panoramaSectionCount: cur.readUInt32(e + 20),
-                    reserved0: cur.readUInt32(e + 24),
-                    reserved1: cur.readUInt32(e + 28),
+                    pvsZoneCount: cur.readUInt32(e + 24),
+                    pvsEntryCount: cur.readUInt32(e + 28),
                     roadNodesOffset: cur.readUInt64(e + 32),
                     roadSegmentsOffset: cur.readUInt64(e + 40),
                     worldLightsOffset: cur.readUInt64(e + 48),
                     landmarksOffset: cur.readUInt64(e + 56),
-                    reservedOff0: cur.readUInt64(e + 64),
-                    reservedOff1: cur.readUInt64(e + 72),
-                    reservedOff2: cur.readUInt64(e + 80),
-                    reservedOff3: cur.readUInt64(e + 88)
+                    pvsZonesOffset: cur.readUInt64(e + 64),
+                    pvsVertsOffset: cur.readUInt64(e + 72),
+                    pvsEntriesOffset: cur.readUInt64(e + 80),
+                    pvsVertCount: cur.readUInt64(e + 88)
                 )
             }
 
@@ -617,11 +637,14 @@ enum RTWorldLoader {
                 }
             }
 
-            // 10. Parse Optional .rkpt v2 Trailing Tables (RoadNodes, RoadSegments, WorldLights, Landmarks)
+            // 10. Parse Optional .rkpt v2 Trailing Tables (RoadNodes, RoadSegments, WorldLights, Landmarks, PVS)
             var roadNodes: [RkptRoadNode] = []
             var roadSegments: [RkptRoadSegment] = []
             var worldLights: [RTWorldLight] = []
             var landmarks: [RkptLandmark] = []
+            var pvsZones: [RkptPvsZone] = []
+            var pvsVerts: [SIMD2<Float>] = []
+            var pvsEntries: [UInt16] = []
 
             if let ext = extHeader {
                 if ext.roadNodeCount > 0 && ext.roadNodesOffset != 0 {
@@ -694,6 +717,57 @@ enum RTWorldLoader {
                         ))
                     }
                 }
+
+                // Optional EA PVS tables (parsed ONLY when version >= 2 && (flags & (1 << 3)) != 0)
+                if header.hasPVS && ext.pvsZoneCount > 0 && ext.pvsZonesOffset != 0 {
+                    let pzBytes = Int(ext.pvsZoneCount) * RkptPvsZone.byteSize
+                    try validateRange(ext.pvsZonesOffset, pzBytes, "pvsZones")
+                    pvsZones.reserveCapacity(Int(ext.pvsZoneCount))
+                    for i in 0..<Int(ext.pvsZoneCount) {
+                        let o = Int(ext.pvsZonesOffset) + i * RkptPvsZone.byteSize
+                        pvsZones.append(RkptPvsZone(
+                            minX: cur.readFloat(o),
+                            minZ: cur.readFloat(o + 4),
+                            maxX: cur.readFloat(o + 8),
+                            maxZ: cur.readFloat(o + 12),
+                            firstVert: cur.readUInt32(o + 16),
+                            vertCount: cur.readUInt32(o + 20),
+                            firstSecEntry: cur.readUInt32(o + 24),
+                            secEntryCount: cur.readUInt32(o + 28)
+                        ))
+                    }
+
+                    if ext.pvsVertCount > 0 && ext.pvsVertsOffset != 0 {
+                        let pvCount = Int(ext.pvsVertCount)
+                        try validateRange(ext.pvsVertsOffset, pvCount * 8, "pvsVerts")
+                        pvsVerts.reserveCapacity(pvCount)
+                        for i in 0..<pvCount {
+                            let o = Int(ext.pvsVertsOffset) + i * 8
+                            pvsVerts.append(SIMD2<Float>(cur.readFloat(o), cur.readFloat(o + 4)))
+                        }
+                    }
+
+                    if ext.pvsEntryCount > 0 && ext.pvsEntriesOffset != 0 {
+                        let peCount = Int(ext.pvsEntryCount)
+                        try validateRange(ext.pvsEntriesOffset, peCount * 2, "pvsEntries")
+                        pvsEntries.reserveCapacity(peCount)
+                        for i in 0..<peCount {
+                            let o = Int(ext.pvsEntriesOffset) + i * 2
+                            pvsEntries.append(cur.readUInt16(o))
+                        }
+                    }
+
+                    // Validate every zone's vertex and section-entry spans stay strictly within bounds
+                    for (zIdx, z) in pvsZones.enumerated() {
+                        let vEnd = Int(z.firstVert) + Int(z.vertCount)
+                        let eEnd = Int(z.firstSecEntry) + Int(z.secEntryCount)
+                        if vEnd > pvsVerts.count || eEnd > pvsEntries.count {
+                            throw NSError(domain: "RTWorldLoader", code: 15, userInfo: [
+                                NSLocalizedDescriptionKey: "RKPT PVS zone #\(zIdx) span out of bounds (vEnd=\(vEnd)/\(pvsVerts.count), eEnd=\(eEnd)/\(pvsEntries.count))"
+                            ])
+                        }
+                    }
+                }
             }
 
             var totalWorldTris = 0
@@ -732,6 +806,9 @@ enum RTWorldLoader {
                 roadSegments: roadSegments,
                 worldLights: worldLights,
                 landmarks: landmarks,
+                pvsZones: pvsZones,
+                pvsVerts: pvsVerts,
+                pvsEntries: pvsEntries,
                 spatialSectionCount: spatialCount,
                 panoramaSectionCount: panoramaCount,
                 estimatedVRAMBytes: estVRAM

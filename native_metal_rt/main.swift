@@ -237,6 +237,10 @@ final class RTShowcaseMTKView: MTKView {
         case "o":
             let open = r.togglePhotoMode()
             print("Photo Mode: \(open ? "OPEN (50mm f/2.0 — [WASD/QE] Fly [+/-] Lens [,/.] f-stop [Enter] 4K 64-SPP [O/Esc] Exit)" : "CLOSED")")
+        case "j":
+            let pvsOn = r.togglePVS()
+            let vistaM = Int((r.worldStreamer?.maxActiveVistaDistanceM ?? 0).rounded())
+            print("EA PVS Vistas: \(pvsOn ? "ON" : "OFF") (maxVista=\(vistaM)m, activeInsts=\(r.activeWorldInstanceCount))")
         case "e":
             if event.modifierFlags.contains(.shift) {
                 r.abortActiveEvent()
@@ -383,6 +387,7 @@ struct RTCLIOptions {
     var focalMm: Float? = nil
     var photoSnap4KPath: String? = nil
     var driftVFX = false
+    var pvsEnabled: Bool = true
     var spawnPos: SIMD3<Float>? = nil
     var spawnYawDeg: Float? = nil
     var speedKmh: Float = 145.0
@@ -476,6 +481,13 @@ func parseRTArgs() -> RTCLIOptions {
             if let v = nextVal() { opts.photoSnap4KPath = v }
         case "--drift-vfx":
             opts.driftVFX = true
+        case "--pvs":
+            if let v = nextVal() {
+                let low = v.lowercased()
+                opts.pvsEnabled = (low == "on" || low == "true" || low == "1" || low == "yes")
+            } else {
+                opts.pvsEnabled = true
+            }
         case "--spawn-pos":
             if let v = nextVal() {
                 let parts = v.split(separator: ",").compactMap { Float($0.trimmingCharacters(in: .whitespaces)) }
@@ -549,14 +561,14 @@ func parseRTArgs() -> RTCLIOptions {
             print("""
             RockportMetalRT — NFSMW: Rockport 2026 Apple Silicon Hardware Ray Tracing + MetalFX Engine
             Usage:
-              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--event <id|sprint|speedtrap|boss15..boss1>] [--world-map] [--photo-mode] [--dof-fstop <1.4..16>] [--focal-mm <24..135>] [--photo-snap-4k <png>] [--drift-vfx] [--spawn-pos x,y,z] [--spawn-yaw <deg>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera|--camera-mode chase|close|hood|bumper|cockpit|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
-              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera|--camera-mode chase|close|hood|bumper|cockpit|hero|street|overhead] [--event <id|boss15|speedtrap|sprint>] [--world-map] [--photo-mode] [--drift-vfx] [--pursuit] [--hud] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax]
+              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--event <id|sprint|speedtrap|boss15..boss1>] [--world-map] [--photo-mode] [--dof-fstop <1.4..16>] [--focal-mm <24..135>] [--photo-snap-4k <png>] [--drift-vfx] [--pvs on|off] [--spawn-pos x,y,z] [--spawn-yaw <deg>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera|--camera-mode chase|close|hood|bumper|cockpit|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
+              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera|--camera-mode chase|close|hood|bumper|cockpit|hero|street|overhead] [--event <id|boss15|speedtrap|sprint>] [--world-map] [--photo-mode] [--drift-vfx] [--pvs on|off] [--pursuit] [--hud] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax]
             Interactive Controls (Canonical Keymap):
               WASD / Arrows: Drive | Space: Handbrake/Drift | Shift / Z: NOS Boost | X / Tab: Speedbreaker
               F: Instant Pursuit (Heat 1->5) | E: Start Nearest Event (Shift+E: Abort) | M: Full-Island World Map
               O: GT7 Photo Mode (WASD/QE Fly, +/- Lens, ,/. f-stop, Enter 4K 64-SPP Snap, O/Esc Exit)
               V: Cycle Landmark | G / Shift+G: Cycle Garage Car | C: 5-Camera Rig (Chase/Close/Hood/Bumper/Cockpit)
-              [ / ]: Prev / Next EA TRAX Song | U: Mute/Unmute EA TRAX Music
+              [ / ]: Prev / Next EA TRAX Song | U: Mute/Unmute EA TRAX Music | J: Toggle EA PVS 2-4.6km Vistas
               1/2/3/4: Presets & Live 24h | B: Rain | K: Frame-Gen | H: HUD | L: Livery | T: RT | N: Denoiser
               R: Reset Car & Pursuit | P: Save 64-SPP PNG | Mouse Drag: Orbit | Scroll: Zoom | Esc: Quit
             """)
@@ -619,6 +631,9 @@ do {
     renderer.benchmarkNosForced = opts.nos
     renderer.benchmarkSpeedbreakerForced = opts.speedbreaker
     renderer.benchmarkDriftVFXForced = opts.driftVFX
+    if !opts.pvsEnabled {
+        renderer.setPVSEnabled(false)
+    }
     if opts.pursuit {
         renderer.benchmarkPursuitHeat = opts.pursuitHeat
     }

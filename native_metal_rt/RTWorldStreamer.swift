@@ -29,6 +29,7 @@ final class RTWorldStreamer {
     static let defaultLoadRadius: Float = 350.0
     static let defaultUnloadRadius: Float = 430.0
     static let defaultPanoramaMinDist: Float = 250.0
+    static let pvsNearestZoneMaxDist: Float = 120.0
     static let lightGridDim: Int = 128
     static let lightGridSlotsPerCell: Int = 8
     static let lightGridEmptySentinel: UInt16 = 0xFFFF
@@ -39,6 +40,9 @@ final class RTWorldStreamer {
     let panoramaMinDist: Float
     let maxWorldSlots: Int
     let maxSpatialInstances: Int
+
+    /// Toggle EA PVS (0x80034150) 2-4.6 km highway/bay skyline vistas (default ON; `J` key calls `togglePVS()`).
+    public var pvsEnabled: Bool = true
 
     /// GPU buffer containing `RTWorldLight[]` (32 bytes each, bound at buffer(11) in raytraceKernel).
     let worldLightsBuffer: MTLBuffer
@@ -57,6 +61,15 @@ final class RTWorldStreamer {
     private(set) var activeSpatialSectionCount: Int = 0
     private(set) var activePanoramaCount: Int = 0
     private(set) var effectiveSpatialRadius: Float
+    public private(set) var activePVSSectionCount: Int = 0
+    public private(set) var maxActiveVistaDistanceM: Float = 0
+    public private(set) var activePVSZoneIndex: Int = -1
+
+    @discardableResult
+    public func togglePVS() -> Bool {
+        pvsEnabled.toggle()
+        return pvsEnabled
+    }
 
     var estimatedWorldVRAMBytes: Int {
         world.estimatedVRAMBytes + worldLightsBuffer.length + lightGridBuffer.length
@@ -127,13 +140,67 @@ final class RTWorldStreamer {
         self.activeInstances.reserveCapacity(self.maxWorldSlots)
     }
 
-    // MARK: - XZ AABB-Distance Dynamic Streaming + Distant Horizon Panorama Ring
+    // MARK: - XZ AABB-Distance Dynamic Streaming + EA PVS 2-4.6 km Vistas + Distant Horizon Panorama Ring
 
     @inline(__always)
     private static func xzAABBDistance(_ p: SIMD3<Float>, aabbMin: SIMD3<Float>, aabbMax: SIMD3<Float>) -> Float {
         let dx = max(aabbMin.x - p.x, max(0.0, p.x - aabbMax.x))
         let dz = max(aabbMin.z - p.z, max(0.0, p.z - aabbMax.z))
         return hypot(dx, dz)
+    }
+
+    @inline(__always)
+    private func pointInPvsZone(_ xz: SIMD2<Float>, zone: RkptPvsZone) -> Bool {
+        if xz.x < zone.minX || xz.x > zone.maxX || xz.y < zone.minZ || xz.y > zone.maxZ {
+            return false
+        }
+        let n = Int(zone.vertCount)
+        let base = Int(zone.firstVert)
+        if n < 3 || base + n > world.pvsVerts.count { return false }
+        var inside = false
+        var j = n - 1
+        for i in 0..<n {
+            let vi = world.pvsVerts[base + i]
+            let vj = world.pvsVerts[base + j]
+            if (vi.y > xz.y) != (vj.y > xz.y) {
+                let denom = vj.y - vi.y
+                let xHit = (vj.x - vi.x) * (xz.y - vi.y) / denom + vi.x
+                if xz.x < xHit {
+                    inside.toggle()
+                }
+            }
+            j = i
+        }
+        return inside
+    }
+
+    /// Locate the EA PVS zone containing `xz`, or the nearest zone within `pvsNearestZoneMaxDist` (120m).
+    func findPVSZoneIndex(forXZ xz: SIMD2<Float>) -> Int {
+        guard world.hasPVS else { return -1 }
+        let zones = world.pvsZones
+
+        // Fast hysteresis check: stay in current zone if player is still inside its polygon
+        if activePVSZoneIndex >= 0 && activePVSZoneIndex < zones.count {
+            if pointInPvsZone(xz, zone: zones[activePVSZoneIndex]) {
+                return activePVSZoneIndex
+            }
+        }
+
+        var nearestIdx = -1
+        var nearestDist = Self.pvsNearestZoneMaxDist
+        for (idx, z) in zones.enumerated() {
+            if pointInPvsZone(xz, zone: z) {
+                return idx
+            }
+            let dx = max(z.minX - xz.x, max(0.0, xz.x - z.maxX))
+            let dz = max(z.minZ - xz.y, max(0.0, xz.y - z.maxZ))
+            let d = hypot(dx, dz)
+            if d < nearestDist {
+                nearestDist = d
+                nearestIdx = idx
+            }
+        }
+        return nearestIdx
     }
 
     /// Update active streamed world sections around `playerPos`.
@@ -148,25 +215,34 @@ final class RTWorldStreamer {
         if secCount == 0 {
             let dirty = forceRebuild || !hasInitialized
             hasInitialized = true
+            activePVSSectionCount = 0
+            maxActiveVistaDistanceM = 0
+            activePVSZoneIndex = -1
             return (dirty, [], 0, 0)
         }
 
         // Fast path for small pilot districts (<= 64 sections, <= maxWorldSlots): keep entire district active
-        if world.panoramaSectionCount == 0 && world.instances.count <= maxSpatialInstances && secCount <= 64 {
+        if world.panoramaSectionCount == 0 && !world.hasPVS && world.instances.count <= maxSpatialInstances && secCount <= 64 {
             if !hasInitialized || forceRebuild {
                 activeInstances.removeAll(keepingCapacity: true)
                 var actSecs = 0
+                var maxVista: Float = 0
                 for sIdx in 0..<secCount {
                     let sInsts = validSectionInstances[sIdx]
                     if !sInsts.isEmpty {
                         activeInstances.append(contentsOf: sInsts)
                         activeSectionMask[sIdx] = true
                         actSecs += 1
+                        let sc = world.sections[sIdx].center
+                        maxVista = max(maxVista, hypot(sc.x - playerPos.x, sc.z - playerPos.z))
                     }
                 }
                 activeSectionCount = actSecs
                 activeSpatialSectionCount = actSecs
                 activePanoramaCount = 0
+                activePVSSectionCount = 0
+                activePVSZoneIndex = -1
+                maxActiveVistaDistanceM = maxVista
                 effectiveSpatialRadius = loadRadius
                 hasInitialized = true
                 return (true, activeInstances, activeSectionCount, 0)
@@ -174,8 +250,38 @@ final class RTWorldStreamer {
             return (false, activeInstances, activeSectionCount, 0)
         }
 
-        var candidateSpatial: [(secIdx: Int, dist: Float, instCount: Int)] = []
-        candidateSpatial.reserveCapacity(96)
+        // 1. Resolve EA PVS visible spatial section set when enabled
+        var pvsSectionMask = [Bool](repeating: false, count: secCount)
+        var resolvedZoneIdx = -1
+        if pvsEnabled && world.hasPVS {
+            resolvedZoneIdx = findPVSZoneIndex(forXZ: SIMD2<Float>(playerPos.x, playerPos.z))
+            if resolvedZoneIdx >= 0 && resolvedZoneIdx < world.pvsZones.count {
+                let zone = world.pvsZones[resolvedZoneIdx]
+                let eStart = Int(zone.firstSecEntry)
+                let eEnd = min(eStart + Int(zone.secEntryCount), world.pvsEntries.count)
+                let spLimit = min(world.spatialSectionCount, secCount)
+                if eStart < eEnd {
+                    for eIdx in eStart..<eEnd {
+                        let sIdx = Int(world.pvsEntries[eIdx])
+                        if sIdx < spLimit && !world.sections[sIdx].isPanorama && !validSectionInstances[sIdx].isEmpty {
+                            pvsSectionMask[sIdx] = true
+                        }
+                    }
+                }
+            }
+        }
+        activePVSZoneIndex = resolvedZoneIdx
+
+        struct SpatialCandidate {
+            let secIdx: Int
+            let dist: Float
+            let instCount: Int
+            let isPVS: Bool
+            let wasActive: Bool
+        }
+
+        var candidateSpatial: [SpatialCandidate] = []
+        candidateSpatial.reserveCapacity(128)
         var candidatePanorama: [(secIdx: Int, dist: Float, instCount: Int)] = []
         candidatePanorama.reserveCapacity(80)
 
@@ -197,45 +303,114 @@ final class RTWorldStreamer {
             } else {
                 let d = Self.xzAABBDistance(playerPos, aabbMin: sec.aabbMin, aabbMax: sec.aabbMax)
                 let thresh = wasActive ? unloadRadius : loadRadius
-                if d <= thresh {
-                    candidateSpatial.append((sIdx, d, instCnt))
+                let inPVS = pvsSectionMask[sIdx]
+                if inPVS || d <= thresh {
+                    candidateSpatial.append(SpatialCandidate(
+                        secIdx: sIdx,
+                        dist: d,
+                        instCount: instCnt,
+                        isPVS: inPVS,
+                        wasActive: wasActive
+                    ))
                 }
             }
         }
 
-        // Dynamic radius clamp: guarantee active spatial instances NEVER exceed maxSpatialInstances (6,000)
-        // by keeping the closest sections first around the player.
+        // 2. Smooth budget clamp: keep active spatial instances <= maxSpatialInstances (and total <= maxWorldSlots = 8192).
+        //    When PVS is active and union exceeds budget, shrink local non-PVS radius (350m -> 240m -> inward) FIRST
+        //    so EA's far 2-4.6 km PVS skyline stays intact! Hysteresis bias (-25m for wasActive) eliminates 2m nudge thrash.
         var totalSpatialInsts = candidateSpatial.reduce(0) { $0 + $1.instCount }
         var effRadius = loadRadius
         if totalSpatialInsts > maxSpatialInstances {
-            candidateSpatial.sort { $0.dist < $1.dist }
-            var kept: [(secIdx: Int, dist: Float, instCount: Int)] = []
-            kept.reserveCapacity(candidateSpatial.count)
-            var running = 0
-            for item in candidateSpatial {
-                if running + item.instCount <= maxSpatialInstances || kept.isEmpty {
-                    kept.append(item)
-                    running += item.instCount
-                    effRadius = item.dist
+            if resolvedZoneIdx >= 0 {
+                var pvsItems = candidateSpatial.filter { $0.isPVS }
+                var localOnly = candidateSpatial.filter { !$0.isPVS }
+
+                // Keep all PVS sections first; only trim PVS if PVS alone ever exceeded maxSpatialInstances
+                var kept: [SpatialCandidate] = []
+                kept.reserveCapacity(candidateSpatial.count)
+                var running = 0
+                let pvsTotal = pvsItems.reduce(0) { $0 + $1.instCount }
+                if pvsTotal <= maxSpatialInstances {
+                    kept.append(contentsOf: pvsItems)
+                    running = pvsTotal
                 } else {
-                    break
+                    // Prioritize closest player surroundings + farthest skyline landmarks
+                    pvsItems.sort { a, b in
+                        let aKey = a.dist <= 240.0 ? a.dist : (10000.0 - a.dist)
+                        let bKey = b.dist <= 240.0 ? b.dist : (10000.0 - b.dist)
+                        return aKey < bKey
+                    }
+                    for item in pvsItems {
+                        if running + item.instCount <= maxSpatialInstances || kept.isEmpty {
+                            kept.append(item)
+                            running += item.instCount
+                        }
+                    }
                 }
+
+                // Fill remaining spatial budget with closest local non-PVS sections (hysteresis-stabilized)
+                localOnly.sort { a, b in
+                    let da = a.wasActive ? max(0.0, a.dist - 25.0) : a.dist
+                    let db = b.wasActive ? max(0.0, b.dist - 25.0) : b.dist
+                    if da != db { return da < db }
+                    return a.secIdx < b.secIdx
+                }
+                var maxKeptLocal: Float = 0.0
+                for item in localOnly {
+                    if running + item.instCount <= maxSpatialInstances {
+                        kept.append(item)
+                        running += item.instCount
+                        maxKeptLocal = max(maxKeptLocal, item.dist)
+                    }
+                }
+                candidateSpatial = kept
+                totalSpatialInsts = running
+                effRadius = maxKeptLocal > 0.0 ? min(loadRadius, maxKeptLocal) : min(loadRadius, 240.0)
+            } else {
+                candidateSpatial.sort { a, b in
+                    let da = a.wasActive ? max(0.0, a.dist - 25.0) : a.dist
+                    let db = b.wasActive ? max(0.0, b.dist - 25.0) : b.dist
+                    if da != db { return da < db }
+                    return a.secIdx < b.secIdx
+                }
+                var kept: [SpatialCandidate] = []
+                kept.reserveCapacity(candidateSpatial.count)
+                var running = 0
+                for item in candidateSpatial {
+                    if running + item.instCount <= maxSpatialInstances || kept.isEmpty {
+                        kept.append(item)
+                        running += item.instCount
+                        effRadius = item.dist
+                    } else {
+                        break
+                    }
+                }
+                candidateSpatial = kept
+                totalSpatialInsts = running
             }
-            candidateSpatial = kept
-            totalSpatialInsts = running
         }
 
+        var pvsSecCount = 0
+        var maxVistaM: Float = 0.0
         for item in candidateSpatial {
             newMask[item.secIdx] = true
+            if item.isPVS {
+                pvsSecCount += 1
+            }
+            let sc = world.sections[item.secIdx].center
+            let cd = hypot(sc.x - playerPos.x, sc.z - playerPos.z)
+            if cd > maxVistaM {
+                maxVistaM = cd
+            }
         }
 
-        // Fit distant horizon panorama ring into remaining budget up to maxWorldSlots (8,192)
+        // 3. Fit distant horizon panorama ring into remaining budget up to maxWorldSlots (8,192)
         let remainingBudget = max(0, maxWorldSlots - totalSpatialInsts)
         var panInstTotal = 0
         var keptPan: [(secIdx: Int, dist: Float, instCount: Int)] = []
         keptPan.reserveCapacity(candidatePanorama.count)
         if remainingBudget > 0 {
-            // Prioritize closer horizon sections first if budget ever gets tight
             let totalPan = candidatePanorama.reduce(0) { $0 + $1.instCount }
             if totalPan > remainingBudget {
                 candidatePanorama.sort { $0.dist < $1.dist }
@@ -248,6 +423,9 @@ final class RTWorldStreamer {
                 }
             }
         }
+
+        activePVSSectionCount = pvsSecCount
+        maxActiveVistaDistanceM = maxVistaM
 
         if hasInitialized && !forceRebuild && newMask == activeSectionMask {
             return (false, activeInstances, activeSectionCount, activePanoramaCount)

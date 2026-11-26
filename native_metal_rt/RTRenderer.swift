@@ -224,7 +224,7 @@ struct RTOrbitCamera {
         let yScale = 1.0 / tan(fovY * 0.5)
         let xScale = yScale / max(aspect, 0.01)
         let nearZ: Float = 0.20
-        let farZ: Float = 800.0
+        let farZ: Float = 5200.0
         let zRange = farZ - nearZ
         return simd_float4x4(
             SIMD4<Float>(xScale, 0, 0, 0),
@@ -240,7 +240,7 @@ struct RTOrbitCamera {
         let yScale = 1.0 / tan(fovY * 0.5)
         let xScale = yScale / max(aspect, 0.01)
         let nearZ: Float = 0.20
-        let farZ: Float = 800.0
+        let farZ: Float = 5200.0
         let zRange = farZ - nearZ
         return simd_float4x4(
             SIMD4<Float>(xScale, 0, 0, 0),
@@ -2081,7 +2081,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         let yScale = 1.0 / tan(fovY * 0.5)
         let xScale = yScale / max(aspect, 0.01)
         let nearZ: Float = 0.20
-        let farZ: Float = 800.0
+        let farZ: Float = 5200.0
         let zRange = farZ - nearZ
         if reverseZ {
             return simd_float4x4(
@@ -2164,6 +2164,26 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             camera.projMatrix(aspect: aspect),
             camera.projMatrixReverseZ(aspect: aspect)
         )
+    }
+
+    func setPVSEnabled(_ enabled: Bool) {
+        guard let streamer = worldStreamer else { return }
+        streamer.pvsEnabled = enabled
+        try? rebuildTLAS(commandBuffer: nil)
+        historyResetPending = true
+        frameGenHistoryValid = false
+        resetAccumulation()
+    }
+
+    @discardableResult
+    func togglePVS() -> Bool {
+        guard let streamer = worldStreamer else { return false }
+        let nowOn = streamer.togglePVS()
+        try? rebuildTLAS(commandBuffer: nil)
+        historyResetPending = true
+        frameGenHistoryValid = false
+        resetAccumulation()
+        return nowOn
     }
 
     func clearPhotoModeHeldKeys() {
@@ -2636,7 +2656,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             fi.jitterOffsetY = -jitter.y
             fi.deltaTime = max(0.001, dt)
             fi.nearPlane = 0.20
-            fi.farPlane = 800.0
+            fi.farPlane = 5200.0
             fi.fieldOfView = cam.fovDeg
             fi.aspectRatio = aspect
             fi.isDepthReversed = true

@@ -64,6 +64,7 @@ RKPT_VERSION_V2 = 2
 RKPT_HDR_FLAG_HAS_V2_EXT = 1 << 0
 RKPT_HDR_FLAG_BC7_TEXTURES = 1 << 1
 RKPT_HDR_FLAG_HAS_PANORAMA = 1 << 2
+RKPT_HDR_FLAG_HAS_PVS = 1 << 3
 
 HEADER_FMT = "<4s9I3f3f3ff8Q3fI"      # 160 bytes
 V2_EXT_HEADER_FMT = "<8I8Q"           # 96 bytes (follows 160B header when version>=2 & HAS_V2_EXT)
@@ -77,6 +78,8 @@ ROAD_NODE_FMT = "<3fHHBB7H"           # 32 bytes
 ROAD_SEGMENT_FMT = "<HHBBHff"         # 16 bytes
 WORLD_LIGHT_FMT = "<4f4f"             # 32 bytes
 LANDMARK_FMT = "<32s3ff4I"            # 64 bytes
+PVS_ZONE_FMT = "<4f4I"                # 32 bytes (minX, minZ, maxX, maxZ, firstVert, vertCount, firstSecEntry, secEntryCount)
+PVS_VERT_FMT = "<2f"                  # 8 bytes  (Metal XZ vertex)
 
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
 V2_EXT_HEADER_SIZE = struct.calcsize(V2_EXT_HEADER_FMT)
@@ -90,6 +93,8 @@ ROAD_NODE_SIZE = struct.calcsize(ROAD_NODE_FMT)
 ROAD_SEGMENT_SIZE = struct.calcsize(ROAD_SEGMENT_FMT)
 WORLD_LIGHT_SIZE = struct.calcsize(WORLD_LIGHT_FMT)
 LANDMARK_SIZE = struct.calcsize(LANDMARK_FMT)
+PVS_ZONE_SIZE = struct.calcsize(PVS_ZONE_FMT)
+PVS_VERT_SIZE = struct.calcsize(PVS_VERT_FMT)
 
 assert HEADER_SIZE == 160
 assert V2_EXT_HEADER_SIZE == 96
@@ -103,6 +108,8 @@ assert ROAD_NODE_SIZE == 32
 assert ROAD_SEGMENT_SIZE == 16
 assert WORLD_LIGHT_SIZE == 32
 assert LANDMARK_SIZE == 64
+assert PVS_ZONE_SIZE == 32
+assert PVS_VERT_SIZE == 8
 
 # Section flags (stored in RkptSection.reserved)
 SEC_FLAG_PANORAMA = 1 << 0
@@ -159,6 +166,9 @@ TEX_INDEX_NONE = 0xFFFFFFFF
 
 # EA World Chunk IDs
 CHUNK_STREAM_SECTIONS = 0x00034110
+CHUNK_PVS_CONTAINER = 0x80034150
+CHUNK_PVS_POLYGONS = 0x00034152
+CHUNK_PVS_VISLISTS = 0x00034153
 CHUNK_SCENERY_GROUP = 0x80034100
 CHUNK_SCENERY_INFO = 0x00034102
 CHUNK_SCENERY_INSTANCE = 0x00034103
@@ -169,6 +179,28 @@ CYPRESS_FROND_TEX_HASH = 0x4CCF947E   # ORG_TREE_CYPRESS
 CYPRESS_TRUNK_TEX_HASH = 0x0DB48892   # ORG_TREE_CYPRESSTRUNK
 CYPRESS_SINGLE_SOLIDS = frozenset({"XO_CT_CYPRESS_1B_00", "XO_CT_CYPRESS_1C_00"})
 CYPRESS_CLUMP_SOLIDS = frozenset({"XO_CT_CYPRESSCLUMP_1B_00", "XO_CT_CYPRESSCLUMP_1C_00"})
+
+# All-district v1.4.0 botanical foliage upgrade constants (6 sculpted archetypes, 8,610+ instances)
+BOTANICAL_TEX_MAPLE_CRIMSON = 0xDBF97A3D   # ORG_CT_FALLTREE2
+BOTANICAL_TEX_FALL_AMBER = 0xC874AC8F      # ORG_CT_FALLTREETOP1
+BOTANICAL_TEX_POPLAR_GOLD = 0x49E9B8DE     # ORG_CT_POPLARFLORA
+BOTANICAL_TEX_CEDAR_BOUGH = 0x149BB535     # ORG_CEDAR_JG
+BOTANICAL_TEX_ROADSIDE_BUSH = 0xD65417BF   # ORG_CT_BUSH1
+BOTANICAL_TEX_FOREST_BUSH = 0x8B8FE06F     # ORG_BUSH_H_JG
+BOTANICAL_TEX_STADIUM_HEDGE = 0x63344935   # ORG_CT_HEDGELP
+BOTANICAL_TEX_BEACHGRASS = 0xA755A58C      # ORG_SCRUBBRUSH_D
+
+BOTANICAL_ARCHETYPE_PREFIXES: Tuple[Tuple[str, str], ...] = (
+    ("XT_JPNMAPLE_1B", "autumn_maple"),
+    ("XT_CT_FALLTREES_1B", "autumn_maple"),
+    ("XT_CT_FALLTREEFILLERB", "autumn_maple"),
+    ("XT_CT_POPLARD", "golden_poplar"),
+    ("XT_CEDARM_1B", "pnw_cedar"),
+    ("XT_CT_BUSH_1B", "roadside_bush"),
+    ("XT_BUSH_FOREST", "roadside_bush"),
+    ("XW_HEDGESTADIUM", "stadium_hedge"),
+    ("XT_BEACHGRASS", "coastal_beachgrass"),
+)
 
 # Curated Rockport landmarks (name, focus_ps2_xy, region_id: 0=Rosewood, 1=Downtown, 2=Camden, 3=Highway)
 ROCKPORT_LANDMARK_SPECS: Tuple[Tuple[str, Tuple[float, float], int], ...] = (
@@ -762,6 +794,202 @@ class RkptLandmark:
     flags: int = 0
 
 
+@dataclasses.dataclass
+class RkptPvsZone:
+    min_x: float
+    min_z: float
+    max_x: float
+    max_z: float
+    first_vert: int
+    vert_count: int
+    first_sec_entry: int
+    sec_entry_count: int
+
+
+def parse_l2ra_pvs_zones(
+    l2ra_bytes: bytes,
+    sections_meta: Sequence[Tuple[Any, ...]],
+    spatial_section_count: int,
+    ps2_origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    panorama_anchor_radius_m: float = 450.0,
+    max_vista_anchor_dist_m: float = 4800.0,
+) -> Tuple[List[RkptPvsZone], List[Tuple[float, float]], List[int], Dict[str, Any]]:
+    """Decode EA's PVS container (0x80034150: 0x00034152 polygons + 0x00034153 vis-lists) from L2RA.BUN.
+
+    Converts all PVS polygon XZ vertices into Metal Y-up world coordinates matching `.rkpt` sections
+    and resolves EA's visible section IDs cleanly into spatial section indices `0..<spatial_section_count`:
+      - Direct spatial section match (`it`)
+      - Paired spatial section match (`it + 40`, strictly guarded by `it < 2100 and (it % 100) < 40`)
+      - Distant EA skyline panorama targets (`80..99`) anchored to the nearest in-island non-empty
+        spatial skyline section within `panorama_anchor_radius_m` (up to `max_vista_anchor_dist_m`)
+        so EA's real 2-4.6 km bay/highway sightlines stream crisp full-detail skyline geometry.
+    """
+    subs: Dict[int, bytes] = {}
+    pos = 0
+    end = len(l2ra_bytes)
+    while pos + 8 <= end:
+        cid, csz = struct.unpack_from("<II", l2ra_bytes, pos)
+        pay_off = pos + 8
+        pay_end = min(end, pay_off + csz)
+        if cid == CHUNK_PVS_CONTAINER:
+            sp = pay_off
+            while sp + 8 <= pay_end:
+                scid, scsz = struct.unpack_from("<II", l2ra_bytes, sp)
+                subs[scid] = l2ra_bytes[sp + 8 : min(pay_end, sp + 8 + scsz)]
+                sp += 8 + scsz
+            break
+        pos = pay_off + csz
+
+    b52 = subs.get(CHUNK_PVS_POLYGONS)
+    b53 = subs.get(CHUNK_PVS_VISLISTS)
+    if not b52 or not b53 or spatial_section_count <= 0:
+        return [], [], [], {
+            "pvs_polygon_count": 0,
+            "pvs_vislist_count": 0,
+            "pvs_zone_count": 0,
+            "pvs_vert_count": 0,
+            "pvs_entry_count": 0,
+        }
+
+    # 1. Parse 0x00034152 PVS zone polygons (bTNode(8B) + u16 zid + u8 nverts + u8 flags + 6*f32 + nverts*2*f32)
+    raw_spatial_polys: List[Tuple[int, Tuple[float, float], List[Tuple[float, float]]]] = []
+    p = 0
+    total_polys_all = 0
+    while p + 36 <= len(b52):
+        _p0, _p1, zid, nverts, zflags = struct.unpack_from("<IIHBB", b52, p)
+        _bmin_x, _bmin_y, _bmax_x, _bmax_y, cx_ps2, cy_ps2 = struct.unpack_from("<6f", b52, p + 12)
+        v_end = p + 36 + nverts * 8
+        if v_end > len(b52):
+            break
+        total_polys_all += 1
+        if zflags == 0 and nverts >= 3:
+            verts_ps2 = [struct.unpack_from("<2f", b52, p + 36 + i * 8) for i in range(nverts)]
+            raw_spatial_polys.append((zid, (cx_ps2, cy_ps2), verts_ps2))
+        p = v_end
+
+    # 2. Parse 0x00034153 PVS section visibility lists
+    vis_lists: Dict[int, Tuple[int, ...]] = {}
+    p = 0
+    while p + 18 <= len(b53):
+        u0, u1, _u2 = struct.unpack_from("<III", b53, p)
+        if (u0, u1) != (11, 11):
+            nxt = b53.find(struct.pack("<II", 11, 11), p + 4)
+            if nxt < 0:
+                break
+            p = nxt
+            continue
+        zid = struct.unpack_from("<H", b53, p + 12)[0]
+        _cnt0, cap0 = b53[p + 14], b53[p + 15]
+        cnt1 = struct.unpack_from("<H", b53, p + 16)[0]
+        if p + 18 + cnt1 * 2 > len(b53):
+            break
+        vis_lists[zid] = struct.unpack_from(f"<{cnt1}H", b53, p + 18)
+        p = (p + 18 + cap0 * 2 + 3) & ~3
+
+    # Build section_number -> rkpt section index lookup tables
+    sp_idx_by_num: Dict[int, int] = {}
+    pan_idx_by_num: Dict[int, int] = {}
+    for s_idx, row in enumerate(sections_meta):
+        s_num = int(row[1])
+        if s_idx < spatial_section_count:
+            sp_idx_by_num[s_num] = s_idx
+        else:
+            pan_idx_by_num[s_num] = s_idx
+
+    # Pre-anchor each panorama target (80..99) to its closest non-empty in-island spatial skyline section
+    pan_to_skyline_sp: Dict[int, int] = {}
+    for pan_snum, pan_sidx in pan_idx_by_num.items():
+        pc = sections_meta[pan_sidx][4]
+        best_key: Optional[Tuple[float, int]] = None
+        best_sp = -1
+        for sp_idx in range(spatial_section_count):
+            icnt = int(sections_meta[sp_idx][3])
+            if icnt <= 0:
+                continue
+            sc = sections_meta[sp_idx][4]
+            d = math.hypot(sc[0] - pc[0], sc[2] - pc[2])
+            if d <= panorama_anchor_radius_m:
+                key = (d, -icnt)
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_sp = sp_idx
+        if best_sp >= 0:
+            pan_to_skyline_sp[pan_snum] = best_sp
+
+    pvs_zones: List[RkptPvsZone] = []
+    pvs_verts: List[Tuple[float, float]] = []
+    pvs_entries: List[int] = []
+    zone_max_vistas: List[float] = []
+    matched_vis = 0
+
+    for zid, (cx_ps2, cy_ps2), verts_ps2 in raw_spatial_polys:
+        raw_items = vis_lists.get(zid)
+        if raw_items is None:
+            continue
+        matched_vis += 1
+        cm = ps2_point_to_metal(cx_ps2, cy_ps2, 0.0, ps2_origin)
+        vis_sp: Set[int] = set()
+        for it in raw_items:
+            if it in sp_idx_by_num:
+                si = sp_idx_by_num[it]
+                if int(sections_meta[si][3]) > 0:
+                    vis_sp.add(si)
+            elif it in pan_to_skyline_sp:
+                ai = pan_to_skyline_sp[it]
+                ac = sections_meta[ai][4]
+                if math.hypot(ac[0] - cm[0], ac[2] - cm[2]) <= max_vista_anchor_dist_m:
+                    vis_sp.add(ai)
+            if it < 2100 and (it % 100) < 40 and (it + 40) in sp_idx_by_num:
+                si40 = sp_idx_by_num[it + 40]
+                if int(sections_meta[si40][3]) > 0:
+                    vis_sp.add(si40)
+
+        sorted_sp = sorted(vis_sp)
+        mverts = [
+            (ps2_point_to_metal(vx, vy, 0.0, ps2_origin)[0], ps2_point_to_metal(vx, vy, 0.0, ps2_origin)[2])
+            for vx, vy in verts_ps2
+        ]
+        xs = [v[0] for v in mverts]
+        zs = [v[1] for v in mverts]
+        first_v = len(pvs_verts)
+        pvs_verts.extend(mverts)
+        first_e = len(pvs_entries)
+        pvs_entries.extend(sorted_sp)
+        pvs_zones.append(
+            RkptPvsZone(
+                min_x=float(min(xs)),
+                min_z=float(min(zs)),
+                max_x=float(max(xs)),
+                max_z=float(max(zs)),
+                first_vert=first_v,
+                vert_count=len(mverts),
+                first_sec_entry=first_e,
+                sec_entry_count=len(sorted_sp),
+            )
+        )
+        if sorted_sp:
+            md = max(
+                math.hypot(sections_meta[si][4][0] - cm[0], sections_meta[si][4][2] - cm[2])
+                for si in sorted_sp
+            )
+            zone_max_vistas.append(md)
+
+    stats: Dict[str, Any] = {
+        "pvs_polygon_count": len(raw_spatial_polys),
+        "pvs_total_polygons_raw": total_polys_all,
+        "pvs_vislist_count": len(vis_lists),
+        "pvs_matched_vis_count": matched_vis,
+        "pvs_zone_count": len(pvs_zones),
+        "pvs_vert_count": len(pvs_verts),
+        "pvs_entry_count": len(pvs_entries),
+        "pvs_panorama_anchors": len(pan_to_skyline_sp),
+        "pvs_vista_median_m": round(float(np.median(zone_max_vistas)), 1) if zone_max_vistas else 0.0,
+        "pvs_vista_p90_m": round(float(np.percentile(zone_max_vistas, 90)), 1) if zone_max_vistas else 0.0,
+        "pvs_vista_max_m": round(float(max(zone_max_vistas)), 1) if zone_max_vistas else 0.0,
+    }
+    return pvs_zones, pvs_verts, pvs_entries, stats
+
+
 def parse_l2ra_road_network(
     l2ra_bytes: bytes,
     ps2_origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
@@ -1183,6 +1411,916 @@ def build_botanical_cypress_solid(orig: DecodedWorldSolid) -> DecodedWorldSolid:
         )
 
     pos_arr = np.asarray(pos_list, dtype=np.float32)
+    bmin = pos_arr.min(axis=0)
+    bmax = pos_arr.max(axis=0)
+    return DecodedWorldSolid(
+        name=orig.name,
+        name_hash=orig.name_hash,
+        texture_hashes=tex_hashes,
+        positions_metal=pos_arr,
+        normals_metal=np.asarray(norm_list, dtype=np.float32),
+        uvs_metal=np.asarray(uv_list, dtype=np.float32),
+        vertex_ao=np.asarray(ao_list, dtype=np.uint8),
+        vertex_tex_slot=np.asarray(slot_list, dtype=np.int32),
+        indices=np.asarray(idx_list, dtype=np.uint32),
+        aabb_min_metal=(float(bmin[0]), float(bmin[1]), float(bmin[2])),
+        aabb_max_metal=(float(bmax[0]), float(bmax[1]), float(bmax[2])),
+    )
+
+
+# ---------------------------------------------------------------------------
+# All-District v1.4.0 Sculpted Botanical Foliage Upgrades (6 Archetypes, 8,610+ insts)
+# ---------------------------------------------------------------------------
+
+
+def match_botanical_foliage_archetype(solid_name: str) -> Optional[str]:
+    """Return botanical archetype key if solid_name matches one of the 6 v1.4.0 foliage upgrades."""
+    up = solid_name.upper()
+    for prefix, archetype in BOTANICAL_ARCHETYPE_PREFIXES:
+        if up.startswith(prefix):
+            return archetype
+    return None
+
+
+def _render_leaf_spray_cluster_rgba(
+    size: int,
+    seed: int,
+    n_leaves: int,
+    dark_rgb: Tuple[float, float, float],
+    mid_rgb: Tuple[float, float, float],
+    tip_rgb: Tuple[float, float, float],
+    leaf_shape: str = "maple",
+    vertical_stretch: float = 1.0,
+) -> np.ndarray:
+    """Vectorized crisp 512x512 organic multi-leaf foliage spray atlas with opaque heart & feathery border.
+
+    Produces rich individual overlapping leaf silhouettes (maple 5-lobe, poplar ovate, shrub broad-leaf)
+    with deep shadowed interior crevices, sunlit outer leaf tips, ~44-52% feathery open-air cutout,
+    and full 10-iteration edge RGB dilation so bilinear/BC7 mips have zero white/gray fringes.
+    """
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    u = xx / float(size - 1)
+    v = yy / float(size - 1)
+    cx_grid = (u - 0.5) * 2.0
+    cy_grid = (v - 0.5) * 2.0 / max(0.5, vertical_stretch)
+
+    rng = np.random.default_rng(seed)
+    rgb_buf = np.zeros((size, size, 3), dtype=np.float32)
+    alpha_buf = np.zeros((size, size), dtype=np.float32)
+    depth_buf = np.full((size, size), -1.0, dtype=np.float32)
+
+    # Subtle continuous leaf-cluster micro-noise for leaf vein / mottling variation
+    micro = (
+        0.5
+        + 0.25 * np.sin(u * 83.0 + np.cos(v * 71.0) * 1.4) * np.cos(v * 79.0)
+        + 0.15 * np.sin(u * 197.0 - v * 173.0)
+    )
+
+    # Guarantee an opaque organic leaf heart inside u,v in [0.28..0.72] so inner canopy cores never show holes
+    heart_r = np.hypot(cx_grid, cy_grid)
+    heart_noise = 0.09 * np.sin(np.arctan2(cy_grid, cx_grid) * 5.0 + 0.7) + 0.06 * (micro - 0.5)
+    heart_mask = (heart_r + heart_noise) < 0.50
+    for ch in range(3):
+        rgb_buf[:, :, ch] = np.where(heart_mask, dark_rgb[ch] * (0.85 + 0.25 * micro), 0.0)
+    alpha_buf = np.where(heart_mask, 255.0, 0.0)
+    depth_buf = np.where(heart_mask, 0.05, -1.0)
+
+    # Paint individual leaves back-to-front (interior shadowed -> outer sunlit)
+    golden = 2.399963229728653
+    for i in range(n_leaves):
+        frac = i / float(max(1, n_leaves - 1))
+        # Radial distribution: dense cluster core + irregular billowing outer lobes
+        rad = math.sqrt(frac) * 0.76 * float(rng.uniform(0.84, 1.06))
+        ang = i * golden + float(rng.uniform(-0.28, 0.28))
+        # Organic 3-lobe cluster contour
+        lobe_scale = 0.90 + 0.14 * math.sin(ang * 3.0 + seed * 0.13) + 0.08 * math.cos(ang * 5.0)
+        lx = math.cos(ang) * rad * lobe_scale
+        ly = math.sin(ang) * rad * lobe_scale
+        rot = ang + float(rng.uniform(-0.65, 0.65))
+        cr, sr = math.cos(rot), math.sin(rot)
+        l_size = float(rng.uniform(0.11, 0.18)) * (1.12 - 0.28 * frac)
+
+        # Bounding box in pixel space for fast vectorized stamping
+        px_c = (lx * 0.5 + 0.5) * (size - 1)
+        py_c = (ly * 0.5 * vertical_stretch + 0.5) * (size - 1)
+        pad_px = int(math.ceil(l_size * size * 0.85)) + 2
+        x0 = max(0, int(px_c) - pad_px)
+        x1 = min(size, int(px_c) + pad_px + 1)
+        y0 = max(0, int(py_c) - pad_px)
+        y1 = min(size, int(py_c) + pad_px + 1)
+        if x0 >= x1 or y0 >= y1:
+            continue
+
+        dx = cx_grid[y0:y1, x0:x1] - lx
+        dy = cy_grid[y0:y1, x0:x1] - ly
+        rx = (dx * cr + dy * sr) / l_size
+        ry = (-dx * sr + dy * cr) / l_size
+        r_loc = np.hypot(rx, ry)
+        th_loc = np.arctan2(ry, rx)
+
+        if leaf_shape == "maple":
+            # Crisp 5-pointed palmate maple leaf silhouette
+            boundary = 0.72 + 0.30 * np.cos(th_loc * 5.0) + 0.12 * np.cos(th_loc * 10.0)
+            inside = r_loc < boundary
+            vein = np.exp(-np.abs(ry) * 9.0) * 0.14 + np.exp(-np.abs(rx) * 7.0) * 0.08
+        elif leaf_shape == "poplar":
+            # Pointed deltoid/heart aspen-poplar leaf
+            taper = np.clip(1.0 - 0.42 * np.maximum(0.0, rx), 0.35, 1.2)
+            inside = (rx * rx) * 0.88 + (ry / taper) ** 2 < 0.78
+            vein = np.exp(-np.abs(ry) * 12.0) * 0.12
+        else:
+            # Serrated broad shrub/bush leaf
+            boundary = 0.86 + 0.08 * np.sin(th_loc * 9.0)
+            inside = ((rx * 0.85) ** 2 + (ry * 1.15) ** 2) < (boundary ** 2)
+            vein = np.exp(-np.abs(ry) * 11.0) * 0.10
+
+        z_val = 0.15 + 0.85 * frac + float(rng.uniform(-0.04, 0.04))
+        write_mask = inside & (z_val >= depth_buf[y0:y1, x0:x1])
+        if not np.any(write_mask):
+            continue
+
+        # Leaf shading: outer & upper leaves brighter sunlit, inner darker shadowed, subtle vein highlight
+        sun_t = float(np.clip(0.20 + 0.65 * frac + 0.18 * (-ly) + rng.uniform(-0.14, 0.14), 0.0, 1.0))
+        if sun_t < 0.5:
+            s = sun_t * 2.0
+            base_col = tuple(dark_rgb[c] * (1.0 - s) + mid_rgb[c] * s for c in range(3))
+        else:
+            s = (sun_t - 0.5) * 2.0
+            base_col = tuple(mid_rgb[c] * (1.0 - s) + tip_rgb[c] * s for c in range(3))
+
+        edge_lit = np.clip(0.86 + 0.24 * r_loc - vein, 0.68, 1.18)
+        m_sub = micro[y0:y1, x0:x1]
+        shade = edge_lit * (0.90 + 0.20 * m_sub)
+        for ch in range(3):
+            plane = rgb_buf[y0:y1, x0:x1, ch]
+            plane[write_mask] = base_col[ch] * shade[write_mask]
+        alpha_buf[y0:y1, x0:x1][write_mask] = 255.0
+        depth_buf[y0:y1, x0:x1][write_mask] = z_val
+
+    rgba = np.empty((size, size, 4), dtype=np.uint8)
+    rgba[:, :, :3] = np.clip(np.rint(rgb_buf), 0.0, 255.0).astype(np.uint8)
+    rgba[:, :, 3] = np.clip(np.rint(alpha_buf), 0.0, 255.0).astype(np.uint8)
+    return dilate_alpha_edge_rgb(rgba, iterations=10, alpha_thresh=32)
+
+
+def generate_botanical_cedar_bough_rgba(size: int = 512) -> np.ndarray:
+    """Generate a crisp 512x512 Pacific NW Western Red Cedar drooping pinnate frond atlas."""
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    u = xx / float(size - 1)
+    v = yy / float(size - 1)
+    dx = u - 0.5
+
+    # Central woody stem + pinnate outward-drooping flat cedar scale-needle sprays
+    n1 = np.sin(u * 41.0 + np.cos(v * 33.0) * 1.5) * np.cos(v * 37.0 - np.sin(u * 29.0))
+    n2 = np.sin(u * 107.0 - v * 89.0 + n1 * 2.1) * np.cos(u * 93.0 + v * 113.0)
+    n3 = np.sin(u * 239.0 + v * 211.0 + n2 * 1.4)
+
+    # Drooping chevron coordinate (needles fan outward and sweep gracefully downward)
+    droop_v = v - np.abs(dx) * 0.52
+    env_w = np.clip(
+        0.08 + 0.41 * np.power(np.sin(math.pi * np.clip(v * 0.90 + 0.04, 0.0, 1.0)), 0.68),
+        0.05,
+        0.48,
+    )
+    rad_norm = np.abs(dx) / np.maximum(env_w, 1e-4)
+
+    # Fine pinnate sub-fronds along drooping diagonal ribs
+    ribs = 0.5 + 0.32 * np.sin((droop_v * 14.0) * math.pi + n1 * 1.6) + 0.18 * np.cos((droop_v * 29.0 + np.abs(dx) * 12.0) * math.pi)
+    needles = 0.5 + 0.28 * np.sin((dx * 58.0 + droop_v * 42.0) * math.pi + n2 * 1.8) + 0.16 * n3
+    density = (1.06 - rad_norm) + 0.28 * (ribs - 0.5) + 0.22 * (needles - 0.5) + 0.16 * n1
+    v_fade = np.clip((v - 0.02) / 0.06, 0.0, 1.0) * np.clip((0.98 - v) / 0.06, 0.0, 1.0)
+    field = density * v_fade
+
+    # Solid heart for inner core mapping + feathery conifer tips
+    heart = (np.hypot(dx * 2.0, (v - 0.5) * 2.0) < 0.44)
+    alpha = np.where((field > 0.34) | heart, 255.0, 0.0)
+
+    # Woody center branchlet hint near dx ~ 0
+    stem_mask = (np.abs(dx) < 0.024 * (1.2 - 0.7 * v)) & (v > 0.12) & (v < 0.92)
+    outer_lit = np.clip(0.50 * rad_norm + 0.30 * (1.0 - v) + 0.30 * (needles - 0.4), 0.0, 1.0)
+    ao = np.clip(0.54 + 0.46 * ribs + 0.18 * n2, 0.30, 1.28)
+    r = np.where(stem_mask, 58.0, (14.0 + 38.0 * outer_lit + 8.0 * n3) * ao)
+    g = np.where(stem_mask, 42.0, (28.0 + 54.0 * outer_lit + 10.0 * n1) * ao)
+    b = np.where(stem_mask, 28.0, (16.0 + 22.0 * outer_lit + 6.0 * n2) * ao)
+
+    rgba = np.empty((size, size, 4), dtype=np.uint8)
+    rgba[:, :, 0] = np.clip(np.rint(r), 0.0, 255.0).astype(np.uint8)
+    rgba[:, :, 1] = np.clip(np.rint(g), 0.0, 255.0).astype(np.uint8)
+    rgba[:, :, 2] = np.clip(np.rint(b), 0.0, 255.0).astype(np.uint8)
+    rgba[:, :, 3] = np.clip(np.rint(alpha), 0.0, 255.0).astype(np.uint8)
+    return dilate_alpha_edge_rgb(rgba, iterations=10, alpha_thresh=32)
+
+
+def generate_botanical_hedge_rgba(size: int = 512) -> np.ndarray:
+    """Generate a horizontally-tileable 512x512 dense boxwood hedge texture with organic top leaf fringes.
+
+    100% periodic along u (seams invisible at u=0,1,2) so both upgraded XW_HEDGESTADIUM and tiled
+    park hedges stay lush and solid across v=0.14..1.00 while v=0.00..0.14 carries crisp cutout leaf tips.
+    """
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    u = xx / float(size)  # strictly periodic [0, 1)
+    v = yy / float(size - 1)
+    tau = math.tau
+
+    # Periodic multi-scale boxwood foliage noise
+    n1 = np.sin(u * tau * 6.0 + np.cos(v * 19.0) * 1.3) * np.cos(v * 23.0 + np.sin(u * tau * 4.0))
+    n2 = np.sin(u * tau * 17.0 - v * 47.0 + n1 * 1.8) * np.cos(u * tau * 13.0 + v * 53.0)
+    n3 = np.sin(u * tau * 43.0 + v * 119.0 + n2 * 1.4) * np.cos(u * tau * 37.0 - v * 97.0)
+    n4 = np.sin(u * tau * 89.0 - v * 211.0 + n3 * 1.1)
+
+    # Organic serrated top leaf-crest silhouette (~11-14% cutout matching EA's ORG_CT_HEDGELP)
+    crest = (
+        0.105
+        + 0.032 * np.sin(u * tau * 5.0 + 0.4)
+        + 0.020 * np.cos(u * tau * 14.0 - 0.8)
+        + 0.015 * np.sin(u * tau * 31.0 + 1.2)
+        + 0.012 * n3
+    )
+    alpha = np.where(v >= crest, 255.0, 0.0)
+
+    # Dense small-leaf boxwood layering: deeper shadowed base, bright sunlit crown tips
+    height_lit = np.clip(1.0 - v * 0.72, 0.25, 1.0)
+    leaf_cell = np.clip(0.55 + 0.28 * n2 + 0.22 * n3 + 0.14 * n4, 0.22, 1.32)
+    r = (18.0 + 36.0 * height_lit + 14.0 * np.maximum(0.0, n3)) * leaf_cell
+    g = (36.0 + 56.0 * height_lit + 18.0 * np.maximum(0.0, n2)) * leaf_cell
+    b = (16.0 + 20.0 * height_lit + 8.0 * np.maximum(0.0, n4)) * leaf_cell
+
+    rgba = np.empty((size, size, 4), dtype=np.uint8)
+    rgba[:, :, 0] = np.clip(np.rint(r), 0.0, 255.0).astype(np.uint8)
+    rgba[:, :, 1] = np.clip(np.rint(g), 0.0, 255.0).astype(np.uint8)
+    rgba[:, :, 2] = np.clip(np.rint(b), 0.0, 255.0).astype(np.uint8)
+    rgba[:, :, 3] = np.clip(np.rint(alpha), 0.0, 255.0).astype(np.uint8)
+    return dilate_alpha_edge_rgb(rgba, iterations=10, alpha_thresh=32)
+
+
+def generate_botanical_beachgrass_rgba(size: int = 512) -> np.ndarray:
+    """Generate a crisp 512x512 windswept coastal dune grass blade atlas (~50-56% open-air cutout)."""
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    u = xx / float(size - 1)
+    v = yy / float(size - 1)  # 0 = tip, 1 = rooted base
+    h_frac = 1.0 - v          # 0 at root, 1 at top
+
+    rng = np.random.default_rng(7919)
+    rgb_buf = np.zeros((size, size, 3), dtype=np.float32)
+    alpha_buf = np.zeros((size, size), dtype=np.float32)
+    depth_buf = np.full((size, size), -1.0, dtype=np.float32)
+
+    # 44 gracefully arching coastal dune grass blades leaning with ocean wind
+    n_blades = 44
+    for i in range(n_blades):
+        frac = i / float(max(1, n_blades - 1))
+        root_u = float(0.08 + 0.84 * (i + 0.5) / n_blades + rng.uniform(-0.025, 0.025))
+        blade_h = float(rng.uniform(0.62, 0.96))
+        wind_bend = float(rng.uniform(-0.10, 0.24))  # predominant coastal breeze lean
+        half_w_base = float(rng.uniform(0.011, 0.020))
+        t_along = h_frac / max(blade_h, 0.1)
+        center_u = root_u + wind_bend * (t_along ** 1.75)
+        half_w = half_w_base * np.clip(1.0 - 0.88 * (t_along ** 1.2), 0.04, 1.0)
+        inside = (t_along >= 0.0) & (t_along <= 1.0) & (np.abs(u - center_u) <= half_w)
+        z_val = 0.1 + 0.9 * frac
+        write_mask = inside & (z_val >= depth_buf)
+        if not np.any(write_mask):
+            continue
+
+        # Dry coastal wheat-straw blended with sea-sage green (darker at roots, golden sunlit tips)
+        is_dry = (i % 3) != 0
+        root_c = (44.0, 50.0, 24.0) if is_dry else (32.0, 52.0, 26.0)
+        tip_c = (162.0, 142.0, 74.0) if is_dry else (104.0, 118.0, 56.0)
+        t_c = np.clip(t_along, 0.0, 1.0)
+        ribbon = 0.88 + 0.22 * (1.0 - np.abs(u - center_u) / np.maximum(half_w, 1e-4))
+        for ch in range(3):
+            col_v = (root_c[ch] * (1.0 - t_c) + tip_c[ch] * t_c) * ribbon
+            rgb_buf[:, :, ch][write_mask] = col_v[write_mask]
+        alpha_buf[write_mask] = 255.0
+        depth_buf[write_mask] = z_val
+
+    rgba = np.empty((size, size, 4), dtype=np.uint8)
+    rgba[:, :, :3] = np.clip(np.rint(rgb_buf), 0.0, 255.0).astype(np.uint8)
+    rgba[:, :, 3] = np.clip(np.rint(alpha_buf), 0.0, 255.0).astype(np.uint8)
+    return dilate_alpha_edge_rgb(rgba, iterations=10, alpha_thresh=32)
+
+
+def generate_botanical_foliage_texture_rgba(tex_hash: int, size: int = 512) -> Optional[Tuple[str, str, np.ndarray]]:
+    """Generate procedural 512x512 alpha-cutout RGBA texture for any of the 6 v1.4.0 foliage hashes."""
+    if tex_hash == BOTANICAL_TEX_MAPLE_CRIMSON:
+        return (
+            "ORG_CT_FALLTREE2",
+            "procedural:botanical_autumn_maple_crimson_512",
+            _render_leaf_spray_cluster_rgba(
+                size, seed=1401, n_leaves=118,
+                dark_rgb=(66.0, 17.0, 12.0), mid_rgb=(156.0, 38.0, 20.0), tip_rgb=(210.0, 96.0, 28.0),
+                leaf_shape="maple",
+            ),
+        )
+    if tex_hash == BOTANICAL_TEX_FALL_AMBER:
+        return (
+            "ORG_CT_FALLTREETOP1",
+            "procedural:botanical_autumn_maple_amber_512",
+            _render_leaf_spray_cluster_rgba(
+                size, seed=1402, n_leaves=122,
+                dark_rgb=(68.0, 32.0, 14.0), mid_rgb=(168.0, 86.0, 22.0), tip_rgb=(216.0, 146.0, 36.0),
+                leaf_shape="maple",
+            ),
+        )
+    if tex_hash == BOTANICAL_TEX_POPLAR_GOLD:
+        return (
+            "ORG_CT_POPLARFLORA",
+            "procedural:botanical_golden_poplar_512",
+            _render_leaf_spray_cluster_rgba(
+                size, seed=1403, n_leaves=132,
+                dark_rgb=(62.0, 50.0, 18.0), mid_rgb=(166.0, 128.0, 30.0), tip_rgb=(222.0, 184.0, 54.0),
+                leaf_shape="poplar", vertical_stretch=1.12,
+            ),
+        )
+    if tex_hash == BOTANICAL_TEX_CEDAR_BOUGH:
+        return (
+            "ORG_CEDAR_JG",
+            "procedural:botanical_pnw_cedar_512",
+            generate_botanical_cedar_bough_rgba(size),
+        )
+    if tex_hash == BOTANICAL_TEX_ROADSIDE_BUSH:
+        return (
+            "ORG_CT_BUSH1",
+            "procedural:botanical_roadside_bush_512",
+            _render_leaf_spray_cluster_rgba(
+                size, seed=1405, n_leaves=136,
+                dark_rgb=(36.0, 46.0, 20.0), mid_rgb=(92.0, 98.0, 42.0), tip_rgb=(140.0, 134.0, 56.0),
+                leaf_shape="shrub",
+            ),
+        )
+    if tex_hash == BOTANICAL_TEX_FOREST_BUSH:
+        return (
+            "ORG_BUSH_H_JG",
+            "procedural:botanical_forest_bush_512",
+            _render_leaf_spray_cluster_rgba(
+                size, seed=1406, n_leaves=136,
+                dark_rgb=(18.0, 34.0, 18.0), mid_rgb=(38.0, 68.0, 32.0), tip_rgb=(68.0, 100.0, 44.0),
+                leaf_shape="shrub",
+            ),
+        )
+    if tex_hash == BOTANICAL_TEX_STADIUM_HEDGE:
+        return (
+            "ORG_CT_HEDGELP",
+            "procedural:botanical_stadium_hedge_512",
+            generate_botanical_hedge_rgba(size),
+        )
+    if tex_hash == BOTANICAL_TEX_BEACHGRASS:
+        return (
+            "ORG_SCRUBBRUSH_D",
+            "procedural:botanical_coastal_beachgrass_512",
+            generate_botanical_beachgrass_rgba(size),
+        )
+    return None
+
+
+def _append_tapered_trunk_tube(
+    x0: float, y0: float, z0: float, r0: float,
+    x1: float, y1: float, z1: float, r1: float,
+    segs: int, rings: int, trunk_slot: int,
+    pos_list: List[Tuple[float, float, float]],
+    norm_list: List[Tuple[float, float, float]],
+    uv_list: List[Tuple[float, float]],
+    ao_list: List[int],
+    slot_list: List[int],
+    idx_list: List[int],
+) -> None:
+    """Append a tapered organic woody trunk/branch segment."""
+    dx, dy, dz = x1 - x0, y1 - y0, z1 - z0
+    ax_len = max(1e-4, math.sqrt(dx * dx + dy * dy + dz * dz))
+    ux, uy, uz = dx / ax_len, dy / ax_len, dz / ax_len
+    # Orthonormal basis around branch axis
+    ref = (1.0, 0.0, 0.0) if abs(uy) > 0.85 else (0.0, 1.0, 0.0)
+    bx = uy * ref[2] - uz * ref[1]
+    by = uz * ref[0] - ux * ref[2]
+    bz = ux * ref[1] - uy * ref[0]
+    bm = max(1e-5, math.sqrt(bx * bx + by * by + bz * bz))
+    bx, by, bz = bx / bm, by / bm, bz / bm
+    cx = uy * bz - uz * by
+    cy = uz * bx - ux * bz
+    cz = ux * by - uy * bx
+
+    base = len(pos_list)
+    for ri in range(rings + 1):
+        t = ri / float(rings)
+        px = x0 + dx * t
+        py = y0 + dy * t
+        pz = z0 + dz * t
+        rad = r0 * (1.0 - t) + r1 * t
+        ao = int(118 + 42 * (1.0 - t))
+        for si in range(segs + 1):
+            ang = (si / float(segs)) * math.tau
+            ca, sa = math.cos(ang), math.sin(ang)
+            nx = bx * ca + cx * sa
+            ny = by * ca + cy * sa
+            nz = bz * ca + cz * sa
+            pos_list.append((px + nx * rad, py + ny * rad, pz + nz * rad))
+            norm_list.append((nx, ny, nz))
+            uv_list.append((si / float(segs) * 2.0, t * 2.5))
+            ao_list.append(ao)
+            slot_list.append(trunk_slot)
+    stride = segs + 1
+    for ri in range(rings):
+        for si in range(segs):
+            a = base + ri * stride + si
+            b = a + 1
+            c = a + stride
+            d = c + 1
+            idx_list.extend((a, b, c, b, d, c))
+
+
+def _append_organic_foliage_core(
+    cx: float, cy: float, cz: float,
+    rx: float, ry: float, rz: float,
+    rings: int, segs: int, seed: int, foliage_slot: int,
+    pos_list: List[Tuple[float, float, float]],
+    norm_list: List[Tuple[float, float, float]],
+    uv_list: List[Tuple[float, float]],
+    ao_list: List[int],
+    slot_list: List[int],
+    idx_list: List[int],
+) -> None:
+    """Append a sculpted multi-lobe organic inner foliage core mapped to the opaque atlas heart."""
+    rng = np.random.default_rng(seed)
+    p1 = float(rng.uniform(0.0, math.tau))
+    p2 = float(rng.uniform(0.0, math.tau))
+    base = len(pos_list)
+    for ri in range(rings + 1):
+        v_t = ri / float(rings)
+        phi = v_t * math.pi  # 0 = top pole, pi = bottom pole
+        sp = math.sin(phi)
+        cp = math.cos(phi)
+        ao = int(94 + 86 * (0.5 + 0.5 * cp))
+        for si in range(segs + 1):
+            u_t = si / float(segs)
+            th = u_t * math.tau
+            ct, st = math.cos(th), math.sin(th)
+            lobe = 1.0 + 0.14 * math.sin(th * 3.0 + phi * 2.5 + p1) + 0.09 * math.cos(th * 2.0 - phi * 3.0 + p2)
+            px = cx + rx * sp * ct * lobe
+            py = cy + ry * cp * (0.94 + 0.06 * lobe)
+            pz = cz + rz * sp * st * lobe
+            nx, ny, nz = sp * ct * 0.85, max(-0.2, cp * 0.72 + 0.28), sp * st * 0.85
+            nm = max(1e-5, math.sqrt(nx * nx + ny * ny + nz * nz))
+            pos_list.append((px, py, pz))
+            norm_list.append((nx / nm, ny / nm, nz / nm))
+            # Map strictly inside opaque heart [0.32..0.68] so zero sky gaps pierce the core
+            u_c = 0.34 + 0.32 * (0.5 + 0.5 * math.sin(th * 2.0))
+            v_c = 0.34 + 0.32 * v_t
+            uv_list.append((u_c, v_c))
+            ao_list.append(ao)
+            slot_list.append(foliage_slot)
+    stride = segs + 1
+    for ri in range(rings):
+        for si in range(segs):
+            a = base + ri * stride + si
+            b = a + 1
+            c = a + stride
+            d = c + 1
+            idx_list.extend((a, b, c, b, d, c))
+
+
+def _append_cupped_leaf_card(
+    center: Tuple[float, float, float],
+    out_dir: Tuple[float, float, float],
+    half_w: float,
+    half_h: float,
+    cup_depth: float,
+    tilt_rad: float,
+    ao_lo: int,
+    ao_hi: int,
+    slot: int,
+    pos_list: List[Tuple[float, float, float]],
+    norm_list: List[Tuple[float, float, float]],
+    uv_list: List[Tuple[float, float]],
+    ao_list: List[int],
+    slot_list: List[int],
+    idx_list: List[int],
+    uv_inset: float = 0.02,
+) -> None:
+    """Append one curved 6-vertex (4-triangle) billowing leaf-cluster card facing `out_dir`."""
+    ox, oy, oz = out_dir
+    om = max(1e-5, math.sqrt(ox * ox + oy * oy + oz * oz))
+    nx, ny, nz = ox / om, oy / om, oz / om
+    ref = (1.0, 0.0, 0.0) if abs(ny) > 0.90 else (0.0, 1.0, 0.0)
+    rx = ref[1] * nz - ref[2] * ny
+    ry = ref[2] * nx - ref[0] * nz
+    rz = ref[0] * ny - ref[1] * nx
+    rm = max(1e-5, math.sqrt(rx * rx + ry * ry + rz * rz))
+    rx, ry, rz = rx / rm, ry / rm, rz / rm
+    ux = ny * rz - nz * ry
+    uy = nz * rx - nx * rz
+    uz = nx * ry - ny * rx
+
+    # Apply organic in-plane roll
+    ct, st = math.cos(tilt_rad), math.sin(tilt_rad)
+    r2x, r2y, r2z = rx * ct + ux * st, ry * ct + uy * st, rz * ct + uz * st
+    u2x, u2y, u2z = -rx * st + ux * ct, -ry * st + uy * ct, -rz * st + uz * ct
+
+    cx, cy, cz = center
+    # 3 rows (bottom, cupped middle belly, top) x 2 cols
+    rows = (
+        (-half_h, 0.85 * half_w, -cup_depth * 0.4, 1.0 - uv_inset, ao_lo),
+        (0.0, half_w, cup_depth, 0.5, (ao_lo + ao_hi) // 2),
+        (half_h, 0.85 * half_w, -cup_depth * 0.25, uv_inset, ao_hi),
+    )
+    # Hemisphere-biased sunlit foliage normal
+    snx, sny, snz = nx * 0.85, max(0.18, ny * 0.75 + 0.35), nz * 0.85
+    snm = max(1e-5, math.sqrt(snx * snx + sny * sny + snz * snz))
+    sn = (snx / snm, sny / snm, snz / snm)
+
+    v0 = len(pos_list)
+    for dy_v, hw_v, bulge, v_uv, ao_v in rows:
+        for side, u_uv in ((-1.0, uv_inset), (1.0, 1.0 - uv_inset)):
+            px = cx + r2x * (side * hw_v) + u2x * dy_v + nx * bulge
+            py = cy + r2y * (side * hw_v) + u2y * dy_v + ny * bulge
+            pz = cz + r2z * (side * hw_v) + u2z * dy_v + nz * bulge
+            pos_list.append((px, py, pz))
+            norm_list.append(sn)
+            uv_list.append((u_uv, v_uv))
+            ao_list.append(ao_v)
+            slot_list.append(slot)
+    idx_list.extend((v0, v0 + 1, v0 + 2, v0 + 1, v0 + 3, v0 + 2))
+    idx_list.extend((v0 + 2, v0 + 3, v0 + 4, v0 + 3, v0 + 5, v0 + 4))
+
+
+def build_botanical_foliage_solid(orig: DecodedWorldSolid, archetype: str) -> DecodedWorldSolid:
+    """Upgrade one of EA's 6 blocky tree/bush/hedge/grass archetypes into a sculpted multi-tier botanical BLAS.
+
+    Matches `orig`'s real Metal bounding box & center so nothing blocks roads or clips buildings,
+    while eliminating flat horizontal spoke rings and low-poly billboard boxes.
+    """
+    up = orig.name.upper()
+    tex_hashes = list(orig.texture_hashes)
+
+    def _slot_for(th: int, fallback: int = 0) -> int:
+        if th in tex_hashes:
+            return tex_hashes.index(th)
+        return fallback
+
+    xmin, ymin, zmin = orig.aabb_min_metal
+    xmax, ymax, zmax = orig.aabb_max_metal
+    cx = 0.5 * (xmin + xmax)
+    cz = 0.5 * (zmin + zmax)
+    hx = max(0.35, 0.5 * (xmax - xmin))
+    hz = max(0.35, 0.5 * (zmax - zmin))
+    h_tot = max(0.8, ymax - ymin)
+
+    pos_list: List[Tuple[float, float, float]] = []
+    norm_list: List[Tuple[float, float, float]] = []
+    uv_list: List[Tuple[float, float]] = []
+    ao_list: List[int] = []
+    slot_list: List[int] = []
+    idx_list: List[int] = []
+
+    seed = int(orig.name_hash & 0xFFFF) + 2026
+    rng = np.random.default_rng(seed)
+    golden = 2.399963229728653
+
+    if archetype == "autumn_maple":
+        is_filler = "FILLER" in up
+        if BOTANICAL_TEX_MAPLE_CRIMSON in tex_hashes:
+            f_slot_a = _slot_for(BOTANICAL_TEX_MAPLE_CRIMSON)
+            f_slot_b = f_slot_a
+        else:
+            f_slot_a = _slot_for(BOTANICAL_TEX_FALL_AMBER)
+            f_slot_b = _slot_for(BOTANICAL_TEX_POPLAR_GOLD, f_slot_a)
+
+        if not is_filler:
+            # Find trunk slot (first texture slot that isn't foliage)
+            t_slot = next(
+                (i for i, th in enumerate(tex_hashes) if th not in (BOTANICAL_TEX_MAPLE_CRIMSON, BOTANICAL_TEX_FALL_AMBER, BOTANICAL_TEX_POPLAR_GOLD)),
+                0,
+            )
+            trunk_r0 = min(0.55, max(0.24, 0.045 * min(hx, hz)))
+            trunk_top_y = ymin + h_tot * 0.58
+            _append_tapered_trunk_tube(
+                cx, ymin, cz, trunk_r0, cx + 0.15, trunk_top_y, cz - 0.10, trunk_r0 * 0.42,
+                segs=6, rings=3, trunk_slot=t_slot,
+                pos_list=pos_list, norm_list=norm_list, uv_list=uv_list,
+                ao_list=ao_list, slot_list=slot_list, idx_list=idx_list,
+            )
+            # 3 organic forked primary boughs spreading into the crown
+            for bi in range(3):
+                ba = bi * (math.tau / 3.0) + 0.45
+                bx1 = cx + math.cos(ba) * hx * 0.42
+                bz1 = cz + math.sin(ba) * hz * 0.42
+                by0 = ymin + h_tot * (0.34 + 0.06 * bi)
+                by1 = ymin + h_tot * (0.64 + 0.05 * bi)
+                _append_tapered_trunk_tube(
+                    cx, by0, cz, trunk_r0 * 0.48, bx1, by1, bz1, trunk_r0 * 0.18,
+                    segs=5, rings=2, trunk_slot=t_slot,
+                    pos_list=pos_list, norm_list=norm_list, uv_list=uv_list,
+                    ao_list=ao_list, slot_list=slot_list, idx_list=idx_list,
+                )
+
+        # Multi-lobe billowing deciduous canopy cores + 42 overlapping cupped leaf-cluster cards
+        canopy_y0 = ymin + (h_tot * 0.08 if is_filler else h_tot * 0.26)
+        canopy_y1 = ymax - h_tot * 0.02
+        canopy_h = max(1.0, canopy_y1 - canopy_y0)
+        canopy_cy = 0.5 * (canopy_y0 + canopy_y1)
+        # Main core + 2 offset sub-lobes for natural asymmetric deciduous silhouette
+        lobes = (
+            (cx, canopy_cy + canopy_h * 0.05, cz, hx * 0.58, canopy_h * 0.38, hz * 0.58, f_slot_a),
+            (cx + hx * 0.22, canopy_cy - canopy_h * 0.06, cz + hz * 0.16, hx * 0.42, canopy_h * 0.30, hz * 0.42, f_slot_b),
+            (cx - hx * 0.20, canopy_cy + canopy_h * 0.02, cz - hz * 0.18, hx * 0.40, canopy_h * 0.30, hz * 0.40, f_slot_a),
+        )
+        for li, (lx, ly, lz, lrx, lry, lrz, lslot) in enumerate(lobes):
+            _append_organic_foliage_core(
+                lx, ly, lz, lrx, lry, lrz, rings=4, segs=6, seed=seed + li * 37, foliage_slot=lslot,
+                pos_list=pos_list, norm_list=norm_list, uv_list=uv_list,
+                ao_list=ao_list, slot_list=slot_list, idx_list=idx_list,
+            )
+
+        n_cards = 40 if is_filler else 46
+        for ci in range(n_cards):
+            u_f = (ci + 0.5) / float(n_cards)
+            # Fibonacci sphere distribution biased slightly upward for lush crown dome
+            cos_p = 1.0 - 1.72 * u_f
+            sin_p = math.sqrt(max(0.0, 1.0 - cos_p * cos_p))
+            az = ci * golden + float(rng.uniform(-0.18, 0.18))
+            dx_d, dy_d, dz_d = sin_p * math.cos(az), cos_p, sin_p * math.sin(az)
+            rad_j = float(rng.uniform(0.68, 0.84))
+            px = cx + dx_d * hx * rad_j
+            py = canopy_cy + dy_d * (canopy_h * 0.44) * rad_j
+            pz = cz + dz_d * hz * rad_j
+            cw = max(1.1, 0.36 * math.hypot(hx, hz) * float(rng.uniform(0.82, 1.15)))
+            ch = max(1.1, 0.36 * canopy_h * float(rng.uniform(0.80, 1.14)))
+            slot_c = f_slot_b if (ci % 3 == 0) else f_slot_a
+            ao_lo = int(112 + 48 * (0.5 + 0.5 * dy_d))
+            ao_hi = int(205 + 45 * (0.5 + 0.5 * dy_d))
+            _append_cupped_leaf_card(
+                (px, py, pz), (dx_d, dy_d + 0.25, dz_d), cw, ch, min(cw, ch) * 0.24,
+                float(rng.uniform(-0.55, 0.55)), ao_lo, ao_hi, slot_c,
+                pos_list, norm_list, uv_list, ao_list, slot_list, idx_list,
+            )
+
+    elif archetype == "golden_poplar":
+        f_slot = _slot_for(BOTANICAL_TEX_POPLAR_GOLD, 0)
+        t_slot = next((i for i, th in enumerate(tex_hashes) if th != BOTANICAL_TEX_POPLAR_GOLD), 0)
+        trunk_r0 = min(0.42, max(0.20, 0.055 * min(hx, hz)))
+        _append_tapered_trunk_tube(
+            cx, ymin, cz, trunk_r0, cx, ymin + h_tot * 0.68, cz, trunk_r0 * 0.28,
+            segs=6, rings=3, trunk_slot=t_slot,
+            pos_list=pos_list, norm_list=norm_list, uv_list=uv_list,
+            ao_list=ao_list, slot_list=slot_list, idx_list=idx_list,
+        )
+        # Tall tapered columnar-ovate organic inner poplar core
+        core_y0 = ymin + h_tot * 0.16
+        core_y1 = ymax - h_tot * 0.04
+        core_cy = 0.5 * (core_y0 + core_y1)
+        core_ry = 0.5 * (core_y1 - core_y0)
+        _append_organic_foliage_core(
+            cx, core_cy, cz, hx * 0.56, core_ry, hz * 0.56, rings=6, segs=7, seed=seed + 19, foliage_slot=f_slot,
+            pos_list=pos_list, norm_list=norm_list, uv_list=uv_list,
+            ao_list=ao_list, slot_list=slot_list, idx_list=idx_list,
+        )
+        # 42 steep upward-swept columnar golden poplar plume clusters (zero flat horizontal rings!)
+        n_cards = 42
+        for ci in range(n_cards):
+            t_h = (ci + 0.5) / float(n_cards)
+            env = math.sin(math.pi * (0.10 + 0.85 * (t_h ** 0.78))) ** 0.72 * (1.0 - 0.30 * t_h)
+            az = ci * golden + float(rng.uniform(-0.20, 0.20))
+            dx_d, dz_d = math.cos(az), math.sin(az)
+            rad_s = max(0.18, env * float(rng.uniform(0.72, 0.86)))
+            px = cx + dx_d * hx * rad_s
+            py = core_y0 + t_h * (core_y1 - core_y0)
+            pz = cz + dz_d * hz * rad_s
+            cw = max(0.85, hx * (0.44 * env + 0.16) * float(rng.uniform(0.88, 1.12)))
+            ch = max(1.3, h_tot * 0.22 * (1.05 - 0.30 * t_h))
+            _append_cupped_leaf_card(
+                (px, py, pz), (dx_d * 0.90, 0.44, dz_d * 0.90), cw, ch, cw * 0.22,
+                float(rng.uniform(-0.22, 0.22)), int(120 + 45 * t_h), int(218 + 32 * t_h), f_slot,
+                pos_list, norm_list, uv_list, ao_list, slot_list, idx_list,
+            )
+
+    elif archetype == "pnw_cedar":
+        f_slot = _slot_for(BOTANICAL_TEX_CEDAR_BOUGH, 0)
+        t_slot = next((i for i, th in enumerate(tex_hashes) if th != BOTANICAL_TEX_CEDAR_BOUGH), 0)
+        trunk_r0 = min(0.68, max(0.28, 0.075 * min(hx, hz)))
+        _append_tapered_trunk_tube(
+            cx, ymin, cz, trunk_r0, cx, ymin + h_tot * 0.88, cz, trunk_r0 * 0.15,
+            segs=6, rings=4, trunk_slot=t_slot,
+            pos_list=pos_list, norm_list=norm_list, uv_list=uv_list,
+            ao_list=ao_list, slot_list=slot_list, idx_list=idx_list,
+        )
+        # Tall conical sculpted Pacific NW cedar core (organic flutes, no smooth cone!)
+        core_y0 = ymin + h_tot * 0.08
+        core_y1 = ymax - h_tot * 0.03
+        core_rings = 8
+        core_segs = 7
+        c_base = len(pos_list)
+        p1, p2 = float(rng.uniform(0, math.tau)), float(rng.uniform(0, math.tau))
+        for ri in range(core_rings + 1):
+            t = ri / float(core_rings)
+            y = core_y0 + t * (core_y1 - core_y0)
+            taper = max(0.05, (1.0 - t * 0.92) ** 0.82) * (0.75 if ri == 0 else 1.0)
+            ao = int(88 + 92 * t)
+            for si in range(core_segs + 1):
+                ang = (si / float(core_segs)) * math.tau
+                lobe = 1.0 + 0.16 * math.sin(ang * 3.0 + t * 5.0 + p1) + 0.10 * math.cos(ang * 2.0 - t * 4.0 + p2)
+                ca, sa = math.cos(ang), math.sin(ang)
+                pos_list.append((cx + ca * hx * 0.56 * taper * lobe, y, cz + sa * hz * 0.56 * taper * lobe))
+                norm_list.append((ca * 0.86, 0.50, sa * 0.86))
+                uv_list.append((0.35 + 0.30 * (si % 2), 0.32 + 0.36 * (1.0 - t)))
+                ao_list.append(ao)
+                slot_list.append(f_slot)
+        c_stride = core_segs + 1
+        for ri in range(core_rings):
+            for si in range(core_segs):
+                a = c_base + ri * c_stride + si
+                idx_list.extend((a, a + 1, a + c_stride, a + 1, a + c_stride + 1, a + c_stride))
+
+        # 54 overlapping drooping evergreen cedar bough cards spiraled from skirt to spire
+        n_boughs = 54
+        for bi in range(n_boughs):
+            t_h = (bi + 0.5) / float(n_boughs)
+            taper = max(0.14, (1.0 - t_h * 0.88) ** 0.82)
+            az = bi * golden + float(rng.uniform(-0.22, 0.22))
+            dx_d, dz_d = math.cos(az), math.sin(az)
+            r_reach = taper * float(rng.uniform(0.68, 0.86))
+            px = cx + dx_d * hx * r_reach
+            py = core_y0 + t_h * (core_y1 - core_y0)
+            pz = cz + dz_d * hz * r_reach
+            bw = max(1.0, hx * 0.46 * taper * float(rng.uniform(0.86, 1.14)))
+            bh = max(1.6, h_tot * 0.125 * (1.05 - 0.32 * t_h))
+            # Steep outward-and-downward bough droop pitch (~42-62 deg from horizontal, NEVER flat pancake rings!)
+            _append_cupped_leaf_card(
+                (px, py, pz), (dx_d * 0.84, 0.54, dz_d * 0.84), bw, bh, bw * 0.28,
+                float(rng.uniform(-0.24, 0.24)), int(102 + 48 * t_h), int(208 + 38 * t_h), f_slot,
+                pos_list, norm_list, uv_list, ao_list, slot_list, idx_list,
+            )
+
+    elif archetype == "roadside_bush":
+        f_slot = 0
+        # Multi-lobe rounded natural shrub core + 30 billowing overlapping leafy cluster cards
+        bush_cy = ymin + h_tot * 0.44
+        bush_ry = h_tot * 0.38
+        sub_lobes = (
+            (cx, bush_cy, cz, hx * 0.56, bush_ry * 0.82, hz * 0.56),
+            (cx + hx * 0.22, bush_cy - h_tot * 0.06, cz + hz * 0.14, hx * 0.40, bush_ry * 0.68, hz * 0.40),
+            (cx - hx * 0.20, bush_cy - h_tot * 0.05, cz - hz * 0.16, hx * 0.40, bush_ry * 0.68, hz * 0.40),
+        )
+        for li, (lx, ly, lz, lrx, lry, lrz) in enumerate(sub_lobes):
+            _append_organic_foliage_core(
+                lx, ly, lz, lrx, lry, lrz, rings=4, segs=6, seed=seed + li * 43, foliage_slot=f_slot,
+                pos_list=pos_list, norm_list=norm_list, uv_list=uv_list,
+                ao_list=ao_list, slot_list=slot_list, idx_list=idx_list,
+            )
+        n_cards = 30
+        for ci in range(n_cards):
+            u_f = (ci + 0.5) / float(n_cards)
+            # Upper hemisphere + grounded skirt
+            cos_p = 1.0 - 1.38 * u_f
+            sin_p = math.sqrt(max(0.0, 1.0 - cos_p * cos_p))
+            az = ci * golden + float(rng.uniform(-0.22, 0.22))
+            dx_d, dy_d, dz_d = sin_p * math.cos(az), cos_p, sin_p * math.sin(az)
+            rad_j = float(rng.uniform(0.64, 0.82))
+            px = cx + dx_d * hx * rad_j
+            py = max(ymin + h_tot * 0.18, bush_cy + dy_d * bush_ry * rad_j)
+            pz = cz + dz_d * hz * rad_j
+            cw = max(0.35, 0.38 * math.hypot(hx, hz) * float(rng.uniform(0.84, 1.14)))
+            ch = max(0.35, 0.36 * h_tot * float(rng.uniform(0.84, 1.14)))
+            _append_cupped_leaf_card(
+                (px, py, pz), (dx_d, max(0.12, dy_d + 0.30), dz_d), cw, ch, min(cw, ch) * 0.24,
+                float(rng.uniform(-0.55, 0.55)), int(108 + 44 * max(0.0, dy_d)), int(212 + 38 * max(0.0, dy_d)), f_slot,
+                pos_list, norm_list, uv_list, ao_list, slot_list, idx_list,
+            )
+
+    elif archetype == "stadium_hedge":
+        hedge_slot = _slot_for(BOTANICAL_TEX_STADIUM_HEDGE, 0)
+        curb_slot = next((i for i, th in enumerate(tex_hashes) if th != BOTANICAL_TEX_STADIUM_HEDGE), hedge_slot)
+        curb_h = min(0.82, h_tot * 0.32)
+
+        # 1. Clean concrete curb/planter base (exact original footprint [xmin..xmax] x [ymin..ymin+curb_h] x [zmin..zmax])
+        def _append_box(x0: float, x1: float, y0: float, y1: float, z0: float, z1: float, sl: int) -> None:
+            faces = (
+                ((x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1), (0.0, 0.0, 1.0), (0.0, 1.0), (2.0, 1.0), (2.0, 0.0), (0.0, 0.0)),
+                ((x1, y0, z0), (x0, y0, z0), (x0, y1, z0), (x1, y1, z0), (0.0, 0.0, -1.0), (0.0, 1.0), (2.0, 1.0), (2.0, 0.0), (0.0, 0.0)),
+                ((x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0), (0.0, 1.0, 0.0), (0.0, 1.0), (2.0, 1.0), (2.0, 0.0), (0.0, 0.0)),
+                ((x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0), (-1.0, 0.0, 0.0), (0.0, 1.0), (0.5, 1.0), (0.5, 0.0), (0.0, 0.0)),
+                ((x1, y0, z1), (x1, y0, z0), (x1, y1, z0), (x1, y1, z1), (1.0, 0.0, 0.0), (0.0, 1.0), (0.5, 1.0), (0.5, 0.0), (0.0, 0.0)),
+            )
+            for p0, p1, p2, p3, nm, uv0, uv1, uv2, uv3 in faces:
+                v0 = len(pos_list)
+                for pt, uv_c, ao_c in zip((p0, p1, p2, p3), (uv0, uv1, uv2, uv3), (155, 155, 205, 205)):
+                    pos_list.append(pt)
+                    norm_list.append(nm)
+                    uv_list.append(uv_c)
+                    ao_list.append(ao_c)
+                    slot_list.append(sl)
+                idx_list.extend((v0, v0 + 1, v0 + 2, v0, v0 + 2, v0 + 3))
+
+        _append_box(xmin, xmax, ymin, ymin + curb_h, zmin, zmax, curb_slot)
+
+        # 2. Sculpted organic rounded-crown dense boxwood hedge core (8 longitudinal bays x 7 arch profile stations)
+        h_y0 = ymin + curb_h * 0.85
+        h_y1 = ymax - 0.14
+        hz_inner = hz * 0.82
+        n_bays = 8
+        prof = (
+            (-1.00, 0.00, -0.95, 0.10, 0.98, 128),
+            (-1.04, 0.48, -0.96, 0.25, 0.56, 175),
+            (-0.76, 0.90, -0.68, 0.73, 0.20, 215),
+            (0.00, 1.00, 0.00, 1.00, 0.22, 238),
+            (0.76, 0.90, 0.68, 0.73, 0.20, 215),
+            (1.04, 0.48, 0.96, 0.25, 0.56, 175),
+            (1.00, 0.00, 0.95, 0.10, 0.98, 128),
+        )
+        h_base = len(pos_list)
+        p_cnt = len(prof)
+        for bi in range(n_bays + 1):
+            tx = bi / float(n_bays)
+            x_v = xmin + 0.04 + tx * max(0.2, (xmax - xmin) - 0.08)
+            bulge = 1.0 + 0.06 * math.sin(tx * math.tau * 3.0 + 0.5)
+            h_var = 0.05 * math.cos(tx * math.tau * 4.0)
+            for z_f, y_f, nz_f, ny_f, v_uv, ao_c in prof:
+                pos_list.append((x_v, h_y0 + (h_y1 - h_y0) * min(1.0, max(0.0, y_f + h_var * y_f)), cz + z_f * hz_inner * bulge))
+                norm_list.append((0.0, ny_f, nz_f))
+                uv_list.append((tx * 2.0, max(0.16, v_uv)))  # strictly inside opaque boxwood body!
+                ao_list.append(ao_c)
+                slot_list.append(hedge_slot)
+        for bi in range(n_bays):
+            for pi in range(p_cnt - 1):
+                a = h_base + bi * p_cnt + pi
+                b = a + 1
+                c = a + p_cnt
+                d = c + 1
+                idx_list.extend((a, b, c, b, d, c))
+
+        # 3. 18 overlapping organic boxwood leaf-fringe crown cards along top & flanks (gives feathery leaf silhouette!)
+        for fi in range(18):
+            tx = (fi + 0.5) / 18.0
+            fx = xmin + 0.25 + tx * max(0.2, (xmax - xmin) - 0.50)
+            side = -1.0 if (fi % 2 == 0) else 1.0
+            fz = cz + side * hz_inner * 0.72
+            fy = h_y0 + (h_y1 - h_y0) * 0.78
+            v0 = len(pos_list)
+            hw_c = max(0.42, (xmax - xmin) / 15.0)
+            hh_c = (ymax - h_y0) * 0.34
+            # Slight outward fan lean so silhouette breaks up the rectangular hedge edge
+            pts_c = (
+                (fx - hw_c, fy - hh_c * 0.4, fz - side * 0.08),
+                (fx + hw_c, fy - hh_c * 0.4, fz - side * 0.08),
+                (fx - hw_c * 0.92, min(ymax, fy + hh_c), fz + side * 0.16),
+                (fx + hw_c * 0.92, min(ymax, fy + hh_c), fz + side * 0.16),
+            )
+            u0_c = (fi * 0.19) % 1.0
+            for pt, uv_c, ao_c in zip(
+                pts_c,
+                ((u0_c, 0.52), (u0_c + 0.35, 0.52), (u0_c, 0.01), (u0_c + 0.35, 0.01)),
+                (178, 178, 245, 245),
+            ):
+                pos_list.append(pt)
+                norm_list.append((0.0, 0.65, side * 0.76))
+                uv_list.append(uv_c)
+                ao_list.append(ao_c)
+                slot_list.append(hedge_slot)
+            idx_list.extend((v0, v0 + 1, v0 + 2, v0 + 1, v0 + 3, v0 + 2))
+
+    elif archetype == "coastal_beachgrass":
+        g_slot = 0
+        # 7 windswept coastal dune grass tussocks spanning [xmin..xmax] x [zmin..zmax]
+        n_tufts = 7
+        for ti in range(n_tufts):
+            tx = (ti + 0.5) / float(n_tufts)
+            gx = xmin + 0.35 + tx * max(0.2, (xmax - xmin) - 0.70) + float(rng.uniform(-0.18, 0.18))
+            gz = cz + float(rng.uniform(-hz * 0.45, hz * 0.45))
+            tuft_h = h_tot * float(rng.uniform(0.76, 1.00))
+            tuft_w = max(0.45, min(0.95, (xmax - xmin) / 5.5))
+            # 4 curved arched blade-fan cards per tussock in crossed wind-swept azimuths
+            for ci in range(4):
+                ang = ci * (math.pi / 4.0) + float(rng.uniform(-0.22, 0.22))
+                rx_v, rz_v = math.cos(ang), math.sin(ang)
+                nx_v, nz_v = -rz_v, rx_v
+                # Arch gracefully downwind (+X/+Z coastal breeze)
+                bend = tuft_h * 0.24
+                bx_v, bz_v = nx_v * bend, nz_v * bend
+                v0 = len(pos_list)
+                rows = (
+                    (0.0, 0.0, 0.0, tuft_w * 0.70, 0.99, 128),
+                    (tuft_h * 0.54, bx_v * 0.35, bz_v * 0.35, tuft_w * 0.95, 0.48, 198),
+                    (tuft_h, bx_v, bz_v, tuft_w * 0.85, 0.02, 246),
+                )
+                for y_off, ox_b, oz_b, hw_r, v_uv, ao_c in rows:
+                    for side, u_uv in ((-1.0, 0.04), (1.0, 0.96)):
+                        pos_list.append((
+                            gx + rx_v * (side * hw_r) + ox_b,
+                            ymin + y_off,
+                            gz + rz_v * (side * hw_r) + oz_b,
+                        ))
+                        norm_list.append((nx_v * 0.60, 0.80, nz_v * 0.60))
+                        uv_list.append((u_uv, v_uv))
+                        ao_list.append(ao_c)
+                        slot_list.append(g_slot)
+                idx_list.extend((v0, v0 + 1, v0 + 2, v0 + 1, v0 + 3, v0 + 2))
+                idx_list.extend((v0 + 2, v0 + 3, v0 + 4, v0 + 3, v0 + 5, v0 + 4))
+    else:
+        return orig
+
+    pos_arr = np.asarray(pos_list, dtype=np.float32)
+    # Clamp strictly within original solid AABB so zero trees/hedges ever encroach on lanes or clip buildings
+    pos_arr[:, 0] = np.clip(pos_arr[:, 0], xmin, xmax)
+    pos_arr[:, 1] = np.clip(pos_arr[:, 1], ymin, ymax)
+    pos_arr[:, 2] = np.clip(pos_arr[:, 2], zmin, zmax)
     bmin = pos_arr.min(axis=0)
     bmax = pos_arr.max(axis=0)
     return DecodedWorldSolid(
@@ -2807,15 +3945,19 @@ def write_rkpt_v2(
     road_segments: Sequence[RkptRoadSegment] = (),
     world_lights: Sequence[RTWorldLight] = (),
     landmarks: Sequence[RkptLandmark] = (),
+    pvs_zones: Sequence[RkptPvsZone] = (),
+    pvs_verts: Sequence[Tuple[float, float]] = (),
+    pvs_entries: Sequence[int] = (),
 ) -> Dict[str, Any]:
-    """Serialize assembled Rockport world to locked `.rkpt` v2 (BC7/RGBA8 + RoadGraph + WorldLights + Landmarks).
+    """Serialize assembled Rockport world to locked `.rkpt` v2 (BC7/RGBA8 + RoadGraph + WorldLights + Landmarks + PVS).
 
     Layout (all section/table offsets 16-byte aligned):
-      [0..159]   160B Base RkptHeader (version=2, flags bit0=HAS_V2_EXT, bit1=BC7, bit2=HAS_PANORAMA)
-      [160..255]  96B RkptV2ExtHeader (counts + 64-bit offsets for trailing v2 tables)
+      [0..159]   160B Base RkptHeader (version=2, flags bit0=HAS_V2_EXT, bit1=BC7, bit2=HAS_PANORAMA, bit3=HAS_PVS)
+      [160..255]  96B RkptV2ExtHeader (counts + 64-bit offsets for trailing v2 tables including PVS)
       [256..]    Sections (64B), Meshes (48B), Instances (64B), Materials (32B), Textures (32B),
                  Vertices (36B), Indices (4B), TexData (RGBA8 or BC7 full mip chains),
-                 RoadNodes (32B), RoadSegments (16B), WorldLights (32B), Landmarks (64B).
+                 RoadNodes (32B), RoadSegments (16B), WorldLights (32B), Landmarks (64B),
+                 PvsZones (32B), PvsVerts (8B), PvsEntries (2B).
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     buf = bytearray(HEADER_SIZE + V2_EXT_HEADER_SIZE)  # 256 bytes placeholder
@@ -3014,11 +4156,41 @@ def write_rkpt_v2(
                 )
             )
 
+    pvs_zones_off = 0
+    pvs_verts_off = 0
+    pvs_entries_off = 0
+    has_pvs = bool(pvs_zones)
+    if has_pvs:
+        pvs_zones_off = _pad16(buf)
+        for z in pvs_zones:
+            buf.extend(
+                struct.pack(
+                    PVS_ZONE_FMT,
+                    float(z.min_x),
+                    float(z.min_z),
+                    float(z.max_x),
+                    float(z.max_z),
+                    z.first_vert & 0xFFFFFFFF,
+                    z.vert_count & 0xFFFFFFFF,
+                    z.first_sec_entry & 0xFFFFFFFF,
+                    z.sec_entry_count & 0xFFFFFFFF,
+                )
+            )
+        if pvs_verts:
+            pvs_verts_off = _pad16(buf)
+            for vx, vz in pvs_verts:
+                buf.extend(struct.pack(PVS_VERT_FMT, float(vx), float(vz)))
+        if pvs_entries:
+            pvs_entries_off = _pad16(buf)
+            buf.extend(np.ascontiguousarray(pvs_entries, dtype="<u2").tobytes())
+
     hdr_flags = RKPT_HDR_FLAG_HAS_V2_EXT
     if any_bc7:
         hdr_flags |= RKPT_HDR_FLAG_BC7_TEXTURES
     if panorama_section_count > 0:
         hdr_flags |= RKPT_HDR_FLAG_HAS_PANORAMA
+    if has_pvs:
+        hdr_flags |= RKPT_HDR_FLAG_HAS_PVS
 
     sp_cnt = (len(sections_meta) - panorama_section_count) if spatial_section_count is None else spatial_section_count
 
@@ -3057,16 +4229,16 @@ def write_rkpt_v2(
         len(landmarks),
         sp_cnt,
         panorama_section_count,
-        0,
-        0,
+        len(pvs_zones) if has_pvs else 0,
+        len(pvs_entries) if has_pvs else 0,
         road_nodes_off,
         road_segments_off,
         world_lights_off,
         landmarks_off,
-        0,
-        0,
-        0,
-        0,
+        pvs_zones_off,
+        pvs_verts_off,
+        pvs_entries_off,
+        len(pvs_verts) if has_pvs else 0,
     )
     buf[0:HEADER_SIZE] = header
     buf[HEADER_SIZE : HEADER_SIZE + V2_EXT_HEADER_SIZE] = ext_header
@@ -3087,6 +4259,9 @@ def write_rkpt_v2(
         "road_segments_offset": road_segments_off,
         "world_lights_offset": world_lights_off,
         "landmarks_offset": landmarks_off,
+        "pvs_zones_offset": pvs_zones_off,
+        "pvs_verts_offset": pvs_verts_off,
+        "pvs_entries_offset": pvs_entries_off,
     }
 
 
@@ -3145,6 +4320,7 @@ def read_rkpt_header(path_or_bytes: Any) -> Dict[str, Any]:
         if len(raw) < HEADER_SIZE + V2_EXT_HEADER_SIZE:
             raise ValueError(f"RKPT v2 extension header truncated: {len(raw)} < {HEADER_SIZE + V2_EXT_HEADER_SIZE}")
         ev = struct.unpack(V2_EXT_HEADER_FMT, raw[HEADER_SIZE : HEADER_SIZE + V2_EXT_HEADER_SIZE])
+        has_pvs = bool(out["flags"] & RKPT_HDR_FLAG_HAS_PVS)
         out.update(
             {
                 "roadNodeCount": ev[0],
@@ -3153,13 +4329,23 @@ def read_rkpt_header(path_or_bytes: Any) -> Dict[str, Any]:
                 "landmarkCount": ev[3],
                 "spatialSectionCount": ev[4],
                 "panoramaSectionCount": ev[5],
+                "pvsZoneCount": ev[6] if has_pvs else 0,
+                "pvsEntryCount": ev[7] if has_pvs else 0,
                 "roadNodesOffset": ev[8],
                 "roadSegmentsOffset": ev[9],
                 "worldLightsOffset": ev[10],
                 "landmarksOffset": ev[11],
+                "pvsZonesOffset": ev[12] if has_pvs else 0,
+                "pvsVertsOffset": ev[13] if has_pvs else 0,
+                "pvsEntriesOffset": ev[14] if has_pvs else 0,
+                "pvsVertCount": ev[15] if has_pvs else 0,
+                "hasPVS": has_pvs,
             }
         )
-        for k in ("roadNodesOffset", "roadSegmentsOffset", "worldLightsOffset", "landmarksOffset"):
+        for k in (
+            "roadNodesOffset", "roadSegmentsOffset", "worldLightsOffset", "landmarksOffset",
+            "pvsZonesOffset", "pvsVertsOffset", "pvsEntriesOffset",
+        ):
             if out[k] != 0 and (out[k] & 15) != 0:
                 raise ValueError(f"v2 offset {k}={out[k]} is not 16-byte aligned")
     return out
@@ -3179,6 +4365,7 @@ def export_rockport_district(
     rkpt_version: Optional[int] = None,
     compress_bc7: Optional[bool] = None,
     botanical_cypress: bool = True,
+    botanical_foliage: bool = True,
 ) -> Dict[str, Any]:
     """Extract, assemble, verify, and serialize one Rockport district or full island (`rockport_full`).
 
@@ -3333,19 +4520,28 @@ def export_rockport_district(
                 else:
                     spatial_solid_hashes.add(chosen_hash)
 
-        # 4. Decode unique referenced solids into Metal Y-up space (+ botanical cypress replacement)
+        # 4. Decode unique referenced solids into Metal Y-up space (+ botanical cypress & v1.4 all-district foliage)
         decoded_by_hash: Dict[int, DecodedWorldSolid] = {}
         wanted_tex_hashes: Set[int] = set()
         botanical_cypress_meshes_replaced = 0
+        botanical_foliage_meshes_replaced = 0
+        botanical_archetype_mesh_hashes: Dict[int, str] = {}
         for _sec_idx, shash, _inst in kept_instances_raw:
             if shash in decoded_by_hash:
                 continue
             sbuf, soff, ssz, _nm = solid_index[shash]
             dec = decode_world_solid_chunk(sbuf, soff, ssz)
             if dec is not None:
-                if botanical_cypress and dec.name.upper() in (CYPRESS_SINGLE_SOLIDS | CYPRESS_CLUMP_SOLIDS):
+                up_dec = dec.name.upper()
+                if botanical_cypress and up_dec in (CYPRESS_SINGLE_SOLIDS | CYPRESS_CLUMP_SOLIDS):
                     dec = build_botanical_cypress_solid(dec)
                     botanical_cypress_meshes_replaced += 1
+                elif botanical_foliage:
+                    arch = match_botanical_foliage_archetype(up_dec)
+                    if arch is not None:
+                        dec = build_botanical_foliage_solid(dec, arch)
+                        botanical_foliage_meshes_replaced += 1
+                        botanical_archetype_mesh_hashes[shash] = arch
                 decoded_by_hash[shash] = dec
                 used_slots = np.unique(dec.vertex_tex_slot)
                 for sl in used_slots.tolist():
@@ -3417,6 +4613,38 @@ def export_rockport_district(
                 source="procedural:botanical_cypress_512",
             )
             botanical_cypress_tex_replaced = True
+
+        # Replace the 6 v1.4.0 all-district foliage archetype textures in-place (512x512, 100% edge-dilated, 0 extra tex count!)
+        botanical_foliage_textures_replaced: List[str] = []
+        if botanical_foliage:
+            for b_th in (
+                BOTANICAL_TEX_MAPLE_CRIMSON,
+                BOTANICAL_TEX_FALL_AMBER,
+                BOTANICAL_TEX_POPLAR_GOLD,
+                BOTANICAL_TEX_CEDAR_BOUGH,
+                BOTANICAL_TEX_ROADSIDE_BUSH,
+                BOTANICAL_TEX_FOREST_BUSH,
+                BOTANICAL_TEX_STADIUM_HEDGE,
+                BOTANICAL_TEX_BEACHGRASS,
+            ):
+                if b_th in wanted_tex_hashes and b_th in resolved_textures:
+                    gen = generate_botanical_foliage_texture_rgba(b_th, 512)
+                    if gen is not None:
+                        t_name, t_src, t_rgba = gen
+                        resolved_textures[b_th] = DecodedRkptTexture(
+                            name=t_name,
+                            tpk_name_hash=b_th,
+                            width=512,
+                            height=512,
+                            rgba_bytes=t_rgba.tobytes(),
+                            flags=(
+                                TEX_FLAG_HAS_CUTOUT_ALPHA
+                                | TEX_FLAG_ENHANCED_2X
+                                | TEX_FLAG_PROCEDURAL_BOTANICAL
+                            ),
+                            source=t_src,
+                        )
+                        botanical_foliage_textures_replaced.append(t_name)
 
         # Secondary safeguard: drop any remaining solid whose resolved textures include SFX_TRACKBARRIER*
         event_tex_hashes = {
@@ -3571,8 +4799,28 @@ def export_rockport_district(
     spatial_bounds_min = tuple(float(v) for v in spatial_min) if n_spatial_secs > 0 else world_bounds_min
     spatial_bounds_max = tuple(float(v) for v in spatial_max) if n_spatial_secs > 0 else world_bounds_max
 
-    # 7. Extract EA WRoadNetwork (0x0003B800) + Real Streetlamps/Lights + Verified Road Spawns / Landmarks
+    # 7. Extract EA WRoadNetwork (0x0003B800) + EA PVS (0x80034150) + Real Streetlamps/Lights + Verified Road Spawns / Landmarks
     road_nodes, road_segments = parse_l2ra_road_network(l2ra_bytes, ps2_origin)
+    if version >= RKPT_VERSION_V2 and is_full_map:
+        pvs_zones, pvs_verts, pvs_entries, pvs_stats = parse_l2ra_pvs_zones(
+            l2ra_bytes=l2ra_bytes,
+            sections_meta=sections_meta,
+            spatial_section_count=len(spatial_sec_names),
+            ps2_origin=ps2_origin,
+        )
+    else:
+        pvs_zones, pvs_verts, pvs_entries = [], [], []
+        pvs_stats = {
+            "pvs_polygon_count": 0,
+            "pvs_vislist_count": 0,
+            "pvs_matched_vis_count": 0,
+            "pvs_zone_count": 0,
+            "pvs_vert_count": 0,
+            "pvs_entry_count": 0,
+            "pvs_vista_median_m": 0.0,
+            "pvs_vista_p90_m": 0.0,
+            "pvs_vista_max_m": 0.0,
+        }
     spatial_only_insts = flat_instances[: sections_meta[n_spatial_secs][2]] if panorama_sec_names else flat_instances
     world_lights, world_light_breakdown = extract_world_lights(
         meshes=meshes_list,
@@ -3647,6 +4895,9 @@ def export_rockport_district(
             road_segments=road_segments,
             world_lights=world_lights,
             landmarks=landmarks_list,
+            pvs_zones=pvs_zones,
+            pvs_verts=pvs_verts,
+            pvs_entries=pvs_entries,
         )
     else:
         sections_v1 = [row[:8] for row in sections_meta]
@@ -3710,6 +4961,12 @@ def export_rockport_district(
 
     enhanced_2x_count = sum(1 for t in textures_list if (t.flags & TEX_FLAG_ENHANCED_2X) != 0)
     narrow_upscaled_count = sum(1 for t in textures_list if (t.flags & TEX_FLAG_NARROW_AXIS_UPSCALED) != 0)
+    botanical_foliage_by_arch: Dict[str, int] = collections.Counter()
+    for _sidx, shash, _inst in kept_instances_raw:
+        arch_k = botanical_archetype_mesh_hashes.get(shash)
+        if arch_k is not None:
+            botanical_foliage_by_arch[arch_k] += 1
+    botanical_foliage_inst_total = sum(botanical_foliage_by_arch.values())
     elapsed_sec = round(time.monotonic() - t_start, 2)
     manifest: Dict[str, Any] = {
         "format": "RKPT",
@@ -3743,6 +5000,11 @@ def export_rockport_district(
         "texture_narrow_axis_upscaled_count": narrow_upscaled_count,
         "botanical_cypress_meshes_replaced": botanical_cypress_meshes_replaced,
         "botanical_cypress_texture_replaced": botanical_cypress_tex_replaced,
+        "botanical_foliage_meshes_replaced": botanical_foliage_meshes_replaced,
+        "botanical_foliage_textures_replaced": botanical_foliage_textures_replaced,
+        "botanical_foliage_instance_count": botanical_foliage_inst_total,
+        "botanical_foliage_instances_by_archetype": dict(sorted(botanical_foliage_by_arch.items())),
+        "pvs": pvs_stats,
         "enhance_textures_enabled": enhance_textures,
         "unique_vertex_count": verified_hdr["totalVertexCount"],
         "unique_triangle_count": verified_hdr["totalIndexCount"] // 3,
@@ -3848,6 +5110,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Keep original 76-tri PS2 XO_CT_CYPRESS cone instead of 408-tri botanical replacement.",
     )
     parser.add_argument(
+        "--no-botanical-foliage",
+        dest="botanical_foliage",
+        action="store_false",
+        default=True,
+        help="Disable v1.4.0 6-archetype all-district botanical foliage BLAS & 512px texture upgrades.",
+    )
+    parser.add_argument(
         "--no-layout",
         action="store_true",
         help="Skip rendering <district>_layout_check.png.",
@@ -3868,6 +5137,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             rkpt_version=args.version,
             compress_bc7=args.compress_bc7,
             botanical_cypress=args.botanical_cypress,
+            botanical_foliage=args.botanical_foliage,
         )
         results.append(manifest)
         if not args.json:

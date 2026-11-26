@@ -76,6 +76,7 @@ build/metal_rt_v06/RockportMetalRT \
 | `--focal-mm <mm>` / `--dof-fstop <f>` | `50` (`24..135`) / `2.0` (`1.4..16`) | Set Photo Mode lens focal length and aperture f-stop for 7-blade optical bokeh |
 | `--photo-snap-4k <out.png>` | Off (`Enter` in Photo Mode) | Render a seamless `2×2` tiled `3840×2160` 4K 64-SPP path-traced snap (`0 MB` extra VRAM) |
 | `--drift-vfx` | Live on drift/scrape | Force active drift skidmarks, ballistic sparks & tire smoke for demos/benchmarks |
+| `--pvs <on\|off>` | `on` (press `J` live) | Enable EA PVS `2–4.8 km` highway & cross-bay skyline visibility streaming (`435` zones) |
 | `--hud` / `--no-hud` | Off in static, On in drive bench | Toggle NFSMW tachometer, NOS/Speedbreaker bars, Pursuit Heat & rotating GPU minimap |
 | `--no-ai` / `--no-audio` | Enabled by default | Disable AI traffic/cops or live `AVAudioEngine` audio for isolated graphics testing |
 | `--no-music` / `--music-track <idx>` | Enabled / Track `0` | Mute EA TRAX soundtrack or start on a specific decoded `MW_MUSIC.MUS` track index |
@@ -108,6 +109,7 @@ Both **PS5 DualSense** and **Xbox Wireless** controllers work out of the box via
 | **Toggle Live 24h Day/Night Cycle** | `4` | — |
 | **Toggle Rain (`0.0` ↔ `0.88`)** | `B` | — |
 | **Toggle 120 FPS MetalFX Frame-Gen** | `K` | — |
+| **Toggle EA PVS `2–4.8 km` Skyline Vistas** | `J` *(default ON)* | — |
 | **Toggle NFSMW HUD & Rotating Minimap** | `H` | — |
 | **Previous / Next EA TRAX Song** | `[` / `]` | — |
 | **Mute / Unmute EA TRAX Soundtrack** | `U` | — |
@@ -121,7 +123,7 @@ Both **PS5 DualSense** and **Xbox Wireless** controllers work out of the box via
 
 ---
 
-## 4. What's Included in `v1.0.0`
+## 4. What's Included in `v1.4.0`
 
 ### Full-Island Rockport Streaming (6 Teleport Districts)
 All **718 sections** (`638` spatial + `80` horizon panorama) stream seamlessly by XZ AABB distance (`350m` load / `430m` unload hysteresis) over Rockport's real `4,385`-node / `6,538`-segment (`229.25 km`) `WRoadNetwork`, illuminated by **`4,309` real extracted streetlamps, signals, and storefronts** in a `128×128×8` spatial light grid — using only **`~305 MB`** of GPU world+AI VRAM.
@@ -141,7 +143,7 @@ Press **`V`** in-game anytime to teleport cleanly to the next district!
 Press **`G`** / **`Shift+G`** in-game or launch with `--car <NAME>` to drive **any of all 40 playable NFSMW 2005 cars** — extracted on demand in `~1–2s` from your clean ISO (`build/car_cache/`) with seam-locked adaptive PN subdivision, exact `bstringhash` headlights/taillights, and auto-fitted wheel wells.
 
 - **Flagship Hero Aliases**: `m3_gtr` (`BMWM3GTRE46`), `carrera_gt` (`CARRERAGT`), `gallardo` (`GALLARDO`), `corvette_c6r` (`CORVETTEC6R`), `ford_gt` (`FORDGT`), `murcielago` (`MURCIELAGO`), `rx7` (`RX7`), `slr` (`SLR`), `viper` (`VIPER`), `db9` (`DB9`), `supra` (`SUPRA`), `evo8` (`LANCEREVO8`), `wrx_sti` (`IMPREZAWRX`), `mustang_gt` (`MUSTANGGT`), `gti` (`GTI`), `cayman_s` (`CAYMANS`), `911_gt2` (`911GT2`), `911_turbo` (`911TURBO`).
-- **List all 40 cars**: `python3 tools/extract_rt_car.py --list`
+- **List all 40 cars / batch-extract Top-15 flagship icons**: `python3 tools/extract_rt_car.py --list` or `python3 tools/extract_rt_car.py --top15`
 
 ### Authentic VLT Physics, Ginsu PSOLA Audio & Heat 1–5 Police Pursuits
 - **VLT Handling (`RTPhysics.swift`)**: `48` decoded `ATTRIBUTES.BIN` vehicle profiles (9-point torque curves, 6-speed auto gearbox, RWD vs AWD `TORQUE_SPLIT`, e-brake drift slip & `YAW_CONTROL`, spring-damper pitch/roll over 4-wheel GPU BVH ground probes, airborne gravity, `+65%` NOS boost with dual Mach-diamond exhaust flames & FOV kick, and `0.35×` amber Speedbreaker bullet-time).
@@ -149,7 +151,8 @@ Press **`G`** / **`Shift+G`** in-game or launch with `--car <NAME>` to drive **a
 - **EA TRAX Soundtrack & Acoustic Tunnel Reverb (`v1.1.0`)**: Streams all **26 licensed EA TRAX** + **14 interactive pursuit score tracks** decoded from `MW_MUSIC.MUS` / `MW_MUSIC.MPF` (`[`/`]` skip, `U` mute, auto-ducking during Speedbreaker & pursuits) with a post-FI sliding `[EA TRAX]` OLED banner; upward sky-occlusion rays smoothly drive **`AVAudioUnitReverb`** (4% → 42% wet + bass warmth, indicated by `[REVERB]`) inside Bayshore & Rockport tunnels and underpasses.
 - **20 Live AI Traffic & Heat 1–5 Police (`RTGameWorld.swift` + `RTAIVehicleLoader.swift`)**: Up to `16` live traffic cars + `4` pursuing Rockport PD units (`COPMIDSIZE` Heat 1–2 → `COPGTO` Heat 3–4 → `COPSPORT` Heat 5) riding real hills via `aiRoadProbeKernel`, casting blazing alternating **red/blue ray-traced roof lightbar sweeps** across wet streets and your car's clearcoat, tracked on a live post-FI rotating GPU minimap with Heat/Bounty/Evade/Busted HUD.
 - **Race Events, Blacklist 15 Boss Duels & Interactive World Map (`v1.2.0`)**: `15` Blacklist Boss Duels (`Sonny` #15 through `Razor` #1 with signature cars, paint & road-graph race AI), `18` Checkpoint Sprints with 3D glowing chevron arches, `10` Speedtraps with holographic radar laser gates, and an O(1) pre-baked `1024×1024` full-island World Map (`6,538` roads / `229 km`, press `M`) supporting pan, zoom, GPS preview, fast-travel & instant event launch.
-- **GT7 Photo Mode, Drift VFX, 5-Camera Rig & 1-Ray RIS Streetlamp Shadows (`v1.3.0`)**: Press `O` for 6-DoF Photo Mode with physically authentic 7-blade hardware-RT thin-lens DoF bokeh and zero-extra-VRAM `2×2` tiled **4K 64-SPP** snapshots (`Enter`); analytical RT drift skidmarks, ballistic metal sparks & volumetric tire smoke (`RTVFXBuffer`, zero TLAS churn); 5-camera rig (`C`) including real-RT Hood Cam and post-FI GT3 carbon steering wheel + 10-LED shift-bar Cockpit Cam; and **1-ray RIS real streetlamp shadows** across wet Downtown & Rosewood nights.
+- **GT7 Photo Mode, Drift VFX, 5-Camera Rig & 1-Ray RIS Streetlamp Shadows (`v1.3.0`)**: Press `O` for 6-DoF Photo Mode with physically authentic 7-blade hardware-RT thin-lens DoF bokeh (`9.8/10` 4K) and zero-extra-VRAM `2×2` tiled **4K 64-SPP** snapshots (`Enter`); analytical RT drift skidmarks, ballistic metal sparks & volumetric tire smoke (`RTVFXBuffer`, zero TLAS churn); 5-camera rig (`C`) including real-RT Hood Cam and post-FI GT3 carbon steering wheel + 10-LED shift-bar Cockpit Cam; and **1-ray RIS real streetlamp shadows** across wet Downtown & Rosewood nights.
+- **Full-Island Visual Ultra (`v1.4.0` Grand Finale — `9.5/10`)**: Real **EA PVS (`0x80034150`)** `435`-zone highway & cross-bay vistas stretching **`2–4.8 km`** (toggle `J`, default ON), **`8,740`** all-district sculpted botanical trees, bushes & coastal beachgrass across Rosewood, Downtown & Camden Beach, **6-wave directional Gerstner animated harbor waves** with deep-bay absorption & shoreline foam, and **Top-15 flagship/Blacklist car visual polish** (`python3 tools/extract_rt_car.py --top15`) sustaining **`101–124 FPS`** 6-district Frame-Gen in **`306 MB` VRAM**.
 
 ---
 
