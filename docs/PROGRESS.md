@@ -1,5 +1,3 @@
-> Open-source, non-destructive PS2/PCSX2 modding tools for real `SLUS-21351` inside PCSX2 (zero copyrighted EA game assets distributed). `SLUS-21351` symbol names credited to [`dbalatoni13/nfsmw`](https://github.com/dbalatoni13/nfsmw). External Metal RT prototype (`v0.6`–`v1.4`) dropped from `main` and archived on `archive/standalone-metal-rt-v1.4`.
-
 | Version | Milestone | Status | QA / Notes | Commit |
 | :--- | :--- | :--- | :--- | :--- |
 | `v0.5` | PS2/PCSX2 Baseline (84-car VU1, lighting, 170 BC7 tex) | Done | PCSX2 v2.6.3 baseline | `b1bff22` |

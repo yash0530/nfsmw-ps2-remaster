@@ -42,23 +42,23 @@ patch=0,EE,0054BA3C,word,3F7B6DB7
 patch=0,EE,0054E174,word,3F4CCCCD
 
 [Remove Brown Filter]
-author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+author=fobes (independently MIPS-verified on SLUS_213.51 by Rockport 2026)
 description=Sets the built-in skip flag at 0x00550D58 (ApplyColorBloom @ 0x0021931C) to bypass the sepia/amber tint pass while preserving bloom.
 patch=1,EE,00550D58,word,00000001
 
 [Disable Motion Blur Effect]
-author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+author=Steelmax / PCSX2 community & NFSMW: Rockport 2026 (independently MIPS-verified on SLUS_213.51)
 description=Disables PS2 accumulation smear motion blur cleanly via eAttachSmear2 (SmearNumSubStages @ 0x00550150 = 0, SmearEnable @ 0x0055014C = 0) without disabling bloom or other post-processing.
 patch=1,EE,00550150,word,00000000
 patch=1,EE,0055014C,word,00000000
 
 [Disable Bloom (Optional)]
-author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+author=Steelmax / PCSX2 community (independently MIPS-verified on SLUS_213.51 by Rockport 2026)
 description=Sets the built-in bloom-skip flag at 0x00550D5C (ApplyColorBloom @ 0x002193A8) to skip the PS2 additive bloom pass while retaining remaining visual treatment.
 patch=1,EE,00550D5C,word,00000001
 
 [Disable All Post-processing (Optional)]
-author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+author=Steelmax / PCSX2 community (independently MIPS-verified on SLUS_213.51 by Rockport 2026)
 description=Clears the master visual-treatment switch at 0x00550D28 (RenderMWVisualLook @ 0x0021A01C) to disable sepia, bloom, detail softening, and pulse brightness.
 patch=1,EE,00550D28,word,00000000
 
@@ -69,7 +69,7 @@ patch=0,EE,00219A68,word,03E00008
 patch=0,EE,00219A6C,word,00000000
 
 [No Distant Fog (Optional)]
-author=NFSMW: Rockport 2026 (verified via SLUS_213.51 ELF disassembly)
+author=Steelmax / PCSX2 community (independently MIPS-verified on SLUS_213.51 by Rockport 2026)
 description=Clears FogModeInfos[0] mode byte (0x00550029 -> 0x00, read via eAttachFog @ 0x00211404) to remove distant horizon fog cleanly.
 patch=1,EE,00550028,word,01000000
 

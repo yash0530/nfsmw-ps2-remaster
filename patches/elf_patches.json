@@ -16,7 +16,7 @@
       "name": "Remove 2005 Brown/Yellow Visual Treatment",
       "description": "Skips the heavy sepia/amber color-wash pass in IVisualTreatmentPlat::ApplyColorBloom and uses neutral RGBA compositing for crisp, modern natural colors while retaining bloom.",
       "category": "visual",
-      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "author": "fobes (independently MIPS-verified on SLUS_213.51 by Rockport 2026)",
       "enabled_by_default": true,
       "writes": [
         {
@@ -32,7 +32,7 @@
       "name": "Remove Smeared PS2 Motion Blur (Clean, Preserves Bloom)",
       "description": "Disables the low-res PS2 smear/accumulation motion blur inside eAttachSmear2 without killing bloom or other post-processing passes.",
       "category": "visual",
-      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "author": "Steelmax / PCSX2 community & NFSMW: Rockport 2026 (independently MIPS-verified on SLUS_213.51)",
       "enabled_by_default": true,
       "writes": [
         {
@@ -154,7 +154,7 @@
       "name": "Disable Bloom Post-Processing",
       "description": "Skips the PS2 additive bloom pass inside IVisualTreatmentPlat::ApplyColorBloom for a razor-sharp, glare-free image at 4K.",
       "category": "visual",
-      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "author": "Steelmax / PCSX2 community (independently MIPS-verified on SLUS_213.51 by Rockport 2026)",
       "enabled_by_default": false,
       "writes": [
         {
@@ -170,7 +170,7 @@
       "name": "Disable All Post-Processing (Master Visual Treatment Switch)",
       "description": "Turns off IVisualTreatmentPlat::RenderMWVisualLook entirely, disabling sepia tint, bloom, detail map softening, and pulse brightness in one switch. Also eliminates any remaining upscaled post-effect offset.",
       "category": "visual",
-      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "author": "Steelmax / PCSX2 community (independently MIPS-verified on SLUS_213.51 by Rockport 2026)",
       "enabled_by_default": false,
       "writes": [
         {
@@ -208,7 +208,7 @@
       "name": "No Distant Fog (FogModeInfos[0])",
       "description": "Clears the FogModeInfos[0] mode byte (0x00550029, read via eAttachFog @ 0x00211404) to remove distant horizon fog.",
       "category": "visual",
-      "author": "NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+      "author": "Steelmax / PCSX2 community (independently MIPS-verified on SLUS_213.51 by Rockport 2026)",
       "enabled_by_default": false,
       "writes": [
         {

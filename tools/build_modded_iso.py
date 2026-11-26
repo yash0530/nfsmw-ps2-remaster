@@ -636,7 +636,7 @@ def emit_companion_pnach(new_crc: str, out_path: Path, applied_ids: List[str]) -
         lines.extend(
             [
                 "[Disable Bloom (Optional)]",
-                "author=NFSMW: Rockport 2026",
+                "author=Steelmax / PCSX2 community (MIPS-verified on SLUS_213.51)",
                 "description=Optional runtime toggle to disable bloom glare at 4K.",
                 "patch=0,EE,00550D5C,word,00000001",
                 "",
