@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import os
-import struct
-import subprocess
-import sys
-import unittest
+import os, struct, subprocess, sys, unittest, warnings
 from pathlib import Path
 from typing import Optional
 
@@ -16,10 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
-
-import build_pcsx2_texture_pack as bpack  # noqa: E402
-import pcsx2_tex_hash as pth  # noqa: E402
-import tpk_extract as te  # noqa: E402
+import build_pcsx2_texture_pack as bpack, pcsx2_tex_hash as pth, tpk_extract as te  # noqa: E402
 
 
 def _find_live_iso() -> Optional[Path]:
@@ -48,18 +41,20 @@ def _find_rosewood_dumps() -> Optional[Path]:
 class TestXXH3AndGSVramOffline(unittest.TestCase):
     """Offline tests (Ubuntu Linux + macOS CI safe with NFSMW_ISO=/nonexistent)."""
 
-    def test_xxh3_64bits_official_sanity_vectors(self) -> None:
+    def test_xxh3_64bits_official_sanity_vectors_and_no_overflow_warnings(self) -> None:
         g, buf = 2654435761, bytearray(2240)
         for i in range(len(buf)):
             buf[i] = (g >> 56) & 0xFF
             g = (g * 11400714785074694797) & 0xFFFFFFFFFFFFFFFF
-        for length, expected in [
-            (0, 0x2D06800538D394C2), (1, 0xC44BDFF4074EECDB), (6, 0x27B56A84CD2D7325),
-            (12, 0xA713DAF0DFBB77E7), (24, 0xA3FE70BF9D3510EB), (48, 0x397DA259ECBA1F11),
-            (80, 0xBCDEFBBB2C47C90A), (195, 0xCD94217EE362EC3A), (403, 0xCDEB804D65C6DEA4),
-            (512, 0x617E49599013CB6B), (2048, 0xDD59E2C3A5F038E0), (2240, 0x6E73A90539CF2948),
-        ]:
-            self.assertEqual(pth.xxh3_64bits(bytes(buf[:length])), expected, f"len={length}")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            for length, expected in [
+                (0, 0x2D06800538D394C2), (1, 0xC44BDFF4074EECDB), (6, 0x27B56A84CD2D7325),
+                (12, 0xA713DAF0DFBB77E7), (24, 0xA3FE70BF9D3510EB), (48, 0x397DA259ECBA1F11),
+                (80, 0xBCDEFBBB2C47C90A), (195, 0xCD94217EE362EC3A), (403, 0xCDEB804D65C6DEA4),
+                (512, 0x617E49599013CB6B), (2048, 0xDD59E2C3A5F038E0), (2240, 0x6E73A90539CF2948),
+            ]:
+                self.assertEqual(pth.xxh3_64bits(bytes(buf[:length])), expected, f"len={length}")
         self.assertEqual(pth.xxh3_64bits(b"abc"), 0x78AF5F94892F3950)
 
     def test_gs_vram_swizzle_bijections_and_block_tables(self) -> None:
@@ -80,9 +75,7 @@ class TestXXH3AndGSVramOffline(unittest.TestCase):
 
     def test_pcsx2_flags_and_stem_formatting_no_leading_zeros(self) -> None:
         fl = pth.pcsx2_flags(pth.PSM_T4, 128, 128)
-        self.assertEqual(fl, 0x00001DD4)
-        self.assertEqual(pth.pcsx2_flags(pth.PSM_T8, 256, 64), 0x00001A13)
-        self.assertEqual(pth.pcsx2_flags(pth.PSM_CT32, 64, 32), 0x00001580)
+        self.assertEqual((fl, pth.pcsx2_flags(pth.PSM_T8, 256, 64), pth.pcsx2_flags(pth.PSM_CT32, 64, 32)), (0x1DD4, 0x1A13, 0x1580))
         self.assertEqual(pth.format_pcsx2_stem(0x09683FAE9720A5C8, 0x00C477D6508224AF, fl), "9683fae9720a5c8-c477d6508224af-00001dd4")
         self.assertEqual(pth.format_pcsx2_stem(0x00ABCDEF, None, 0x1580), "abcdef-00001580")
         pal_raw = bytes([10, 20, 30, 0x80] * 16)
@@ -99,8 +92,7 @@ class TestXXH3AndGSVramOffline(unittest.TestCase):
         spec[:, :, :3], spec[:, :8, 3], spec[:, 8:, 3] = 90, 40, 112
         enh_sp, _, amode_sp = bpack.enhance_faithful_rgba(spec, name="RO_ASPHALT_01")
         self.assertEqual(amode_sp, "mask_0_128")
-        self.assertLessEqual(int(enh_sp[:, :, 3].max()), 128)
-        self.assertGreaterEqual(int(enh_sp[:, :, 3].min()), 35)
+        self.assertTrue(35 <= int(enh_sp[:, :, 3].min()) <= int(enh_sp[:, :, 3].max()) <= 128)
 
         leaf = np.zeros((16, 16, 4), dtype=np.uint8)
         leaf[:, :8], leaf[:, 8:] = (24, 88, 28, 128), (255, 255, 255, 0)
@@ -111,28 +103,33 @@ class TestXXH3AndGSVramOffline(unittest.TestCase):
         self.assertLessEqual(int(enh_cut[:, :, 3].max()), 128)
         self.assertTrue(int(enh_cut[32, 33, 0]) < 48 and int(enh_cut[32, 33, 1]) > 70)
 
-    def test_hard_semantic_denylist_and_district_and_dds_header(self) -> None:
+    def test_hard_denylist_global_allowlist_stage2_guard_and_dds_header(self) -> None:
         for name, arc in [
             ("HUD_TACH", r"GLOBAL\GLOBALB.LZC"), ("FE_BUTTON", r"GLOBAL\GLOBALA.BUN"),
             ("FONT_MAIN", r"GLOBAL\GLOBALB.LZC"), ("MINIMAP_ARROW", r"TRACKS\STREAML2RA.BUN"),
-            ("LOADING_SPINNER", r"GLOBAL\INGAMEA.BUN"), ("FLARE_SUN", r"GLOBAL\INGAMEB.LZC"),
+            ("LOADING_SPINNER", r"GLOBAL\INGAMEA.BUN"), ("LOAD_LED_GLOW", r"GLOBAL\GLOBALB.LZC"),
+            ("INGAME_ICON_PAUSE_MAIN", r"GLOBAL\INGAMEA.BUN"), ("FX_GLOW01_ADDITIVE", r"GLOBAL\INGAMEB.LZC"),
+            ("TIP_BLACKLIST", r"GLOBAL\DYNTEX.BIN"), ("CAREER_XPOS", r"GLOBAL\DYNTEX.BIN"),
+            ("DPAD_UP", r"GLOBAL\GLOBALB.LZC"), ("FLARE_SUN", r"GLOBAL\INGAMEB.LZC"),
             ("SHADOW_CAR", r"GLOBAL\GLOBALB.LZC"), ("ENV_REFLECT", r"GLOBAL\GLOBALB.LZC"),
             ("ANY_TEX", r"GLOBAL\HUDTEXRACE.BIN"), ("ANY_TEX", r"GLOBAL\HUDTEXDRAG.BIN"),
-            ("ANY_TEX", r"FRONTEND\FRONTB.LZC"),
+            ("ANY_TEX", r"FRONTEND\FRONTB.LZC"), ("MW_LOGO", r"GLOBAL\GLOBALA.BUN"),
         ]:
-            self.assertTrue(bpack.is_denylisted_texture(name, arc)[0], f"Expected denylisted: {name}")
+            self.assertTrue(bpack.is_denylisted_texture(name, arc)[0], f"Expected denylisted: {name} ({arc})")
         for name, arc in [
             ("RO_ASPHALT_01", r"TRACKS\STREAML2RA.BUN"), ("ARC_FRATFENCE2", r"TRACKS\STREAML2RA.BUN"),
             ("ORG_TREE_A", r"TRACKS\STREAML2RA.BUN"), ("SGN_FWY_ROSEWOOD_EA", r"TRACKS\STREAML2RA.BUN"),
             ("ADS_AUTOZONE_BB_A_EA", r"TRACKS\STREAML2RA.BUN"), ("SHD_CT_ROAD_COLONIAL_01", r"TRACKS\STREAML2RA.BUN"),
-            ("SKY_MIDDAY_A_ENVIRONMEN", r"GLOBAL\INGAMEB.LZC"), ("BMWM3GTRE46_MISC", r"CARS\BMWM3GTRE46\TEXTURES.BIN"),
+            ("SKY_MIDDAY_A_ENVIRONMEN", r"GLOBAL\DYNTEX.BIN"), ("CARBONFIBRE", r"GLOBAL\GLOBALB.LZC"),
+            ("SKID_ASPHALT", r"GLOBAL\INGAMEA.BUN"), ("BMWM3GTRE46_MISC", r"CARS\BMWM3GTRE46\TEXTURES.BIN"),
         ]:
-            self.assertFalse(bpack.is_denylisted_texture(name, arc)[0], f"Unexpectedly blocked: {name}")
-        self.assertTrue(bpack.section_matches_district("H41", ["ARC_CAMPUS"], "rosewood"))
-        self.assertFalse(bpack.section_matches_district("C41", ["ARC_CITYCENTER"], "rosewood"))
-        self.assertTrue(bpack.section_matches_district("C41", ["ARC_CITYCENTER"], "downtown"))
-        self.assertTrue(bpack.section_matches_district("Q41", ["ARC_DOCK_CK"], "camden"))
-        self.assertTrue(bpack.section_matches_district("I41", ["SGN_FWY_HWY99_SOUTH_EA"], "highway99"))
+            self.assertFalse(bpack.is_denylisted_texture(name, arc)[0], f"Unexpectedly blocked: {name} ({arc})")
+        # Stage-2 blocked_stems guard blocks protected FRONTEND/TRACKMAP/ENVMAP stems
+        self.assertEqual(bpack.filter_stage2_stem("abc-def-00001dd4", set(), {"abc-def-00001dd4"}), (False, "stage2_blocked_stem"))
+        self.assertEqual(bpack.filter_stage2_stem("abc-def-00001dd4", {"abc-def-00001dd4"}, set()), (False, "stage2_already_covered"))
+        self.assertEqual(bpack.filter_stage2_stem("abc-def-00001dd4", set(), set()), (True, ""))
+        self.assertTrue(bpack.section_matches_district("H41", ["ARC_CAMPUS"], "rosewood") and not bpack.section_matches_district("C41", ["ARC_CITYCENTER"], "rosewood"))
+        self.assertTrue(bpack.section_matches_district("C41", ["ARC_CITYCENTER"], "downtown") and bpack.section_matches_district("Q41", ["ARC_DOCK_CK"], "camden") and bpack.section_matches_district("I41", ["SGN_FWY_HWY99_SOUTH_EA"], "highway99"))
         hdr = bpack.build_bc7_dds_header(512, 256, 10)
         self.assertEqual((len(hdr), hdr[:4], hdr[84:88], struct.unpack_from("<I", hdr, 128)[0]), (148, b"DDS ", b"DX10", 98))
 

@@ -8,17 +8,7 @@ PCSX2 v2.6.3 texture replacement packs directly from the untouched PS2 NFSMW
 
 from __future__ import annotations
 
-import argparse
-import collections
-import concurrent.futures
-import hashlib
-import json
-import os
-import struct
-import subprocess
-import sys
-import tempfile
-import time
+import argparse, collections, concurrent.futures, hashlib, json, os, struct, subprocess, sys, tempfile, time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -29,32 +19,42 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _TOOLS_DIR.parent
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
-
-import install_macos_texture_tools as imtt  # noqa: E402
-import pcsx2_tex_hash as pth  # noqa: E402
+import install_macos_texture_tools as imtt, pcsx2_tex_hash as pth  # noqa: E402
 from zdir_tool import PS2NFSMWArchive  # noqa: E402
 
 DEFAULT_OUT_DIR = _REPO_ROOT / "build" / "pcsx2_textures_v22" / "SLUS-21351" / "replacements"
 DISTRICT_CHOICES: Tuple[str, ...] = ("rosewood", "downtown", "camden", "highway99", "all")
 DXGI_FORMAT_BC7_UNORM = 98
-
 DENYLIST_ARCHIVE_TOKENS: Tuple[str, ...] = (
     "HUDTEXRACE", "HUDTEXDRAG", "HUDTEXSPLIT", "HUDTEXDRAGSPLIT", "HUDTEXTURESPHOTOFINISH",
     "HUDS_CUSTOM", "FRONTEND", "LANGUAGETEXTURES", "MINI_MAP", "TRACKMAPS", "VINYLS",
 )
 DENYLIST_NAME_PREFIXES: Tuple[str, ...] = (
-    "HUD", "FE_", "FONT", "MINIMAP", "LOADING", "FLARE", "SHADOW", "ENV", "UI_", "ICON",
-    "CURSOR", "ARROW", "RADAR", "METER", "PDA", "BKGBMP", "DEMO_", "TV_MASK", "SUNCENTER",
-    "SUNRING", "REFSKY", "REFLECT", "SPECULAR", "CHROME", "GLOW", "LENSFLARE", "SPARK", "PARTICLE",
+    "HUD", "FE_", "FONT", "MINIMAP", "LOADING", "LOAD_", "FLARE", "SHADOW", "ENV", "UI_",
+    "ICON", "CURSOR", "ARROW", "RADAR", "METER", "PDA", "BKGBMP", "DEMO_", "TV_MASK",
+    "SUNCENTER", "SUNRING", "SUNHALO", "SUNMAJORRAYS", "REFSKY", "REFLECT", "SPECULAR",
+    "CHROME", "GLOW", "LENSFLARE", "SPARK", "PARTICLE", "FX_", "TIP_", "DPAD", "RVM",
+    "DRAG_RPM", "BUSTED_", "DEFEATED_", "EVADED_", "IMPOUNDED_", "MILESTONE_", "BOUNTY_",
+    "BUTTON_", "LEFT_ANALOG", "RIGHT_ANALOG", "GENERIC_AUTOSAVE", "VISIBILITY_", "MW_LOGO", "COP_LIGHT",
 )
 DENYLIST_NAME_SUBSTRINGS: Tuple[str, ...] = (
-    "HUDTEXRACE", "HUDTEXDRAG", "FRONTEND", "LOADING", "MINIMAP", "FONT",
-    "FLARE", "SHADOW", "ENVMAP", "WINDOWREFLECTION", "REFLECTION",
+    "HUDTEXRACE", "HUDTEXDRAG", "FRONTEND", "LOADING", "LOAD_", "MINIMAP", "FONT",
+    "FLARE", "SHADOW", "ENVMAP", "WINDOWREFLECTION", "REFLECTION", "_ICON", "FX_",
+    "TIP_", "DPAD", "ADDITIVE", "_XPOS", "_XNEG", "_YPOS", "_YNEG", "_ZPOS", "_ZNEG",
 )
-GLOBAL_WORLD_ARCHIVES: Tuple[str, ...] = (
-    r"GLOBAL\GLOBALA.BUN", r"GLOBAL\GLOBALB.LZC", r"GLOBAL\INGAMEA.BUN",
-    r"GLOBAL\INGAMEB.LZC", r"GLOBAL\DYNTEX.BIN",
-)
+GLOBAL_ALLOWLIST: Dict[str, Tuple[str, ...]] = {
+    r"GLOBAL\DYNTEX.BIN": ("SKY_",),
+    r"GLOBAL\GLOBALB.LZC": (
+        "CARBONFIBRE", "CARBOTTOM", "DAMAGE0", "DOORLINE", "DRIVER_CUTOUT", "GRILL_",
+        "INTERCOOLER", "LICENSEPLATE", "METAL_SWATCH", "RADIATOR", "REAR_DEFROSTER",
+        "ROTOR", "RUBBERACCORDIAN", "TIRE_BACK", "TRAFFIC_TIRE", "TREAD",
+        "WINDOW_DAMAGE0", "WINDOW_FRONT", "WINDOW_MASK",
+    ),
+    r"GLOBAL\INGAMEA.BUN": (
+        "DEBRISA", "DRIVER_COP", "HELICOPTER_BLADES", "LEAF3",
+        "OBJ_BARREL_B", "ROADBLOCK_BARREL", "SKID_", "TIREPATCH",
+    ),
+}
 _DISTRICT_LETTERS: Dict[str, Set[str]] = {
     "rosewood": {"A", "F", "G", "H", "I", "J"}, "downtown": {"B", "C", "D", "E", "L", "M", "T"},
     "camden": {"O", "P", "Q", "R", "S"}, "highway99": {"I", "D", "T", "L"},
@@ -68,44 +68,34 @@ _DISTRICT_HINTS: Dict[str, Tuple[str, ...]] = {
 
 
 def is_denylisted_texture(name: str, archive: str = "") -> Tuple[bool, str]:
-    """Return ``(blocked, reason)`` under the hard UI/loading-icon/FX denylist."""
-    arc_u = archive.replace("/", "\\").upper()
+    """Return ``(blocked, reason)`` under the hard UI/loading-icon/FX denylist & GLOBAL allowlist."""
+    arc_u, nm = archive.replace("/", "\\").upper(), name.strip().upper()
     for tok in DENYLIST_ARCHIVE_TOKENS:
-        if tok in arc_u:
-            return True, f"archive:{tok}"
-    nm = name.strip().upper()
-    if not nm:
-        return True, "empty_name"
+        if tok in arc_u: return True, f"archive:{tok}"
+    if not nm: return True, "empty_name"
     for pfx in DENYLIST_NAME_PREFIXES:
-        if nm.startswith(pfx):
-            return True, f"prefix:{pfx}"
+        if nm.startswith(pfx): return True, f"prefix:{pfx}"
     for sub in DENYLIST_NAME_SUBSTRINGS:
-        if sub in nm:
-            return True, f"substr:{sub}"
+        if sub in nm: return True, f"substr:{sub}"
+    if arc_u.startswith("GLOBAL\\"):
+        allowed = GLOBAL_ALLOWLIST.get(arc_u)
+        if not allowed or not any(nm == a or nm.startswith(a) for a in allowed):
+            return True, f"global_not_allowlisted:{arc_u}"
     return False, ""
 
 
 def section_matches_district(section_name: str, tex_names: Sequence[str], district: str) -> bool:
-    """Return True if a STREAML2RA.BUN section maps to the requested district."""
-    if district == "all":
-        return True
+    if district == "all": return True
     s = section_name.strip().upper()
-    if not s:
-        return False
-    if s[0] in _DISTRICT_LETTERS.get(district, set()) or s in ("W0", "Y0"):
-        return True
-    if s[0] in ("W", "Y", "V"):
-        return any(any(h in nm.upper() for h in _DISTRICT_HINTS[district]) for nm in tex_names)
-    return False
+    if not s: return False
+    if s[0] in _DISTRICT_LETTERS.get(district, set()) or s in ("W0", "Y0"): return True
+    return s[0] in ("W", "Y", "V") and any(any(h in nm.upper() for h in _DISTRICT_HINTS[district]) for nm in tex_names)
 
 
 def classify_material(name: str, archive: str = "") -> str:
-    """Classify a texture into signage | sky | car | world_surface."""
     nm, arc_u = name.strip().upper(), archive.replace("/", "\\").upper()
-    if nm.startswith(("SGN_", "ADS_")) or any(t in nm for t in ("_SIGN", "_PLATE", "LICENSE", "BADGE", "LOGO")):
-        return "signage"
-    if nm.startswith(("SKY_", "PAN_")):
-        return "sky"
+    if nm.startswith(("SGN_", "ADS_")) or any(t in nm for t in ("_SIGN", "_PLATE", "LICENSE", "BADGE", "LOGO")): return "signage"
+    if nm.startswith(("SKY_", "PAN_")): return "sky"
     return "car" if (arc_u.startswith("CARS\\") or nm.startswith(("CAR_", "WHEEL", "TIRE", "BRAKE", "RIM"))) else "world_surface"
 
 
@@ -150,7 +140,6 @@ def _box_blur_3x3(arr: np.ndarray) -> np.ndarray:
 
 
 def compute_target_size(orig_w: int, orig_h: int, scale: int = 4, small_scale: int = 8, max_size: int = 1024) -> Tuple[int, int]:
-    """Compute power-of-two target size (4x default, optional 8x for <=32px textures)."""
     eff = small_scale if (small_scale > scale and max(orig_w, orig_h) <= 32) else scale
     while max(orig_w, orig_h) * eff > max_size and eff > 1:
         eff //= 2
@@ -241,9 +230,35 @@ def encode_batch_to_dds(
                     tw, th, tm = max(1, tw // 2), max(1, th // 2), tm - 1
                 dds = build_bc7_dds_header(tw, th, tm) + payload[off:]
                 (out_dir / f"{stem}.dds").write_bytes(dds)
-                fw += 1
-                bw += len(dds)
+                fw += 1; bw += len(dds)
     return fw, bw
+
+
+def collect_blocked_archive_stems(arc: PS2NFSMWArchive, blocked_stems: Set[str]) -> None:
+    """Hash all protected UI/FRONTEND/HUD/TRACKMAP/GLOBAL-non-allowlisted textures into blocked_stems."""
+    protected_paths = sorted({
+        e.resolved_path for e in arc.entries
+        if e.resolved_path and (
+            e.resolved_path.startswith(("FRONTEND\\", "LANGUAGES\\"))
+            or any(tok in e.resolved_path for tok in ("HUDTEX", "HUDS_CUSTOM", "TRACKMAPS", "MINI_MAP"))
+            or e.resolved_path in (r"GLOBAL\GLOBALA.BUN", r"GLOBAL\INGAMEB.LZC", r"GLOBAL\DEMO_MARKETING.BUN", r"GLOBAL\WIDESCREEN_GLOBAL.BUN", r"GLOBAL\THINSCREEN_GLOBAL.BUN")
+        )
+    })
+    for vp in protected_paths:
+        try:
+            for tex in pth.iter_tpk_raw_textures(arc.read_entry(arc.find(vp)), vp):
+                blocked_stems.update(pth.compute_pcsx2_stems(tex, include_sub_mips=True))
+        except Exception:
+            continue
+
+
+def filter_stage2_stem(stem: str, seen_stems: Set[str], blocked_stems: Set[str]) -> Tuple[bool, str]:
+    """Gate a Stage-2 dump stem against Stage-1 seen stems and denylisted blocked_stems."""
+    parts = stem.split("-")
+    if len(parts) not in (2, 3) or len(parts[-1]) != 8: return False, "stage2_invalid_stem"
+    if stem in seen_stems: return False, "stage2_already_covered"
+    if stem in blocked_stems: return False, "stage2_blocked_stem"
+    return True, ""
 
 
 def _default_iso() -> Optional[Path]:
@@ -264,7 +279,8 @@ def build_texture_pack(
     arc = PS2NFSMWArchive(iso_path)
     out_dir.mkdir(parents=True, exist_ok=True)
     workers = threads if threads > 0 else max(1, os.cpu_count() or 4)
-    seen_stems: Set[str] = set()
+    seen_stems, blocked_stems = set(), set()
+    track_blocked = supplement_dumps is not None and supplement_dumps.is_dir()
     skipped, by_mat, by_alpha, by_src = collections.Counter(), collections.Counter(), collections.Counter(), collections.Counter()
     jobs: List[Tuple[List[Tuple[str, int]], np.ndarray, str, str, str]] = []
     files_written, bytes_written, unique_tex = 0, 0, 0
@@ -277,8 +293,7 @@ def build_texture_pack(
         nonlocal files_written, bytes_written, unique_tex
         if not jobs:
             return
-        res = list(pool.map(_enhance_one, jobs))
-        jobs.clear()
+        res = list(pool.map(_enhance_one, jobs)); jobs.clear()
         for _t, _e, mat, amode, bkt in res:
             unique_tex += 1; by_mat[mat] += 1; by_alpha[amode] += 1; by_src[bkt] += 1
         fw, bw = encode_batch_to_dds([(r[0], r[1]) for r in res], out_dir, encoder_bin, threads=threads)
@@ -290,7 +305,10 @@ def build_texture_pack(
                 skipped["unsupported_psm"] += 1; return
             blocked, reason = is_denylisted_texture(tex.name, tex.archive)
             if blocked:
-                skipped[reason] += 1; return
+                skipped[reason] += 1
+                if track_blocked:
+                    blocked_stems.update(pth.compute_pcsx2_stems(tex, include_sub_mips=True))
+                return
             stems = pth.compute_pcsx2_stems(tex, include_sub_mips=emit_mip1_tails)
             if not stems or stems[0] in seen_stems:
                 return
@@ -298,6 +316,10 @@ def build_texture_pack(
             seen_stems.add(stems[0])
             if emit_mip1_tails and len(stems) > 1:
                 mips = pth.parse_plat_mips(tex.plat_bytes, tex.width, tex.height)
+                fl0 = f"-{pth.pcsx2_flags(tex.psm, mips[0][0], mips[0][1]):08x}"
+                for st in stems[1:]:
+                    if st.endswith(fl0) and st not in seen_stems:
+                        targets.append((st, 0)); seen_stems.add(st); break
                 if len(mips) >= 2 and mips[1][0] >= 32 and mips[1][1] >= 16:
                     fl1 = f"-{pth.pcsx2_flags(tex.psm, mips[1][0], mips[1][1]):08x}"
                     for st in stems[1:]:
@@ -317,7 +339,7 @@ def build_texture_pack(
 
         extra_archives: List[Tuple[str, str]] = []
         if include_global:
-            extra_archives.extend((vp, "global") for vp in GLOBAL_WORLD_ARCHIVES)
+            extra_archives.extend((vp, "global") for vp in GLOBAL_ALLOWLIST)
         if include_cars:
             extra_archives.extend((vp, "cars") for vp in sorted({e.resolved_path for e in arc.entries if e.resolved_path and e.resolved_path.startswith("CARS\\") and e.resolved_path.endswith("TEXTURES.BIN")}))
         for vp, bkt in extra_archives:
@@ -328,11 +350,14 @@ def build_texture_pack(
                 continue
 
         stage2_added = 0
-        if supplement_dumps is not None and supplement_dumps.is_dir():
+        if track_blocked and supplement_dumps is not None:
+            collect_blocked_archive_stems(arc, blocked_stems)
             for png in sorted(supplement_dumps.glob("*.png")):
                 stem = png.stem.lower()
-                parts = stem.split("-")
-                if stem in seen_stems or len(parts) not in (2, 3) or len(parts[-1]) != 8:
+                ok, rej = filter_stage2_stem(stem, seen_stems, blocked_stems)
+                if not ok:
+                    if rej != "stage2_already_covered":
+                        skipped[rej] += 1
                     continue
                 try:
                     with Image.open(png) as im:
@@ -355,7 +380,8 @@ def build_texture_pack(
         "scale": scale, "small_scale": small_scale, "max_size": max_size, "dxgi_format": DXGI_FORMAT_BC7_UNORM,
         "sections_matched": sections_matched, "unique_textures_enhanced": unique_tex, "dds_files_written": files_written,
         "total_dds_bytes": bytes_written, "total_dds_mb": round(bytes_written / (1024 * 1024), 2),
-        "stage2_supplement_added": stage2_added, "elapsed_seconds": round(time.perf_counter() - t0, 2),
+        "stage2_supplement_added": stage2_added, "stage2_blocked_stems": len(blocked_stems),
+        "elapsed_seconds": round(time.perf_counter() - t0, 2),
         "by_source": dict(by_src), "by_material": dict(by_mat), "by_alpha_mode": dict(by_alpha),
         "skipped_denylist_total": sum(skipped.values()), "skipped_top": dict(skipped.most_common(12)),
     }

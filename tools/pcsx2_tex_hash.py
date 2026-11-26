@@ -8,11 +8,7 @@ PCSX2 binary or third-party hash dependency.
 
 from __future__ import annotations
 
-import argparse
-import json
-import math
-import struct
-import sys
+import argparse, json, math, struct, sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Sequence, Set, Tuple
@@ -22,15 +18,11 @@ import numpy as np
 _TOOLS_DIR = Path(__file__).resolve().parent
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
-
-import tpk_extract as te  # noqa: E402
-import tpk_inspect as ti  # noqa: E402
+import tpk_extract as te, tpk_inspect as ti  # noqa: E402
 from jdlz import is_jdlz, lz_decompress  # noqa: E402
 from zdir_tool import PS2NFSMWArchive  # noqa: E402
 
 PSM_CT32, PSM_T8, PSM_T4 = 0x00, 0x13, 0x14
-
-# Official Sony PS2 GS 8 KB page -> 32 x 256-byte block tables
 BLOCK_TABLE_32: Tuple[Tuple[int, ...], ...] = (
     (0, 1, 4, 5, 16, 17, 20, 21), (2, 3, 6, 7, 18, 19, 22, 23),
     (8, 9, 12, 13, 24, 25, 28, 29), (10, 11, 14, 15, 26, 27, 30, 31),
@@ -40,10 +32,7 @@ BLOCK_TABLE_4: Tuple[Tuple[int, ...], ...] = (
     (0, 2, 8, 10), (1, 3, 9, 11), (4, 6, 12, 14), (5, 7, 13, 15),
     (16, 18, 24, 26), (17, 19, 25, 27), (20, 22, 28, 30), (21, 23, 29, 31),
 )
-
-# Official Cyan4973 XXH3_64bits (v0.8.x, seed=0) constants & 192-byte secret
-_M64, _M32 = 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF
-_P32_1, _P32_2, _P32_3 = 0x9E3779B1, 0x85EBCA77, 0xC2B2AE3D
+_M64, _M32, _P32_1, _P32_2, _P32_3 = 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF, 0x9E3779B1, 0x85EBCA77, 0xC2B2AE3D
 _P64_1, _P64_2, _P64_3 = 0x9E3779B185EBCA87, 0xC2B2AE3D27D4EB4F, 0x165667B19E3779F9
 _P64_4, _P64_5, _P_MX1, _P_MX2 = 0x85EBCA77C2B2AE63, 0x27D4EB2F165667C5, 0x165667919E3779F9, 0x9FB21C651E98DF25
 _XXH3_SECRET = bytes.fromhex(
@@ -58,7 +47,6 @@ _S_STRIPES = np.array([np.frombuffer(_XXH3_SECRET, dtype="<u8", count=8, offset=
 _S_SCRAMBLE = np.frombuffer(_XXH3_SECRET, dtype="<u8", count=8, offset=128)
 _S_LAST = np.frombuffer(_XXH3_SECRET, dtype="<u8", count=8, offset=121)
 _SWAP = np.array([1, 0, 3, 2, 5, 4, 7, 6], dtype=np.intp)
-
 
 def _u32(b: bytes, o: int) -> int: return struct.unpack_from("<I", b, o)[0]
 def _u64(b: bytes, o: int) -> int: return struct.unpack_from("<Q", b, o)[0]
@@ -100,22 +88,24 @@ def xxh3_64bits(data: bytes) -> int:
             acc = (acc + _mix16(data, 16 * i, 16 * (i - 8) + 3)) & _M64
         return _aval((acc + _mix16(data, n - 16, 119)) & _M64)
 
-    acc = np.array([_P32_3, _P64_1, _P64_2, _P64_3, _P64_4, _P32_2, _P64_5, _P32_1], dtype=np.uint64)
-    nb, m32, s32, s47, p32 = (n - 1) // 1024, np.uint64(_M32), np.uint64(32), np.uint64(47), np.uint64(_P32_1)
-    if nb > 0:
-        blks = np.frombuffer(data, dtype="<u8", count=nb * 128).reshape(nb, 16, 8)
-        dk = blks ^ _S_STRIPES[None, :, :]
-        delta = (blks[:, :, _SWAP] + (dk & m32) * (dk >> s32)).sum(axis=1, dtype=np.uint64)
-        for b in range(nb):
-            acc = ((acc + delta[b]) ^ ((acc + delta[b]) >> s47) ^ _S_SCRAMBLE) * p32
-    ns = ((n - 1) - 1024 * nb) // 64
-    if ns > 0:
-        rem = np.frombuffer(data, dtype="<u8", count=ns * 8, offset=nb * 1024).reshape(ns, 8)
-        dk = rem ^ _S_STRIPES[:ns]
-        acc = acc + (rem[:, _SWAP] + (dk & m32) * (dk >> s32)).sum(axis=0, dtype=np.uint64)
-    last = np.frombuffer(data, dtype="<u8", count=8, offset=n - 64)
-    dk = last ^ _S_LAST
-    ai = [int(v) for v in (acc + last[_SWAP] + (dk & m32) * (dk >> s32))]
+    with np.errstate(over="ignore"):
+        acc = np.array([_P32_3, _P64_1, _P64_2, _P64_3, _P64_4, _P32_2, _P64_5, _P32_1], dtype=np.uint64)
+        nb, m32, s32, s47, p32 = (n - 1) // 1024, np.uint64(_M32), np.uint64(32), np.uint64(47), np.uint64(_P32_1)
+        if nb > 0:
+            blks = np.frombuffer(data, dtype="<u8", count=nb * 128).reshape(nb, 16, 8)
+            dk = blks ^ _S_STRIPES[None, :, :]
+            delta = (blks[:, :, _SWAP] + (dk & m32) * (dk >> s32)).sum(axis=1, dtype=np.uint64)
+            for b in range(nb):
+                t = acc + delta[b]
+                acc = ((t ^ (t >> s47)) ^ _S_SCRAMBLE) * p32
+        ns = ((n - 1) - 1024 * nb) // 64
+        if ns > 0:
+            rem = np.frombuffer(data, dtype="<u8", count=ns * 8, offset=nb * 1024).reshape(ns, 8)
+            dk = rem ^ _S_STRIPES[:ns]
+            acc = acc + (rem[:, _SWAP] + (dk & m32) * (dk >> s32)).sum(axis=0, dtype=np.uint64)
+        last = np.frombuffer(data, dtype="<u8", count=8, offset=n - 64)
+        dk = last ^ _S_LAST
+        ai = [int(v) for v in (acc + last[_SWAP] + (dk & m32) * (dk >> s32))]
     res = (n * _P64_1) & _M64
     for i in range(4):
         res = (res + _mul128(ai[2 * i] ^ _u64(_XXH3_SECRET, 11 + 16 * i), ai[2 * i + 1] ^ _u64(_XXH3_SECRET, 19 + 16 * i))) & _M64
@@ -170,33 +160,20 @@ def gs_swizzle_level_blocks(pixels: np.ndarray, psm: int) -> bytes:
         h, w = pixels.shape[:2]
         if w < 8 or h < 8:
             return np.ascontiguousarray(pixels, dtype=np.uint8).tobytes()
-        u32 = np.ascontiguousarray(pixels, dtype=np.uint8).view("<u4").reshape(h, w)
         out = np.empty((h // 8, w // 8, 64), dtype="<u4")
-        out[:, :, _LUT_B32] = u32.reshape(h // 8, 8, w // 8, 8).transpose(0, 2, 1, 3)
+        out[:, :, _LUT_B32] = np.ascontiguousarray(pixels, dtype=np.uint8).view("<u4").reshape(h // 8, 8, w // 8, 8).transpose(0, 2, 1, 3)
         return out.tobytes()
     raise ValueError(f"Unsupported PSM: 0x{psm:02x}")
 
 
-def pcsx2_flags(psm: int, width: int, height: int) -> int:
-    """Compute PCSX2 v2.6.3 32-bit texture flags: ``psm | (log2(w) << 6) | (log2(h) << 10)``."""
-    return (psm & 0x3F) | ((int(round(math.log2(max(1, width)))) & 0xF) << 6) | ((int(round(math.log2(max(1, height)))) & 0xF) << 10)
-
-
-def format_pcsx2_stem(tex_hash: int, clut_hash: Optional[int], flags: int) -> str:
-    """Format PCSX2 v2.6.3 lowercase stem (no leading zeros on hashes, 8-hex flags)."""
-    return f"{tex_hash:x}-{clut_hash:x}-{flags:08x}" if clut_hash is not None else f"{tex_hash:x}-{flags:08x}"
-
-
-def hash_clut_ps2(palette_bytes: bytes, entries: int, clut_psm: int = PSM_CT32) -> int:
-    """Compute PCSX2 ClutHash using raw PS2 [0..128] alpha (scale_alpha=False)."""
-    return xxh3_64bits(te.unswizzle_clut_csm1(palette_bytes, entries=entries, clut_psm=clut_psm, scale_alpha=False).tobytes())
+def pcsx2_flags(psm: int, width: int, height: int) -> int: return (psm & 0x3F) | ((int(round(math.log2(max(1, width)))) & 0xF) << 6) | ((int(round(math.log2(max(1, height)))) & 0xF) << 10)
+def format_pcsx2_stem(tex_hash: int, clut_hash: Optional[int], flags: int) -> str: return f"{tex_hash:x}-{clut_hash:x}-{flags:08x}" if clut_hash is not None else f"{tex_hash:x}-{flags:08x}"
+def hash_clut_ps2(palette_bytes: bytes, entries: int, clut_psm: int = PSM_CT32) -> int: return xxh3_64bits(te.unswizzle_clut_csm1(palette_bytes, entries=entries, clut_psm=clut_psm, scale_alpha=False).tobytes())
 
 
 @dataclass
 class RawTPKTexture:
-    archive: str; section: str; name: str; name_hash: int
-    width: int; height: int; psm: int; clut_psm: int; palette_entries: int
-    plat_bytes: bytes; image_bytes: bytes; palette_bytes: bytes
+    archive: str; section: str; name: str; name_hash: int; width: int; height: int; psm: int; clut_psm: int; palette_entries: int; plat_bytes: bytes; image_bytes: bytes; palette_bytes: bytes
 
 
 def parse_plat_mips(plat_bytes: bytes, base_w: int, base_h: int) -> List[Tuple[int, int, int]]:
@@ -218,8 +195,7 @@ def decode_mip_linear(raw: bytes, w: int, h: int, psm: int, swiz: int) -> np.nda
             lut, nsh = te._lut_psmt4(w, h)
             arr = np.frombuffer(raw, dtype=np.uint8)
             need = max((w * h + 1) // 2, int(lut.max()) + 1)
-            arr = np.pad(arr, (0, need - len(arr))) if len(arr) < need else arr
-            return ((arr[lut] >> nsh) & 0x0F).astype(np.uint8).reshape(h, w)
+            return (((np.pad(arr, (0, need - len(arr))) if len(arr) < need else arr)[lut] >> nsh) & 0x0F).astype(np.uint8).reshape(h, w)
         return np.frombuffer(te.decode_linear_4bit(raw, w, h), dtype=np.uint8).reshape(h, w)
     if psm == PSM_T8:
         if swiz and w >= 16 and h >= 8:
@@ -322,10 +298,9 @@ def iter_tpk_raw_textures(data: bytes, archive: str, section: str = "") -> Itera
             pi_b = pis[i] if i < len(pis) else b"\x00" * 84
             m = te._decode_texture_pair(ti_b, pi_b)
             ioff, poff = pbase + m["image_offset"], pbase + m["palette_offset"]
-            if ioff + m["image_size"] > pend:
-                continue
-            pal = data[poff : poff + m["palette_size"]] if m["palette_size"] > 0 and poff + m["palette_size"] <= pend else b""
-            yield RawTPKTexture(archive, section, m["name"], m["name_hash"], m["width"], m["height"], m["psm"], m["clut_psm"], m["num_palette_entries"], pi_b, data[ioff : ioff + m["image_size"]], pal)
+            if ioff + m["image_size"] <= pend:
+                pal = data[poff : poff + m["palette_size"]] if m["palette_size"] > 0 and poff + m["palette_size"] <= pend else b""
+                yield RawTPKTexture(archive, section, m["name"], m["name_hash"], m["width"], m["height"], m["psm"], m["clut_psm"], m["num_palette_entries"], pi_b, data[ioff : ioff + m["image_size"]], pal)
 
 
 def iter_streaml2ra_sections(l2ra_bytes: bytes, stream_bytes: bytes) -> Iterator[Tuple[str, int, bytes]]:
@@ -387,10 +362,8 @@ def verify_against_dumps(iso_path: Path, dumps_dir: Path, include_all_cars: bool
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Offline pure-math PCSX2 v2.6.3 texture hasher.")
-    ap.add_argument("--iso", type=Path, required=True)
-    ap.add_argument("--verify-dumps", type=Path, required=True)
-    ap.add_argument("--all-cars", action="store_true")
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--iso", type=Path, required=True); ap.add_argument("--verify-dumps", type=Path, required=True)
+    ap.add_argument("--all-cars", action="store_true"); ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     rep = verify_against_dumps(args.iso.expanduser().resolve(), args.verify_dumps.expanduser().resolve(), args.all_cars)
     print(json.dumps(rep, indent=2) if args.json else f"Matched {rep['matched_total']}/{rep['total_dumps']} | CLUT-covered: {rep['clut_matched']}/{rep['clut_covered']} (mismatches={rep['clut_mismatched']})")
