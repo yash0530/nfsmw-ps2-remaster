@@ -1,165 +1,66 @@
-# NFSMW: Rockport 2026 — Player's Guide
+# NFSMW: Rockport 2026 — PS2 / PCSX2 Player's Guide (`SLUS-21351`)
 
-Drive the entire **6.66 × 6.27 km Rockport City** island natively on Apple Silicon with **Metal 4 Hardware Ray Tracing**, **120 FPS MetalFX Frame Generation**, **40 playable NFSMW cars**, **authentic VLT handling**, **decoded Ginsu PSOLA engine audio**, and **20 live AI traffic & Heat 1–5 police pursuits**.
+Play the **real PlayStation 2 *Need for Speed: Most Wanted – Black Edition* (`SLUS-21351`)** inside **PCSX2** with non-destructive ISO patches, verified `.pnach` visual/display enhancements, upgraded lighting, optional VU1 car geometry, and BC7 texture replacements — preserving the original story, physics, FMVs, and transferable `.ps2` memory-card saves (`BASLUS-21351`).
 
-> Looking for milestone status? See the live table in [PROGRESS.md](PROGRESS.md).
+> Looking for milestone status or engineering plans? See [PROGRESS.md](PROGRESS.md) and [ROADMAP.md](ROADMAP.md).
+>
+> *Note: Our earlier experimental standalone Apple Silicon Metal RT prototype has been removed from `main` and archived separately on branch [`archive/standalone-metal-rt-v1.4`](https://github.com/yash0530/nfsmw-ps2-remaster/tree/archive/standalone-metal-rt-v1.4).*
 
 ---
 
-## 1. Requirements & Legal BYO-ISO Setup
+## 1. Requirements & "Bring Your Own ISO" Policy
 
-- **Hardware / OS**: Apple Silicon Mac with Metal hardware ray tracing (M3/M4/M5; Metal 4 + `MTLFXTemporalDenoisedScaler` + `MTLFXFrameInterpolator` supported on macOS 15+; benchmarked at `103–128 FPS @ 1080p` on Apple M5 Pro).
-- **Toolchain**: Xcode Command Line Tools (`swiftc`), Python 3.9+ (`Pillow`, `numpy`), and Rust (`cargo`) for the multi-threaded BC7 texture batch encoder.
-- **Legal Game ISO**: Your own legal copy of *Need for Speed: Most Wanted — Black Edition* (PS2, `SLUS-21351`). Point `NFSMW_ISO` at it — all tools open the ISO strictly read-only (`'rb'`) and write extracted assets exclusively into gitignored `build/`:
+- **Emulator**: PCSX2 v2.6.3+ (macOS Metal / Vulkan / Direct3D12) with your own legally dumped PS2 BIOS.
+- **Game Disc**: Your own legal copy of *Need for Speed: Most Wanted – Black Edition* (NTSC-U, `SLUS-21351`, stock ELF CRC `0518D274`). All tools open your original ISO strictly read-only (`'rb'`) and never modify it.
+- **Toolchain**: Python 3.11+ (`Pillow`, `numpy`) and Rust (`cargo`) for the pure-Rust BC7 DDS texture encoder (`tools/dds_encoder_rs/`).
 
 ```bash
 export NFSMW_ISO="/path/to/Need for Speed - Most Wanted - Black Edition.iso"
 ```
 
-*(Zero copyrighted Electronic Arts or Sony assets are stored in this repository. See [ASSETS_LICENSE.md](../ASSETS_LICENSE.md).)*
+*(Zero copyrighted Electronic Arts or Sony assets are distributed in this repository. See [ASSETS_LICENSE.md](../ASSETS_LICENSE.md). `SLUS-21351` decompilation symbol names are credited to [`dbalatoni13/nfsmw`](https://github.com/dbalatoni13/nfsmw).)*
 
 ---
 
-## 2. Two-Command Quickstart
+## 2. Quick Start: Build Modded ISO & Install Per-Game PCSX2 Profile
 
 ```bash
-# 1. Export all 718 Rockport sections (.rkpt v2 BC7, ~209 MiB) + VLT physics, Ginsu audio & AI pack (~8.5 MiB)
-make export-rockport-full
-
-# 2. Build & launch native Metal 4 RT Rockport at 100–128 FPS (MetalFX + 2x Frame Generation)
-make play-rockport
+# Build a non-destructive modded ISO into build/ and install per-game PCSX2 settings + companion .pnach
+make build-v0.5 ISO="$NFSMW_ISO"
 ```
 
-### Handy Make Shortcuts
+Or run the CLI directly with custom renderer/scaling flags:
 
-*(Pass `ISO="/path/to/iso"` or `export NFSMW_ISO=...`, and pass any extra engine flags via `ROCKPORT_ARGS="..."` — e.g. `make play-rockport ROCKPORT_ARGS="--car GALLARDO --preset night_neon --rain 0.88"`.)*
+```bash
+python3 tools/rockport_cli.py build \
+  --profile rockport2026_v0.5 \
+  --source "$NFSMW_ISO" \
+  --install-pcsx2 \
+  --renderer metal --upscale 6 --anisotropy 16 --ee-cycle-rate 2
+```
+
+- **Global PCSX2 safety**: `setup_pcsx2_macos.py` writes only per-game `gamesettings/SLUS-21351_<CRC>.ini` and `patches/SLUS-21351_<CRC>.pnach` files — it never overwrites your global `PCSX2.ini` or existing `.ps2` memory cards.
+- **Save compatibility**: `SYSTEM.CNF` (`SLUS_213.51`) stays intact, so standard `BASLUS-21351` saves on `Mcd001.ps2` remain transferable between stock and modded ISOs.
+
+---
+
+## 3. Useful Make Commands
 
 | Command | What It Does |
 | :--- | :--- |
-| `make export-rockport-full` | Exports full-island `build/rockport_world/rockport_full.rkpt` (`718` secs, `.rkpt` v2 BC7) + `build/gameplay_pack/` (VLT stats, Ginsu audio, 7 AI archetypes, events) + `build/music_pack/` |
-| `make export-music-pack` | Decodes 26 licensed **EA TRAX** + 14 pursuit score tracks from `MW_MUSIC.MUS` into gitignored `build/music_pack/` (auto-called by `make export-rockport-full`) |
-| `make export-events-pack` | Decodes 15 Blacklist Boss Duels, 18 Checkpoint Sprints & 10 Speedtraps from `GAMEPLAY.BIN` / `GLOBALB.BUN` into `build/gameplay_pack/events.json` (auto-called by `make export-rockport-full`) |
-| `make build-rockport` | Compiles `native_metal_rt/` into `build/metal_rt_v06/RockportMetalRT` |
-| `make play-rockport` | Ensures build & exports exist and launches full-island Rockport with `--frame-gen on --hud $(ROCKPORT_ARGS)` |
-| `make play-pursuit` | Launches straight into an active **Heat 3 Rosewood Blvd police pursuit** (`--landmark "Rosewood Blvd" --pursuit 3 --frame-gen on --hud $(ROCKPORT_ARGS)`) |
-| `make bench-rockport` | Builds & runs the automated 6-district full-island Frame-Gen & VRAM benchmark (`tests/test_multi_district_bench.py`) |
-
-### Popular CLI Launch Flags (`build/metal_rt_v06/RockportMetalRT`)
-
-```bash
-# Night rain Heat 4 pursuit in a Lamborghini Gallardo at Downtown East Park
-build/metal_rt_v06/RockportMetalRT \
-  --world build/rockport_world/rockport_full.rkpt \
-  --car GALLARDO --landmark "Downtown East Park" \
-  --preset night_neon --rain 0.88 --pursuit 4 --frame-gen on --hud
-
-# Golden hour Ford GT coastal cruise at Camden Beach
-build/metal_rt_v06/RockportMetalRT \
-  --world build/rockport_world/rockport_full.rkpt \
-  --car FORDGT --landmark 2 --time-of-day 17.5 --frame-gen on --hud
-```
-
-| Flag | Values / Default | Description |
-| :--- | :--- | :--- |
-| `--world <path>` | `build/rockport_world/rockport_full.rkpt` | Full-island `.rkpt` v2 (or pilot v1 `rosewood.rkpt` / `downtown.rkpt`) |
-| `--car <NAME>` | `m3_gtr` (or any of 40 ISO car names) | Select starting car (auto-extracts on demand from `$NFSMW_ISO` into `build/car_cache/`) |
-| `--landmark <0..5\|name>` | `0` (`Rosewood Blvd`) | Spawn directly at any of the 6 verified Rockport districts |
-| `--preset <key>` | `golden_hour` \| `night_neon` \| `daylight` | Atmospheric lighting & wet-road preset |
-| `--time-of-day <0..24>` | Preset default | Pin exact solar/lunar hour (`6.2` dawn, `13.5` noon, `17.5` golden hour, `22.5` night) |
-| `--rain <0..1>` | Preset default | Override live rain intensity & concentric puddle ripple buildup |
-| `--pursuit [1..5]` | Off (press `F` live) | Start immediately in an active Heat 1–5 Rockport PD chase (`--heat <1..5>` also accepted) |
-| `--nos` / `--speedbreaker` | Off | Engage NOS boost / 0.35× amber bullet-time on launch (great for benchmarks & captures) |
-| `--frame-gen <on\|off>` | `off` (`on` via `make play-rockport`) | Enable standalone post-ACES, pre-HUD 2× `MTLFXFrameInterpolator` (zero HUD warp) |
-| `--denoise <mode>` | `metalfx` \| `svgf` \| `off` | Hardware MXU `MTLFXTemporalDenoisedScaler` (default), À-Trous SVGF, or raw RT |
-| `--camera` / `--camera-mode <mode>` | `chase` \| `close` \| `hood` \| `bumper` \| `cockpit` | Starting camera preset (`hero`/`street`/`overhead` showcase aliases also supported) |
-| `--photo-mode` | Off (press `O` live) | Launch directly into 6-DoF GT7 Photo Mode with hardware RT thin-lens DoF bokeh |
-| `--focal-mm <mm>` / `--dof-fstop <f>` | `50` (`24..135`) / `2.0` (`1.4..16`) | Set Photo Mode lens focal length and aperture f-stop for 7-blade optical bokeh |
-| `--photo-snap-4k <out.png>` | Off (`Enter` in Photo Mode) | Render a seamless `2×2` tiled `3840×2160` 4K 64-SPP path-traced snap (`0 MB` extra VRAM) |
-| `--drift-vfx` | Live on drift/scrape | Force active drift skidmarks, ballistic sparks & tire smoke for demos/benchmarks |
-| `--pvs <on\|off>` | `on` (press `J` live) | Enable EA PVS `2–4.8 km` highway & cross-bay skyline visibility streaming (`435` zones) |
-| `--hud` / `--no-hud` | Off in static, On in drive bench | Toggle NFSMW tachometer, NOS/Speedbreaker bars, Pursuit Heat & rotating GPU minimap |
-| `--no-ai` / `--no-audio` | Enabled by default | Disable AI traffic/cops or live `AVAudioEngine` audio for isolated graphics testing |
-| `--no-music` / `--music-track <idx>` | Enabled / Track `0` | Mute EA TRAX soundtrack or start on a specific decoded `MW_MUSIC.MUS` track index |
-| `--show-trax` | Auto on track change | Keep the post-FI top-left `[EA TRAX]` + `[REVERB]` OLED banner visible (great for captures) |
-| `--event <id\|type>` | Off (`sprint` \| `speedtrap` \| `boss15..boss1`) | Launch straight into a Checkpoint Sprint, Speedtrap, or Blacklist Boss Duel (e.g. `--event boss1`) |
-| `--world-map` | Off (press `M` live) | Open the interactive O(1) 6,538-road full-island Rockport World Map overlay on launch |
+| `make status` | Inspect source ISO (read-only), built ISOs, installed PCSX2 profiles, and tool readiness |
+| `make profiles` | Validate and list all declarative build profiles in `patches/profiles/` |
+| `make build-v0.5` | Build the `rockport2026_v0.5` ISO non-destructively and install per-game PCSX2 settings |
+| `make setup-pcsx2` | Install per-game 4K Metal PCSX2 settings & `.pnach` for stock `SLUS-21351` (`0518D274`) |
+| `make enhance-world` | Enhance dumped PCSX2 textures to BC7 DDS (preserving PS2 GS `0x80` alpha) |
+| `make build-dds` | Build the native Rust `rockport_dds` BC7 encoder (`tools/dds_encoder_rs/`) |
+| `make verify` | Run `py_compile`, hygiene audit, `.pnach` linter, profile checks, and offline tests |
+| `make test` | Run the full `unittest` suite (`NFSMW_ISO=/nonexistent` for offline CI mode) |
 
 ---
 
-## 3. Controls (Keyboard, Mouse & Gamepad)
+## 4. Using `.pnach` Patches Without Building a Modded ISO
 
-Both **PS5 DualSense** and **Xbox Wireless** controllers work out of the box via Apple `GameController` alongside keyboard & mouse.
-
-| Action | Keyboard / Mouse | PS5 DualSense / Xbox Controller |
-| :--- | :--- | :--- |
-| **Accelerate** | `W` or `Up Arrow` | `R2` / `RT` (analog) |
-| **Brake / Reverse** | `S` or `Down Arrow` | `L2` / `LT` (analog) |
-| **Steer Left / Right** | `A` / `D` or `Left` / `Right Arrow` | `Left Stick` (cubic analog curve) |
-| **Handbrake / Drift** | `Space` | `Circle` / `B` |
-| **NOS Boost** | `Shift` or `Z` | `Cross` / `A` or `R1` / `RB` |
-| **Speedbreaker (0.35× Slow-Mo)** | `X` or `Tab` | `Triangle` / `Y` or `L1` / `LB` |
-| **Instant Police Pursuit (Heat 1→5)** | `F` | — |
-| **Quick-Start Nearest Event / Abort Event** | `E` / `Shift+E` | — |
-| **Interactive Full-Island World Map** | `M` *(Map controls: `WASD`/Arrows pan, `+/-` zoom, `Tab` next marker, `Enter` go/launch, `M`/`Esc` close)* | — |
-| **Cycle Landmark Teleport (6 Districts)** | `V` | — |
-| **Next / Previous Garage Car (40 Cars)** | `G` / `Shift+G` | — |
-| **Cycle Camera (5-Cam Driving Rig)** | `C` *(Chase → Close Chase → Hood w/ real RT reflections → Bumper → Cockpit w/ GT3 carbon wheel & 10-LED RPM bar)* | — |
-| **GT7 Photo Mode (6-DoF + RT Bokeh)** | `O` *(Photo controls: `WASD`/`Q`/`E` 6-DoF fly, `+/-` 24–135mm lens, `,`/`.` `f/1.4–f/16` aperture, `F` auto-focus car, `Enter` 4K 64-SPP PNG snap, `O`/`Esc` exit)* | — |
-| **Lighting Presets** | `1` Golden Hour · `2` Night Rain · `3` Daylight | — |
-| **Toggle Live 24h Day/Night Cycle** | `4` | — |
-| **Toggle Rain (`0.0` ↔ `0.88`)** | `B` | — |
-| **Toggle 120 FPS MetalFX Frame-Gen** | `K` | — |
-| **Toggle EA PVS `2–4.8 km` Skyline Vistas** | `J` *(default ON)* | — |
-| **Toggle NFSMW HUD & Rotating Minimap** | `H` | — |
-| **Previous / Next EA TRAX Song** | `[` / `]` | — |
-| **Mute / Unmute EA TRAX Soundtrack** | `U` | — |
-| **Toggle BMW M3 GTR ALMS Livery** | `L` | — |
-| **Toggle Hardware Ray Tracing** | `T` | — |
-| **Cycle Denoiser (`metalfx` / `svgf` / `off`)** | `N` | — |
-| **Reset Car & Clear Pursuit** | `R` | — |
-| **Save 64-SPP `1920×1080` PNG Screenshot** | `P` | — |
-| **Orbit Camera / Zoom** | `Mouse Drag` / `Scroll Wheel` | — |
-| **Quit** | `Esc` | — |
-
----
-
-## 4. What's Included in `v1.4.0`
-
-### Full-Island Rockport Streaming (6 Teleport Districts)
-All **718 sections** (`638` spatial + `80` horizon panorama) stream seamlessly by XZ AABB distance (`350m` load / `430m` unload hysteresis) over Rockport's real `4,385`-node / `6,538`-segment (`229.25 km`) `WRoadNetwork`, illuminated by **`4,309` real extracted streetlamps, signals, and storefronts** in a `128×128×8` spatial light grid — using only **`~305 MB`** of GPU world+AI VRAM.
-
-| Index | Landmark (`--landmark`) | Highlight |
-| :---: | :--- | :--- |
-| `0` | `Rosewood Blvd` | Iconic autumn boulevard with botanical Italian cypresses & golden-hour clearcoat reflections |
-| `1` | `Downtown East Park` | Dense wet-asphalt city intersections, storefronts & real-streetlamp night-rain reflections |
-| `2` | `Camden Beach` | Coastal hills, industrial skyline & Bayshore Blvd tunnel |
-| `3` | `Highway 99` | High-speed multi-lane interstate ring built for `300+ km/h` NOS sprints |
-| `4` | `Rosewood College` | Sweeping campus curves & elevation changes |
-| `5` | `Rockport Waterfront` | Harbor-side avenues & sweeping bridge approaches |
-
-Press **`V`** in-game anytime to teleport cleanly to the next district!
-
-### 40-Car On-Demand Playable Garage
-Press **`G`** / **`Shift+G`** in-game or launch with `--car <NAME>` to drive **any of all 40 playable NFSMW 2005 cars** — extracted on demand in `~1–2s` from your clean ISO (`build/car_cache/`) with seam-locked adaptive PN subdivision, exact `bstringhash` headlights/taillights, and auto-fitted wheel wells.
-
-- **Flagship Hero Aliases**: `m3_gtr` (`BMWM3GTRE46`), `carrera_gt` (`CARRERAGT`), `gallardo` (`GALLARDO`), `corvette_c6r` (`CORVETTEC6R`), `ford_gt` (`FORDGT`), `murcielago` (`MURCIELAGO`), `rx7` (`RX7`), `slr` (`SLR`), `viper` (`VIPER`), `db9` (`DB9`), `supra` (`SUPRA`), `evo8` (`LANCEREVO8`), `wrx_sti` (`IMPREZAWRX`), `mustang_gt` (`MUSTANGGT`), `gti` (`GTI`), `cayman_s` (`CAYMANS`), `911_gt2` (`911GT2`), `911_turbo` (`911TURBO`).
-- **List all 40 cars / batch-extract Top-15 flagship icons**: `python3 tools/extract_rt_car.py --list` or `python3 tools/extract_rt_car.py --top15`
-
-### Authentic VLT Physics, Ginsu PSOLA Audio & Heat 1–5 Police Pursuits
-- **VLT Handling (`RTPhysics.swift`)**: `48` decoded `ATTRIBUTES.BIN` vehicle profiles (9-point torque curves, 6-speed auto gearbox, RWD vs AWD `TORQUE_SPLIT`, e-brake drift slip & `YAW_CONTROL`, spring-damper pitch/roll over 4-wheel GPU BVH ground probes, airborne gravity, `+65%` NOS boost with dual Mach-diamond exhaust flames & FOV kick, and `0.35×` amber Speedbreaker bullet-time).
-- **Live PS2 Engine & Siren Audio (`RTAudioEngine.swift`)**: Lock-free `AVAudioEngine` granular PSOLA engine synth decoded from `9` real EA-XAS v0 `Gnsu v20` accel/decel banks (including the **BMW M3 GTR straight-cut gearbox whine**), plus `20` Sony SPU-ADPCM SFX (turbo spool/BOV flutter, drift tire screech, NOS roar/purge, shift backfire pops, Speedbreaker LPF, rain/wind bed, and 3D stereo Doppler police sirens).
-- **EA TRAX Soundtrack & Acoustic Tunnel Reverb (`v1.1.0`)**: Streams all **26 licensed EA TRAX** + **14 interactive pursuit score tracks** decoded from `MW_MUSIC.MUS` / `MW_MUSIC.MPF` (`[`/`]` skip, `U` mute, auto-ducking during Speedbreaker & pursuits) with a post-FI sliding `[EA TRAX]` OLED banner; upward sky-occlusion rays smoothly drive **`AVAudioUnitReverb`** (4% → 42% wet + bass warmth, indicated by `[REVERB]`) inside Bayshore & Rockport tunnels and underpasses.
-- **20 Live AI Traffic & Heat 1–5 Police (`RTGameWorld.swift` + `RTAIVehicleLoader.swift`)**: Up to `16` live traffic cars + `4` pursuing Rockport PD units (`COPMIDSIZE` Heat 1–2 → `COPGTO` Heat 3–4 → `COPSPORT` Heat 5) riding real hills via `aiRoadProbeKernel`, casting blazing alternating **red/blue ray-traced roof lightbar sweeps** across wet streets and your car's clearcoat, tracked on a live post-FI rotating GPU minimap with Heat/Bounty/Evade/Busted HUD.
-- **Race Events, Blacklist 15 Boss Duels & Interactive World Map (`v1.2.0`)**: `15` Blacklist Boss Duels (`Sonny` #15 through `Razor` #1 with signature cars, paint & road-graph race AI), `18` Checkpoint Sprints with 3D glowing chevron arches, `10` Speedtraps with holographic radar laser gates, and an O(1) pre-baked `1024×1024` full-island World Map (`6,538` roads / `229 km`, press `M`) supporting pan, zoom, GPS preview, fast-travel & instant event launch.
-- **GT7 Photo Mode, Drift VFX, 5-Camera Rig & 1-Ray RIS Streetlamp Shadows (`v1.3.0`)**: Press `O` for 6-DoF Photo Mode with physically authentic 7-blade hardware-RT thin-lens DoF bokeh (`9.8/10` 4K) and zero-extra-VRAM `2×2` tiled **4K 64-SPP** snapshots (`Enter`); analytical RT drift skidmarks, ballistic metal sparks & volumetric tire smoke (`RTVFXBuffer`, zero TLAS churn); 5-camera rig (`C`) including real-RT Hood Cam and post-FI GT3 carbon steering wheel + 10-LED shift-bar Cockpit Cam; and **1-ray RIS real streetlamp shadows** across wet Downtown & Rosewood nights.
-- **Full-Island Visual Ultra (`v1.4.0` Grand Finale — `9.5/10`)**: Real **EA PVS (`0x80034150`)** `435`-zone highway & cross-bay vistas stretching **`2–4.8 km`** (toggle `J`, default ON), **`8,740`** all-district sculpted botanical trees, bushes & coastal beachgrass across Rosewood, Downtown & Camden Beach, **6-wave directional Gerstner animated harbor waves** with deep-bay absorption & shoreline foam, and **Top-15 flagship/Blacklist car visual polish** (`python3 tools/extract_rt_car.py --top15`) sustaining **`101–124 FPS`** 6-district Frame-Gen in **`306 MB` VRAM**.
-
----
-
-## 5. Performance & Troubleshooting Tips
-
-- **Locked `103–128 FPS` @ `1080p`**: Keep `--frame-gen on` (or toggle **`K`** live). The NFSMW tachometer, NOS/Speedbreaker bars, Pursuit status, and rotating minimap run in `hudOverlayKernel` **after** `MTLFXFrameInterpolator` on both real and interpolated frames so text and digits never warp.
-- **Native Zero-FG Mode**: Press **`K`** (or `--frame-gen off`) for `58–68 FPS` native `MTLFXTemporalDenoisedScaler` driving with 20 live AI/cops.
-- **Need a 4K Beauty Shot?**: Press **`P`** anytime (or pass `--headless --world build/rockport_world/rockport_full.rkpt --landmark 1 --width 3840 --height 2160 --spp 48 --preset night_neon --rain 0.88 --out shot_4k.png`) to render a silky path-traced Downtown Rockport PNG straight to disk.
-- **Missing ISO / Pack Error**: Confirm `echo "$NFSMW_ISO"` points to your `SLUS-21351` `.iso` file and re-run `make export-rockport-full`.
-- **Track 1 (PS2 / PCSX2 4K Remaster)**: Frozen at `v0.5.0` (`8.9 / 10` Video QA PASS). See [README.md](../README.md) for the one-command PCSX2 ISO build workflow.
+If you prefer playing your unmodified retail ISO (`CRC: 0518D274`), copy [`patches/pnach/SLUS-21351_0518D274.pnach`](../patches/pnach/SLUS-21351_0518D274.pnach) into PCSX2's `patches/` folder (or run `make setup-pcsx2`) and toggle individual sections under **Game Properties → Patches**:
+- Enable only **one** aspect-ratio section at a time (`[Widescreen 16:9]`, `[Ultrawide 21:9]`, or `[Wider Camera FOV +12%]`).
+- For 60 FPS gameplay on capable hardware, set **EE Cycle Rate** to `180%–300%` (`EECycleRate = 1` or `2`) and optionally enable `[60 FPS Companion: Fix ScreenEFX 30Hz Timestep (Experimental)]`.

@@ -786,19 +786,19 @@ class TestV05ProfilesAndWave45Cli(unittest.TestCase):
         self.assertEqual(Path(fa["lighting_recipes"][0]["recipe"]).name, "rockport2026_forza_autumn.json")
         self.assertEqual(fa["zz_override_count"], 12)
 
-    def test_collect_tool_readiness_reports_wave4_and_key_driver(self) -> None:
+    def test_collect_tool_readiness_reports_dds_and_key_driver(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            rt4 = root / "build" / "metal_rt_wave4" / "RockportMetalRT"
+            dds = root / "build" / "dds_wave3" / "target" / "release" / "rockport_dds"
             kd = root / "build" / "flywheel" / "key_driver"
-            rt4.parent.mkdir(parents=True)
+            dds.parent.mkdir(parents=True)
             kd.parent.mkdir(parents=True)
-            rt4.write_bytes(b"MACH_O_STUB")
+            dds.write_bytes(b"MACH_O_STUB")
             kd.write_bytes(b"MACH_O_STUB")
 
             readiness = rockport_cli.collect_tool_readiness(root)
-            self.assertTrue(readiness["metal_rt_wave4_built"])
-            self.assertTrue(readiness["metal_rt_built"])
+            self.assertTrue(readiness["rockport_dds_built"])
+            self.assertTrue(readiness["dds_encoder_ready"])
             self.assertTrue(readiness["key_driver_built"])
 
     def test_wave45_cli_subcommands_delegate_cleanly(self) -> None:
@@ -878,87 +878,6 @@ class TestV05ProfilesAndWave45Cli(unittest.TestCase):
         self.assertEqual(Path(recorded[5][1]).name, "race_flywheel.py")
         self.assertEqual(recorded[5][2], "analyze")
         self.assertIn("frame_01.png", recorded[5])
-
-    def test_v06_export_world_and_metal_rt_cli_dispatch(self) -> None:
-        recorded: List[List[str]] = []
-
-        def fake_run(cmd, **kwargs):
-            recorded.append(list(cmd))
-            return subprocess.CompletedProcess(cmd, 0)
-
-        with mock.patch("rockport_cli.subprocess.run", side_effect=fake_run):
-            rc_xw = rockport_cli.main(
-                [
-                    "export-world",
-                    "--iso",
-                    "stock.iso",
-                    "--district",
-                    "all",
-                    "--out",
-                    "build/rockport_world",
-                    "--no-enhance-textures",
-                    "--json",
-                ]
-            )
-            rc_rt = rockport_cli.main(
-                [
-                    "metal-rt",
-                    "--world",
-                    "build/rockport_world/rosewood.rkpt",
-                    "--car",
-                    "m3_gtr",
-                    "--preset",
-                    "golden_hour",
-                    "--denoise",
-                    "metalfx",
-                    "--camera-mode",
-                    "chase",
-                    "--drive-bench",
-                    "30",
-                    "--hud",
-                    "--headless",
-                    "--out",
-                    "build/rockport_world/bench.png",
-                ]
-            )
-
-        self.assertEqual((rc_xw, rc_rt), (0, 0))
-        self.assertEqual(len(recorded), 3)
-
-        # 1. export-world -> export_rockport_world.py
-        self.assertEqual(Path(recorded[0][1]).name, "export_rockport_world.py")
-        self.assertIn("--district", recorded[0])
-        self.assertIn("all", recorded[0])
-        self.assertIn("--out-dir", recorded[0])
-        self.assertIn("build/rockport_world", recorded[0])
-        self.assertIn("--no-enhance-textures", recorded[0])
-        self.assertIn("--json", recorded[0])
-
-        # 2. metal-rt builds native_metal_rt into build/metal_rt_v06
-        self.assertEqual(recorded[1][0], "make")
-        self.assertTrue(any("OUT_DIR=" in a and "metal_rt_v06" in a for a in recorded[1]))
-
-        # 3. metal-rt launches RockportMetalRT with all v0.6 flags
-        self.assertEqual(Path(recorded[2][0]).name, "RockportMetalRT")
-        for tok in (
-            "--world",
-            "build/rockport_world/rosewood.rkpt",
-            "--car",
-            "m3_gtr",
-            "--preset",
-            "golden_hour",
-            "--denoise",
-            "metalfx",
-            "--camera-mode",
-            "chase",
-            "--drive-bench",
-            "30",
-            "--hud",
-            "--headless",
-            "--out",
-            "build/rockport_world/bench.png",
-        ):
-            self.assertIn(tok, recorded[2])
 
 
 if __name__ == "__main__":

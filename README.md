@@ -68,11 +68,10 @@ nfsmw-ps2-remaster/
 ├── .github/workflows/ci.yml        # Automated Ubuntu (Py 3.11/3.12) + macOS CI & Rust BC7 tests
 ├── assets_cc0/                     # CC0/OFL audio, livery, & material rules
 ├── docs/
-│   ├── PLAY_GUIDE.md               # Player guide & PCSX2 configuration notes
+│   ├── PLAY_GUIDE.md               # Player guide & PCSX2 setup instructions
 │   ├── PROGRESS.md                 # Milestone progress tracker
 │   ├── ROADMAP.md                  # PS2/PCSX2 engineering roadmap
 │   └── research/                   # SLUS-21351 binary/format research notes
-├── native_metal_rt/                # Archived experimental Metal RT prototype (see archive/standalone-metal-rt-v1.4)
 ├── patches/                        # ELF caves, 20 MIPS patches, lighting, .pnach, profiles, VLT
 ├── shaders/                        # Post-processing shader experiments
 ├── src/ps2_mod/                    # Reproducible ps2dev/ps2sdk C plugin blueprint
