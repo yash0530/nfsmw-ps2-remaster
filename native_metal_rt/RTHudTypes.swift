@@ -421,3 +421,58 @@ struct RTEventHudUniforms {
         }
     }
 }
+
+// MARK: - v1.3.0 Post-FrameGen GT7 Photo Mode Viewfinder & Cockpit Steering Wheel ABI (hudOverlayKernel buffer(6))
+
+enum RTPhotoCockpitHudFlagBits {
+    static let photoModeActive: UInt32       = 1 << 0
+    static let hideViewfinderForSnap: UInt32 = 1 << 1
+    static let cockpitActive: UInt32         = 1 << 2
+    static let showRuleOfThirds: UInt32      = 1 << 3
+}
+
+/// 80-byte 16B-aligned Post-FI Photo Mode Viewfinder & GT7 Cockpit Wheel uniform block
+/// bound at `hudOverlayKernel buffer(6)` (slots `buffer(0..5)` & `texture(0..2)` untouched).
+/// Zero-initialized default disables both widgets with zero overhead.
+struct RTPhotoCockpitHudUniforms {
+    // 0..15: photo mode viewfinder telemetry
+    var photoFlags: UInt32 = 0       // bit0=photoModeActive, bit1=hideViewfinderForSnap, bit2=cockpitActive, bit3=showRuleOfThirds
+    var focalMm: Float = 50.0        // 24..135 mm
+    var fStop: Float = 2.0           // 1.4..16.0
+    var focusDistM: Float = 5.0      // 1.5..80.0 m
+
+    // 16..31: cockpit steering wheel & hub OLED telemetry
+    var steeringAngleRad: Float = 0.0 // + = counter-clockwise (left turn), - = clockwise (right turn)
+    var rpmNorm: Float = 0.0          // 0..1 progressive shift-LED bar
+    var speedKmh: Float = 0.0         // hub OLED digital speed
+    var gearInt: Int32 = 1            // -1=R, 0=N, 1..6
+
+    // 32..47: active camera & drift VFX telemetry
+    var cameraMode: UInt32 = 0        // 0=chase, 1=closeChase, 2=hood, 3=bumper, 4=cockpit
+    var skidActiveCount: UInt32 = 0
+    var sparkActiveCount: UInt32 = 0
+    var smokeActiveCount: UInt32 = 0
+
+    // 48..63: clock & reserved scalars
+    var simTimeSec: Float = 0.0
+    var rsv0: Float = 0.0
+    var rsv1: Float = 0.0
+    var rsv2: Float = 0.0
+
+    // 64..79: 16B-aligned padding vector
+    var pad0: SIMD4<Float> = .zero
+
+    static let byteSize = 80
+
+    static func assertLayout() {
+        precondition(MemoryLayout<RTPhotoCockpitHudUniforms>.stride == byteSize,
+                     "RTPhotoCockpitHudUniforms stride (\(MemoryLayout<RTPhotoCockpitHudUniforms>.stride)) must be \(byteSize) bytes")
+        precondition(MemoryLayout<RTPhotoCockpitHudUniforms>.alignment == 16,
+                     "RTPhotoCockpitHudUniforms alignment (\(MemoryLayout<RTPhotoCockpitHudUniforms>.alignment)) must be 16 bytes")
+        precondition(MemoryLayout<RTPhotoCockpitHudUniforms>.offset(of: \.photoFlags) == 0, "photoFlags offset must be 0")
+        precondition(MemoryLayout<RTPhotoCockpitHudUniforms>.offset(of: \.steeringAngleRad) == 16, "steeringAngleRad offset must be 16")
+        precondition(MemoryLayout<RTPhotoCockpitHudUniforms>.offset(of: \.cameraMode) == 32, "cameraMode offset must be 32")
+        precondition(MemoryLayout<RTPhotoCockpitHudUniforms>.offset(of: \.simTimeSec) == 48, "simTimeSec offset must be 48")
+        precondition(MemoryLayout<RTPhotoCockpitHudUniforms>.offset(of: \.pad0) == 64, "pad0 offset must be 64")
+    }
+}

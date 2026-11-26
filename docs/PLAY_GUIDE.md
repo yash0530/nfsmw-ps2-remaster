@@ -71,7 +71,11 @@ build/metal_rt_v06/RockportMetalRT \
 | `--nos` / `--speedbreaker` | Off | Engage NOS boost / 0.35× amber bullet-time on launch (great for benchmarks & captures) |
 | `--frame-gen <on\|off>` | `off` (`on` via `make play-rockport`) | Enable standalone post-ACES, pre-HUD 2× `MTLFXFrameInterpolator` (zero HUD warp) |
 | `--denoise <mode>` | `metalfx` \| `svgf` \| `off` | Hardware MXU `MTLFXTemporalDenoisedScaler` (default), À-Trous SVGF, or raw RT |
-| `--camera-mode <mode>` | `chase` \| `hero` \| `street` \| `overhead` | Starting camera preset |
+| `--camera` / `--camera-mode <mode>` | `chase` \| `close` \| `hood` \| `bumper` \| `cockpit` | Starting camera preset (`hero`/`street`/`overhead` showcase aliases also supported) |
+| `--photo-mode` | Off (press `O` live) | Launch directly into 6-DoF GT7 Photo Mode with hardware RT thin-lens DoF bokeh |
+| `--focal-mm <mm>` / `--dof-fstop <f>` | `50` (`24..135`) / `2.0` (`1.4..16`) | Set Photo Mode lens focal length and aperture f-stop for 7-blade optical bokeh |
+| `--photo-snap-4k <out.png>` | Off (`Enter` in Photo Mode) | Render a seamless `2×2` tiled `3840×2160` 4K 64-SPP path-traced snap (`0 MB` extra VRAM) |
+| `--drift-vfx` | Live on drift/scrape | Force active drift skidmarks, ballistic sparks & tire smoke for demos/benchmarks |
 | `--hud` / `--no-hud` | Off in static, On in drive bench | Toggle NFSMW tachometer, NOS/Speedbreaker bars, Pursuit Heat & rotating GPU minimap |
 | `--no-ai` / `--no-audio` | Enabled by default | Disable AI traffic/cops or live `AVAudioEngine` audio for isolated graphics testing |
 | `--no-music` / `--music-track <idx>` | Enabled / Track `0` | Mute EA TRAX soundtrack or start on a specific decoded `MW_MUSIC.MUS` track index |
@@ -98,7 +102,8 @@ Both **PS5 DualSense** and **Xbox Wireless** controllers work out of the box via
 | **Interactive Full-Island World Map** | `M` *(Map controls: `WASD`/Arrows pan, `+/-` zoom, `Tab` next marker, `Enter` go/launch, `M`/`Esc` close)* | — |
 | **Cycle Landmark Teleport (6 Districts)** | `V` | — |
 | **Next / Previous Garage Car (40 Cars)** | `G` / `Shift+G` | — |
-| **Cycle Camera (`chase`/`hero`/`street`/`overhead`)** | `C` | — |
+| **Cycle Camera (5-Cam Driving Rig)** | `C` *(Chase → Close Chase → Hood w/ real RT reflections → Bumper → Cockpit w/ GT3 carbon wheel & 10-LED RPM bar)* | — |
+| **GT7 Photo Mode (6-DoF + RT Bokeh)** | `O` *(Photo controls: `WASD`/`Q`/`E` 6-DoF fly, `+/-` 24–135mm lens, `,`/`.` `f/1.4–f/16` aperture, `F` auto-focus car, `Enter` 4K 64-SPP PNG snap, `O`/`Esc` exit)* | — |
 | **Lighting Presets** | `1` Golden Hour · `2` Night Rain · `3` Daylight | — |
 | **Toggle Live 24h Day/Night Cycle** | `4` | — |
 | **Toggle Rain (`0.0` ↔ `0.88`)** | `B` | — |
@@ -144,6 +149,7 @@ Press **`G`** / **`Shift+G`** in-game or launch with `--car <NAME>` to drive **a
 - **EA TRAX Soundtrack & Acoustic Tunnel Reverb (`v1.1.0`)**: Streams all **26 licensed EA TRAX** + **14 interactive pursuit score tracks** decoded from `MW_MUSIC.MUS` / `MW_MUSIC.MPF` (`[`/`]` skip, `U` mute, auto-ducking during Speedbreaker & pursuits) with a post-FI sliding `[EA TRAX]` OLED banner; upward sky-occlusion rays smoothly drive **`AVAudioUnitReverb`** (4% → 42% wet + bass warmth, indicated by `[REVERB]`) inside Bayshore & Rockport tunnels and underpasses.
 - **20 Live AI Traffic & Heat 1–5 Police (`RTGameWorld.swift` + `RTAIVehicleLoader.swift`)**: Up to `16` live traffic cars + `4` pursuing Rockport PD units (`COPMIDSIZE` Heat 1–2 → `COPGTO` Heat 3–4 → `COPSPORT` Heat 5) riding real hills via `aiRoadProbeKernel`, casting blazing alternating **red/blue ray-traced roof lightbar sweeps** across wet streets and your car's clearcoat, tracked on a live post-FI rotating GPU minimap with Heat/Bounty/Evade/Busted HUD.
 - **Race Events, Blacklist 15 Boss Duels & Interactive World Map (`v1.2.0`)**: `15` Blacklist Boss Duels (`Sonny` #15 through `Razor` #1 with signature cars, paint & road-graph race AI), `18` Checkpoint Sprints with 3D glowing chevron arches, `10` Speedtraps with holographic radar laser gates, and an O(1) pre-baked `1024×1024` full-island World Map (`6,538` roads / `229 km`, press `M`) supporting pan, zoom, GPS preview, fast-travel & instant event launch.
+- **GT7 Photo Mode, Drift VFX, 5-Camera Rig & 1-Ray RIS Streetlamp Shadows (`v1.3.0`)**: Press `O` for 6-DoF Photo Mode with physically authentic 7-blade hardware-RT thin-lens DoF bokeh and zero-extra-VRAM `2×2` tiled **4K 64-SPP** snapshots (`Enter`); analytical RT drift skidmarks, ballistic metal sparks & volumetric tire smoke (`RTVFXBuffer`, zero TLAS churn); 5-camera rig (`C`) including real-RT Hood Cam and post-FI GT3 carbon steering wheel + 10-LED shift-bar Cockpit Cam; and **1-ray RIS real streetlamp shadows** across wet Downtown & Rosewood nights.
 
 ---
 

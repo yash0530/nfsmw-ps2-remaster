@@ -3,15 +3,16 @@
 // Concatenated after RayTracing.metal at runtime before device.makeLibrary(source:)
 // so HUD digits & minimap NEVER warp under MTLFXFrameInterpolator (zero #include).
 //
-// Locked Buffer & Texture Slots (per #40 / #41 + v1.1.0 EA TRAX + v1.2.0 Events/WorldMap):
+// Locked Buffer & Texture Slots (per #40 / #41 + v1.1.0 EA TRAX + v1.2.0 Events/WorldMap + v1.3.0 Photo/Cockpit):
 //   texture(0) = inLdrTex (read), texture(1) = outTex (write), texture(2) = worldMapTex (sample)
 //   sampler(0) = linearSamp
-//   buffer(0) = RTFrameUniforms       (unchanged base contract)
-//   buffer(1) = uint encodeSRGB       (unchanged base contract)
-//   buffer(2) = RTHudExtUniforms      (64 bytes, 16B aligned)
-//   buffer(3) = RTMinimapBuffer       (1,936 bytes <= 2 KB, 16B aligned)
-//   buffer(4) = RTMusicBannerUniforms (112 bytes <= 128 B, 16B aligned)
-//   buffer(5) = RTEventHudUniforms    (864 bytes <= 1 KB, 16B aligned)
+//   buffer(0) = RTFrameUniforms            (unchanged base contract)
+//   buffer(1) = uint encodeSRGB            (unchanged base contract)
+//   buffer(2) = RTHudExtUniforms           (64 bytes, 16B aligned)
+//   buffer(3) = RTMinimapBuffer            (1,936 bytes <= 2 KB, 16B aligned)
+//   buffer(4) = RTMusicBannerUniforms      (112 bytes <= 128 B, 16B aligned)
+//   buffer(5) = RTEventHudUniforms         (864 bytes <= 1 KB, 16B aligned)
+//   buffer(6) = RTPhotoCockpitHudUniforms  (80 bytes, 16B aligned)
 // ---------------------------------------------------------------------------
 
 struct RTHudExtUniforms {
@@ -110,6 +111,36 @@ static constant uint EVENT_HUD_FLAG_ACTIVE       = 1u << 0;
 static constant uint EVENT_HUD_FLAG_WORLD_MAP    = 1u << 1;
 static constant uint EVENT_HUD_FLAG_HAS_SELECTED = 1u << 2;
 static constant uint EVENT_HUD_FLAG_RADAR_FLASH  = 1u << 3;
+
+struct RTPhotoCockpitHudUniforms {
+    uint   photoFlags;       // bit0=photoModeActive, bit1=hideViewfinderForSnap, bit2=cockpitActive, bit3=showRuleOfThirds
+    float  focalMm;          // 24..135 mm
+    float  fStop;            // 1.4..16.0
+    float  focusDistM;       // 1.5..80.0 m
+
+    float  steeringAngleRad; // + = counter-clockwise (left turn), - = clockwise (right turn)
+    float  rpmNorm;          // 0..1 progressive shift-LED bar
+    float  speedKmh;         // hub OLED digital speed
+    int    gearInt;          // -1=R, 0=N, 1..6
+
+    uint   cameraMode;       // 0=chase, 1=closeChase, 2=hood, 3=bumper, 4=cockpit
+    uint   skidActiveCount;
+    uint   sparkActiveCount;
+    uint   smokeActiveCount;
+
+    float  simTimeSec;
+    float  rsv0;
+    float  rsv1;
+    float  rsv2;
+
+    float4 pad0;
+};
+static_assert(sizeof(RTPhotoCockpitHudUniforms) == 80, "RTPhotoCockpitHudUniforms must be 80 bytes (16B aligned)");
+
+static constant uint PHOTO_HUD_FLAG_ACTIVE       = 1u << 0;
+static constant uint PHOTO_HUD_FLAG_HIDE_SNAP    = 1u << 1;
+static constant uint PHOTO_HUD_FLAG_COCKPIT      = 1u << 2;
+static constant uint PHOTO_HUD_FLAG_RULE_THIRDS  = 1u << 3;
 
 static constant uint HUD_FLAG_VISIBLE        = 1u << 0;
 static constant uint HUD_FLAG_FRAMEGEN_ON    = 1u << 1;
@@ -1002,6 +1033,16 @@ static inline float3 compositeEATraxBanner(
     return mix(outCol, bg, cardMask);
 }
 
+// Exact decimal digit count in [1..5] for tight dynamic unit kerning (fixes #100 P2-1 spacing!)
+static inline uint uintDigitCount5(uint val) {
+    uint v = min(val, 99999u);
+    if (v >= 10000u) return 5u;
+    if (v >= 1000u)  return 4u;
+    if (v >= 100u)   return 3u;
+    if (v >= 10u)    return 2u;
+    return 1u;
+}
+
 // Helper to render up to 5-digit unsigned integer in 5x7 font (returns coverage)
 static inline float evalUint5x7(float2 relPx, float2 originPx, float cellPx, float stridePx, uint val, uint minDigits) {
     uint digs[5];
@@ -1017,6 +1058,26 @@ static inline float evalUint5x7(float2 relPx, float2 originPx, float cellPx, flo
     uint rev[5];
     for (uint i = 0u; i < n; ++i) rev[i] = digs[n - 1u - i];
     return evalLiteral7(relPx, originPx, cellPx, stridePx, rev, n);
+}
+
+// Helper to render fixed 1-decimal positive number ("2.0", "16.0", "4.2", "80.0") with exact char count
+static inline uint fixed1CharCount(float val) {
+    uint tenths = uint(clamp(val, 0.0f, 999.9f) * 10.0f + 0.5f);
+    return uintDigitCount5(tenths / 10u) + 2u; // integer digits + '.' + tenth digit
+}
+
+static inline float evalFixed1_5x7(float2 relPx, float2 originPx, float cellPx, float stridePx, float val) {
+    uint tenths = uint(clamp(val, 0.0f, 999.9f) * 10.0f + 0.5f);
+    uint whole = tenths / 10u;
+    uint frac = tenths % 10u;
+    uint buf[6];
+    uint n = 0u;
+    if (whole >= 100u) buf[n++] = 48u + (whole / 100u) % 10u;
+    if (whole >= 10u)  buf[n++] = 48u + (whole / 10u) % 10u;
+    buf[n++] = 48u + (whole % 10u);
+    buf[n++] = 46u; // '.'
+    buf[n++] = 48u + frac;
+    return evalLiteral7(relPx, originPx, cellPx, stridePx, buf, n);
 }
 
 // Helper to render MM:SS.T timer in 5x7 font
@@ -1166,29 +1227,37 @@ static inline float3 compositeEventHudStrip(
                 const uint kGap[3] = { 71u,65u,80u }; // GAP
                 bg = mix(bg, float3(0.68f, 0.74f, 0.80f), evalLiteral7(cRel, float2(74.0f, 34.5f), 1.40f, 8.6f, kGap, 3u));
                 const uint kSign[1] = { (ev.bossGapM >= 0.0f) ? 43u : 45u }; // + or -
-                bg = mix(bg, rkCol, evalLiteral7(cRel, float2(110.0f, 34.0f), 1.55f, 9.2f, kSign, 1u));
+                bg = mix(bg, rkCol, evalLiteral7(cRel, float2(106.0f, 34.0f), 1.55f, 9.2f, kSign, 1u));
                 uint absGap = uint(abs(ev.bossGapM) + 0.5f);
-                bg = mix(bg, rkCol, evalUint5x7(cRel, float2(122.0f, 34.0f), 1.55f, 9.4f, absGap, 1u));
-                const uint kM[1] = { 77u }; // M
-                bg = mix(bg, float3(0.76f, 0.80f, 0.86f), evalLiteral7(cRel, float2(162.0f, 34.5f), 1.40f, 8.6f, kM, 1u));
+                uint gapDigs = uintDigitCount5(absGap);
+                bg = mix(bg, rkCol, evalUint5x7(cRel, float2(116.0f, 34.0f), 1.55f, 9.4f, absGap, 1u));
+                const uint kM[1] = { 77u }; // M — tightly kerned directly after digits (#100 P2-1 fix!)
+                float gapMX = 116.0f + float(gapDigs) * 9.4f + 1.5f;
+                bg = mix(bg, float3(0.76f, 0.80f, 0.86f), evalLiteral7(cRel, float2(gapMX, 34.5f), 1.40f, 8.6f, kM, 1u));
 
-                // Next gate dist
+                // Next gate dist — tightly kerned directly after digits (#100 P2-1 fix!)
                 const uint kNxt[4] = { 71u,65u,84u,69u }; // GATE
                 bg = mix(bg, float3(0.68f, 0.74f, 0.80f), evalLiteral7(cRel, float2(214.0f, 34.5f), 1.40f, 8.6f, kNxt, 4u));
-                bg = mix(bg, float3(0.98f, 0.99f, 1.00f), evalUint5x7(cRel, float2(258.0f, 34.0f), 1.55f, 9.4f, uint(max(ev.nextGateDistM, 0.0f) + 0.5f), 1u));
-                bg = mix(bg, float3(0.76f, 0.80f, 0.86f), evalLiteral7(cRel, float2(304.0f, 34.5f), 1.40f, 8.6f, kM, 1u));
+                uint gateM = uint(max(ev.nextGateDistM, 0.0f) + 0.5f);
+                uint gateDigs = uintDigitCount5(gateM);
+                bg = mix(bg, float3(0.98f, 0.99f, 1.00f), evalUint5x7(cRel, float2(254.0f, 34.0f), 1.55f, 9.4f, gateM, 1u));
+                float gateMX = 254.0f + float(gateDigs) * 9.4f + 1.5f;
+                bg = mix(bg, float3(0.76f, 0.80f, 0.86f), evalLiteral7(cRel, float2(gateMX, 34.5f), 1.40f, 8.6f, kM, 1u));
 
                 bg = mix(bg, float3(0.95f, 0.97f, 1.00f), evalTimer5x7(cRel, float2(414.0f, 34.0f), 1.55f, 9.4f, ev.elapsedSec));
             } else {
-                // Sprint: Timer + Next Gate Distance
+                // Sprint: Timer + Next Gate Distance (tightly kerned M unit)
                 const uint kTim[4] = { 84u,73u,77u,69u }; // TIME
                 bg = mix(bg, float3(0.70f, 0.76f, 0.82f), evalLiteral7(cRel, float2(18.0f, 34.5f), 1.45f, 8.8f, kTim, 4u));
                 bg = mix(bg, float3(0.98f, 0.99f, 1.00f), evalTimer5x7(cRel, float2(64.0f, 33.5f), 1.70f, 10.2f, ev.elapsedSec));
                 const uint kNxt[4] = { 78u,69u,88u,84u }; // NEXT
                 bg = mix(bg, float3(0.70f, 0.76f, 0.82f), evalLiteral7(cRel, float2(246.0f, 34.5f), 1.45f, 8.8f, kNxt, 4u));
-                bg = mix(bg, accent, evalUint5x7(cRel, float2(292.0f, 33.5f), 1.70f, 10.2f, uint(max(ev.nextGateDistM, 0.0f) + 0.5f), 1u));
+                uint nextM = uint(max(ev.nextGateDistM, 0.0f) + 0.5f);
+                uint nextDigs = uintDigitCount5(nextM);
+                bg = mix(bg, accent, evalUint5x7(cRel, float2(288.0f, 33.5f), 1.70f, 10.2f, nextM, 1u));
                 const uint kM[1] = { 77u };
-                bg = mix(bg, float3(0.78f, 0.82f, 0.88f), evalLiteral7(cRel, float2(342.0f, 34.5f), 1.45f, 8.8f, kM, 1u));
+                float nextMX = 288.0f + float(nextDigs) * 10.2f + 1.8f;
+                bg = mix(bg, float3(0.78f, 0.82f, 0.88f), evalLiteral7(cRel, float2(nextMX, 34.5f), 1.45f, 8.8f, kM, 1u));
             }
 
             outCol = mix(outCol, bg, mask);
@@ -1531,6 +1600,521 @@ static inline float3 compositeWorldMapOverlay(
     return mix(outCol, card, frameMask);
 }
 
+// ---------------------------------------------------------------------------
+// Widget 8: Post-FI GT7 Photo Mode Viewfinder (Rule-of-Thirds, AF Reticle & OLED Bar)
+// Rendered ONLY when photoModeActive && !hideViewfinderForSnap (hidden during 4K snap!).
+// ---------------------------------------------------------------------------
+
+static inline float3 compositePhotoViewfinder(
+    float3 baseCol,
+    float2 px,
+    float2 res,
+    constant RTPhotoCockpitHudUniforms& pc
+) {
+    bool active = (pc.photoFlags & PHOTO_HUD_FLAG_ACTIVE) != 0u;
+    bool hidden = (pc.photoFlags & PHOTO_HUD_FLAG_HIDE_SNAP) != 0u;
+    if (!active || hidden) return baseCol;
+
+    float scale = res.y / 1080.0f;
+    float2 vRes = res / scale; // (1920, 1080) on 16:9
+    float2 vPx = px / scale;
+    float3 outCol = baseCol;
+
+    // 1. Subtle Rule-of-Thirds Hairlines (when bit3 showRuleOfThirds is set)
+    if ((pc.photoFlags & PHOTO_HUD_FLAG_RULE_THIRDS) != 0u) {
+        float x1 = vRes.x * (1.0f / 3.0f);
+        float x2 = vRes.x * (2.0f / 3.0f);
+        float y1 = vRes.y * (1.0f / 3.0f);
+        float y2 = vRes.y * (2.0f / 3.0f);
+        float dLine = min(min(abs(vPx.x - x1), abs(vPx.x - x2)),
+                          min(abs(vPx.y - y1), abs(vPx.y - y2)));
+        // Keep clean 34px margin inside screen edges and stop cleanly above bottom OLED bar
+        if (vPx.x > 34.0f && vPx.x < vRes.x - 34.0f && vPx.y > 34.0f && vPx.y < vRes.y - 102.0f) {
+            float shadowM = smoothstep(2.0f, 0.5f, dLine) * 0.22f;
+            float hairM   = smoothstep(0.95f, 0.25f, dLine) * 0.30f;
+            outCol = mix(outCol, float3(0.02f, 0.025f, 0.035f), shadowM);
+            outCol = mix(outCol, float3(0.92f, 0.95f, 1.00f), hairM);
+        }
+    }
+
+    // 2. Corner Framing L-Brackets (Sony Alpha / GT7 Scapes precision viewfinder frame)
+    {
+        float2 inset = float2(34.0f, 34.0f);
+        float2 cDist = min(vPx - inset, (vRes - inset) - vPx);
+        float inFrameX = step(0.0f, cDist.x) * step(cDist.x, 26.0f);
+        float inFrameY = step(0.0f, cDist.y) * step(cDist.y, 26.0f);
+        if (inFrameX > 0.5f && inFrameY > 0.5f) {
+            float dEdge = min(cDist.x, cDist.y);
+            float bMask = smoothstep(2.1f, 0.7f, dEdge);
+            outCol = mix(outCol, float3(0.95f, 0.97f, 1.00f), bMask * 0.62f);
+        }
+    }
+
+    // 3. Crisp Center Autofocus Reticle Brackets
+    {
+        float2 cRel = vPx - vRes * 0.5f;
+        float2 ac = abs(cRel);
+        if (ac.x < 46.0f && ac.y < 36.0f) {
+            const float bx = 36.0f, by = 24.0f, arm = 11.0f;
+            float dH = sdSegmentHUD(ac, float2(bx - arm, by), float2(bx, by));
+            float dV = sdSegmentHUD(ac, float2(bx, by - arm), float2(bx, by));
+            float dBr = min(dH, dV);
+            // Tiny crisp center AF cross (gap in middle)
+            float dCrossH = sdSegmentHUD(ac, float2(3.5f, 0.0f), float2(9.0f, 0.0f));
+            float dCrossV = sdSegmentHUD(ac, float2(0.0f, 3.5f), float2(0.0f, 9.0f));
+            float dCross = min(dCrossH, dCrossV);
+            float dDot = length(cRel) - 1.5f;
+
+            float retShadow = smoothstep(2.4f, 0.8f, min(dBr, dCross)) * 0.36f;
+            outCol = mix(outCol, float3(0.02f, 0.025f, 0.035f), retShadow);
+
+            float brMask = smoothstep(1.35f, 0.45f, dBr);
+            float crMask = smoothstep(1.05f, 0.35f, dCross);
+            float dotMask = smoothstep(0.8f, -0.4f, dDot);
+            outCol = mix(outCol, float3(0.96f, 0.98f, 1.00f), brMask * 0.86f);
+            outCol = mix(outCol, float3(0.28f, 0.92f, 1.00f), clamp(crMask * 0.65f + dotMask * 0.90f, 0.0f, 1.0f));
+        }
+    }
+
+    // 4. Sleek Bottom OLED Camera Telemetry & Controls Bar
+    {
+        const float barW = 1040.0f;
+        const float barH = 72.0f;
+        float2 barCenter = float2(vRes.x * 0.5f, vRes.y - 54.0f);
+        float2 bRel = vPx - barCenter; // [-520..+520, -36..+36]
+        float dBar = sdRoundedBoxHUD(bRel, float2(barW * 0.5f, barH * 0.5f), 10.0f);
+        if (dBar <= 12.0f) {
+            float shadow = smoothstep(12.0f, 0.0f, dBar) * 0.40f * step(0.0f, dBar);
+            outCol *= (1.0f - shadow);
+            float mask = smoothstep(1.2f, -0.8f, dBar);
+            if (mask > 0.001f) {
+                float2 c = bRel + float2(barW * 0.5f, barH * 0.5f); // [0..1040, 0..72]
+                float sheen = smoothstep(barH, 0.0f, c.y) * 0.028f;
+                float3 bg = mix(baseCol * 0.22f, float3(0.024f, 0.028f, 0.038f) + sheen, 0.88f);
+                float rim = smoothstep(1.5f, 0.3f, abs(dBar));
+                bg = mix(bg, float3(0.46f, 0.52f, 0.60f), rim * 0.72f);
+                // Top 2px precision amber-gold accent line
+                if (c.y < 2.6f) {
+                    bg = mix(bg, float3(1.00f, 0.74f, 0.16f), 0.92f);
+                }
+
+                // Subtle divider line between Telemetry Row 1 and Hints Row 2
+                if (c.x > 20.0f && c.x < barW - 20.0f && abs(c.y - 38.0f) < 0.7f) {
+                    bg = mix(bg, float3(0.32f, 0.38f, 0.46f), 0.48f);
+                }
+
+                // Row 1 (y: 10..30): [PHOTO MODE] | 50MM | F/2.0 | 4.2M | AF-S
+                {
+                    // Gold "PHOTO MODE" pill (x: 24..148)
+                    float dPill = sdRoundedBoxHUD(c - float2(86.0f, 20.0f), float2(62.0f, 10.0f), 4.0f);
+                    float pM = smoothstep(1.0f, -0.6f, dPill);
+                    if (pM > 0.001f) {
+                        bg = mix(bg, float3(1.00f, 0.74f, 0.16f), pM * 0.96f);
+                        const uint kPm[10] = { 80u,72u,79u,84u,79u,32u,77u,79u,68u,69u }; // PHOTO MODE
+                        bg = mix(bg, float3(0.03f, 0.035f, 0.045f), evalLiteral7(c, float2(37.5f, 14.5f), 1.55f, 9.6f, kPm, 10u) * pM);
+                    }
+
+                    // Dynamic cursor starting right of pill so values never overlap regardless of digit count
+                    float curX = 166.0f;
+                    const float rowY = 14.0f;
+                    const float cell = 1.75f;
+                    const float stride = 10.6f;
+
+                    // Vertical separator pipe
+                    if (abs(c.x - curX) < 0.9f && c.y >= 12.0f && c.y <= 28.0f) {
+                        bg = mix(bg, float3(0.42f, 0.48f, 0.56f), 0.85f);
+                    }
+                    curX += 18.0f;
+
+                    // Focal length: "<N>MM" (24MM..135MM)
+                    uint focalI = clamp(uint(pc.focalMm + 0.5f), 24u, 135u);
+                    uint focalDigs = uintDigitCount5(focalI);
+                    bg = mix(bg, float3(0.98f, 0.99f, 1.00f), evalUint5x7(c, float2(curX, rowY), cell, stride, focalI, 2u));
+                    curX += float(max(focalDigs, 2u)) * stride + 1.5f;
+                    const uint kMM[2] = { 77u, 77u }; // MM
+                    bg = mix(bg, float3(0.70f, 0.78f, 0.88f), evalLiteral7(c, float2(curX, rowY + 1.0f), 1.50f, 9.2f, kMM, 2u));
+                    curX += 2.0f * 9.2f + 22.0f;
+
+                    // Separator
+                    if (abs(c.x - curX) < 0.9f && c.y >= 12.0f && c.y <= 28.0f) {
+                        bg = mix(bg, float3(0.42f, 0.48f, 0.56f), 0.85f);
+                    }
+                    curX += 18.0f;
+
+                    // Aperture: "F/<X.Y>" (F/1.4..F/16.0)
+                    const uint kFSlash[2] = { 70u, 47u }; // F/
+                    bg = mix(bg, float3(0.32f, 0.92f, 1.00f), evalLiteral7(c, float2(curX, rowY), cell, stride, kFSlash, 2u));
+                    curX += 2.0f * stride;
+                    float fVal = clamp(pc.fStop, 1.4f, 16.0f);
+                    uint fChars = fixed1CharCount(fVal);
+                    bg = mix(bg, float3(0.32f, 0.92f, 1.00f), evalFixed1_5x7(c, float2(curX, rowY), cell, stride, fVal));
+                    curX += float(fChars) * stride + 22.0f;
+
+                    // Separator
+                    if (abs(c.x - curX) < 0.9f && c.y >= 12.0f && c.y <= 28.0f) {
+                        bg = mix(bg, float3(0.42f, 0.48f, 0.56f), 0.85f);
+                    }
+                    curX += 18.0f;
+
+                    // Focus distance: "<X.Y>M" (1.5M..80.0M)
+                    float dVal = clamp(pc.focusDistM, 1.5f, 80.0f);
+                    uint dChars = fixed1CharCount(dVal);
+                    bg = mix(bg, float3(1.00f, 0.88f, 0.52f), evalFixed1_5x7(c, float2(curX, rowY), cell, stride, dVal));
+                    curX += float(dChars) * stride + 1.5f;
+                    const uint kM1[1] = { 77u }; // M
+                    bg = mix(bg, float3(0.72f, 0.78f, 0.86f), evalLiteral7(c, float2(curX, rowY + 1.0f), 1.50f, 9.2f, kM1, 1u));
+
+                    // Right-aligned live optical DoF & 4K badge: "RT BOKEH · 4K READY"
+                    const uint kRdy[13] = { 82u,84u,32u,66u,79u,75u,69u,72u,32u,45u,32u,52u,75u }; // RT BOKEH - 4K
+                    bg = mix(bg, float3(0.72f, 0.82f, 0.92f), evalLiteral7(c, float2(886.0f, 15.0f), 1.50f, 9.4f, kRdy, 13u));
+                }
+
+                // Row 2 (y: 47..60): [WASD/QE] FLY   [+/-] LENS   [,/.] F-STOP   [ENTER] 4K 64-SPP   [O/ESC] EXIT
+                if (c.y >= 44.0f && c.y <= 64.0f) {
+                    const uint kH1[13] = { 91u,87u,65u,83u,68u,47u,81u,69u,93u,32u,70u,76u,89u };                         // [WASD/QE] FLY
+                    const uint kH2[10] = { 91u,43u,47u,45u,93u,32u,76u,69u,78u,83u };                                     // [+/-] LENS
+                    const uint kH3[12] = { 91u,44u,47u,46u,93u,32u,70u,45u,83u,84u,79u,80u };                             // [,/.] F-STOP
+                    const uint kH4[17] = { 91u,69u,78u,84u,69u,82u,93u,32u,52u,75u,32u,54u,52u,45u,83u,80u,80u };         // [ENTER] 4K 64-SPP
+                    const uint kH5[12] = { 91u,79u,47u,69u,83u,67u,93u,32u,69u,88u,73u,84u };                             // [O/ESC] EXIT
+                    float3 hintCol = float3(0.78f, 0.85f, 0.94f);
+                    bg = mix(bg, hintCol, evalLiteral7(c, float2(116.0f, 48.0f), 1.60f, 9.8f, kH1, 13u));
+                    bg = mix(bg, hintCol, evalLiteral7(c, float2(284.0f, 48.0f), 1.60f, 9.8f, kH2, 10u));
+                    bg = mix(bg, hintCol, evalLiteral7(c, float2(426.0f, 48.0f), 1.60f, 9.8f, kH3, 12u));
+                    bg = mix(bg, float3(1.00f, 0.78f, 0.22f), evalLiteral7(c, float2(590.0f, 48.0f), 1.60f, 9.8f, kH4, 17u));
+                    bg = mix(bg, hintCol, evalLiteral7(c, float2(806.0f, 48.0f), 1.60f, 9.8f, kH5, 12u));
+                }
+
+                outCol = mix(outCol, bg, mask);
+            }
+        }
+    }
+
+    return outCol;
+}
+
+// ---------------------------------------------------------------------------
+// Widget 9: Post-FI GT7 Carbon/Alcantara Cockpit Steering Wheel & Live RPM Shift-LED Bar
+// Drawn strictly POST-MTLFXFrameInterpolator per #24 Guardrail 3 -> ZERO Frame-Gen ghosting!
+// ---------------------------------------------------------------------------
+
+static inline float sminHUD(float a, float b, float k) {
+    float h = clamp(0.5f + 0.5f * (b - a) / max(k, 1e-4f), 0.0f, 1.0f);
+    return mix(b, a, h) - k * h * (1.0f - h);
+}
+
+static inline float smaxHUD(float a, float b, float k) {
+    return -sminHUD(-a, -b, k);
+}
+
+// Flat-bottom GT3 D-wheel outer silhouette SDF in wheel-local virtual 1080p coordinates
+static inline float sdGT3WheelOuter(float2 p) {
+    float dCircle = length(p) - 190.0f;
+    float dFlatBot = p.y - 134.0f;
+    return smaxHUD(dCircle, dFlatBot, 24.0f);
+}
+
+static inline float3 compositeCockpitSteeringWheel(
+    float3 baseCol,
+    float2 px,
+    float2 res,
+    constant RTFrameUniforms& u,
+    constant RTHudExtUniforms& ext,
+    constant RTPhotoCockpitHudUniforms& pc
+) {
+    bool cockpitOn = (pc.photoFlags & PHOTO_HUD_FLAG_COCKPIT) != 0u;
+    bool photoOn   = (pc.photoFlags & PHOTO_HUD_FLAG_ACTIVE) != 0u;
+    if (!cockpitOn || photoOn) return baseCol;
+
+    float scale = res.y / 1080.0f;
+    // Bottom-center GT7 framing: top of wheel reaches y = 736, flat bottom stays cleanly unclipped during turns
+    float2 center = float2(res.x * 0.5f, res.y - 154.0f * scale);
+    float2 rel = (px - center) / scale; // virtual 1080p px, +x right, +y down
+
+    // Tight early-out: skips ~86% of screen pixels (< 0.03 ms GPU)
+    if (abs(rel.x) > 224.0f || rel.y < -220.0f || rel.y > 164.0f) return baseCol;
+
+    // Rotate cleanly into wheel-local frame by steeringAngleRad (+ = left / CCW, - = right / CW)
+    float steerA = clamp(pc.steeringAngleRad, -2.6f, 2.6f);
+    float cs = cos(steerA), sn = sin(steerA);
+    float2 p = float2(rel.x * cs - rel.y * sn,
+                      rel.x * sn + rel.y * cs);
+
+    // Live telemetry with graceful fallback to RTHudExtUniforms / RTFrameUniforms
+    float rpmNorm = clamp((pc.rpmNorm > 0.001f) ? pc.rpmNorm : ((ext.rpmNorm > 0.001f) ? ext.rpmNorm : u.hudParams.y), 0.0f, 1.0f);
+    float speedVal = (pc.speedKmh > 0.01f) ? pc.speedKmh : ((ext.speedKmhOverride > 0.01f) ? ext.speedKmhOverride : u.driveParams.x);
+    int gearInt = (pc.speedKmh > 0.01f || pc.rpmNorm > 0.001f) ? pc.gearInt : int(round(u.hudParams.z));
+    float simT = (pc.simTimeSec > 0.0001f) ? pc.simTimeSec : ext.simTimeSec;
+
+    // World-fixed overhead windshield light direction (stays anchored at top of screen as wheel turns!)
+    const float3 lightDir = normalize(float3(-0.18f, -0.78f, 0.60f));
+    const float3 fillDir  = normalize(float3( 0.45f,  0.35f, 0.82f));
+    const float3 viewDir  = float3(0.0f, 0.0f, 1.0f);
+    const float3 halfVec  = normalize(lightDir + viewDir);
+
+    // 1. Evaluate Rim, Spokes & Center Hub SDFs
+    float dOuter = sdGT3WheelOuter(p);
+    // Subtle ergonomic 10-and-2 thumb contour inside rim
+    float thumbSwell = exp(-pow((abs(p.x) - 148.0f) / 26.0f, 2.0f)) * exp(-pow((p.y + 44.0f) / 24.0f, 2.0f));
+    float tubeHalfW = 19.0f + thumbSwell * 3.0f;
+    float dRimCenter = dOuter + 19.0f;
+    float dRim = abs(dRimCenter) - tubeHalfW;
+
+    // Horizontal titanium T-spokes (left + right arms joining hub to 9-and-3-o'clock rim)
+    float dSideSpokeRaw = sdRoundedBoxHUD(float2(abs(p.x) - 114.0f, p.y - 5.0f), float2(58.0f, 17.0f - max(0.0f, (abs(p.x) - 82.0f) * 0.07f)), 7.0f);
+    // Tapered bottom twin-strut motorsport spoke joining hub to flat bottom
+    float dBotOuter = sdRoundedBoxHUD(p - float2(0.0f, 84.0f), float2(34.0f - max(0.0f, (p.y - 52.0f) * 0.14f), 46.0f), 9.0f);
+    float dBotHole  = sdRoundedBoxHUD(p - float2(0.0f, 88.0f), float2(11.5f, 22.0f), 6.0f);
+    float dBotSpoke = max(dBotOuter, -dBotHole);
+    float dSpokes = sminHUD(dSideSpokeRaw, dBotSpoke, 10.0f);
+    // Clip spokes cleanly to wheel outer boundary so they seat inside rim
+    dSpokes = max(dSpokes, dOuter + 12.0f);
+
+    // Sculpted center motorsport hub (houses top 10-LED shift bar + sunken OLED telemetry display)
+    float dHubMain = sdRoundedBoxHUD(p - float2(0.0f, -6.0f), float2(86.0f, 66.0f), 22.0f);
+    float dHubBrow = sdRoundedBoxHUD(p - float2(0.0f, -54.0f), float2(74.0f, 15.0f), 11.0f);
+    float dHub = sminHUD(dHubMain, dHubBrow, 8.0f);
+
+    float dUnion = min(dRim, min(dSpokes, dHub));
+    if (dUnion > 16.0f) return baseCol;
+
+    // Soft cockpit ambient shadow behind steering wheel
+    float3 outCol = baseCol;
+    float wheelShadow = smoothstep(16.0f, 0.0f, dUnion) * 0.44f * step(0.0f, dUnion);
+    outCol *= (1.0f - wheelShadow);
+
+    // Helper: 2x2 diagonal twill carbon-fiber procedural albedo + spec anisotropy
+    float2 cw = float2(p.x + p.y, p.x - p.y) * 0.25f;
+    float2 cfCell = fract(cw);
+    float twillBand = fract((floor(cw.x) + floor(cw.y)) * 0.25f);
+    float weaveTone = (twillBand < 0.5f)
+        ? (0.55f + 0.45f * sin(cfCell.x * 3.1415926f))
+        : (0.35f + 0.35f * sin(cfCell.y * 3.1415926f));
+
+    // 2. Render Brushed Machined Titanium T-Spokes (underneath hub, seating into rim)
+    float spokeMask = smoothstep(1.2f, -0.8f, dSpokes);
+    if (spokeMask > 0.001f) {
+        // Horizontal brushed titanium grain + chamfered bevel shading
+        float brush = 0.90f + 0.10f * sin(p.y * 1.85f + sin(p.x * 0.12f) * 2.5f);
+        float bevel = smoothstep(0.0f, -7.0f, dSpokes);
+        // Estimate screen-space top highlight using rotated local y
+        float screenUp = -rel.y / 200.0f;
+        float3 tiBase = float3(0.32f, 0.35f, 0.40f) * brush * (0.72f + 0.42f * bevel);
+        float rimCatch = smoothstep(3.5f, 0.4f, abs(dSpokes + 1.8f)) * clamp(0.45f + 0.55f * screenUp, 0.15f, 1.0f);
+        float3 spokeCol = tiBase + float3(0.42f, 0.46f, 0.52f) * rimCatch * 0.65f;
+
+        // Subtle anodized motorsport thumb dials on left (crimson) & right (cobalt) spokes
+        float2 dialL = p - float2(-112.0f, 5.0f);
+        float2 dialR = p - float2( 112.0f, 5.0f);
+        float dDialL = length(dialL) - 10.5f;
+        float dDialR = length(dialR) - 10.5f;
+        if (dDialL < 2.0f) {
+            float dm = smoothstep(1.2f, -0.6f, dDialL);
+            float knurl = 0.85f + 0.15f * sin(atan2(dialL.y, dialL.x) * 14.0f);
+            float3 dCol = mix(float3(0.08f, 0.08f, 0.10f), float3(0.86f, 0.12f, 0.10f) * knurl, smoothstep(8.5f, 6.0f, length(dialL)));
+            dCol += float3(0.28f) * smoothstep(2.0f, 0.3f, abs(dDialL + 1.5f));
+            spokeCol = mix(spokeCol, dCol, dm);
+        }
+        if (dDialR < 2.0f) {
+            float dm = smoothstep(1.2f, -0.6f, dDialR);
+            float knurl = 0.85f + 0.15f * sin(atan2(dialR.y, dialR.x) * 14.0f);
+            float3 dCol = mix(float3(0.08f, 0.08f, 0.10f), float3(0.10f, 0.52f, 0.96f) * knurl, smoothstep(8.5f, 6.0f, length(dialR)));
+            dCol += float3(0.28f) * smoothstep(2.0f, 0.3f, abs(dDialR + 1.5f));
+            spokeCol = mix(spokeCol, dCol, dm);
+        }
+
+        // Subtle shadow cast by hub & rim onto spokes
+        float hubAO = smoothstep(12.0f, 0.0f, dHub) * 0.40f;
+        float rimAO = smoothstep(10.0f, 0.0f, dRim) * 0.35f;
+        spokeCol *= (1.0f - max(hubAO, rimAO));
+        outCol = mix(outCol, spokeCol, spokeMask);
+    }
+
+    // 3. Render 3D Shaded Flat-Bottom GT3 Carbon-Weave + Alcantara Steering Rim
+    float rimMask = smoothstep(1.2f, -0.8f, dRim);
+    if (rimMask > 0.001f) {
+        // Compute exact 2D outward normal of the D-shape via analytic central differences
+        float2 gLocal = float2(
+            sdGT3WheelOuter(p + float2(1.0f, 0.0f)) - sdGT3WheelOuter(p - float2(1.0f, 0.0f)),
+            sdGT3WheelOuter(p + float2(0.0f, 1.0f)) - sdGT3WheelOuter(p - float2(0.0f, 1.0f))
+        );
+        float gLen = max(length(gLocal), 1e-4f);
+        gLocal /= gLen;
+
+        float tubeU = clamp(dRimCenter / max(tubeHalfW, 1.0f), -0.99f, 0.99f);
+        float tubeZ = sqrt(max(0.04f, 1.0f - tubeU * tubeU));
+        float2 nScreenXY = float2(gLocal.x * cs + gLocal.y * sn,
+                                 -gLocal.x * sn + gLocal.y * cs) * tubeU;
+        float3 N = normalize(float3(nScreenXY, tubeZ));
+
+        float ndl = max(dot(N, lightDir), 0.0f);
+        float ndf = max(dot(N, fillDir), 0.0f);
+        float ndh = max(dot(N, halfVec), 0.0f);
+        float fresnel = pow(1.0f - max(N.z, 0.0f), 3.0f);
+
+        // Zone masks: 12-o'clock crimson centering stripe, 9&3 Alcantara grips, gloss carbon weave elsewhere
+        bool isTopStripe = (abs(p.x) < 10.5f && p.y < -140.0f);
+        float stripeEdge = smoothstep(11.2f, 9.5f, abs(p.x)) * step(p.y, -140.0f);
+        float gripZone = smoothstep(82.0f, 70.0f, abs(p.y + 8.0f)) * smoothstep(98.0f, 118.0f, abs(p.x));
+        // Thin machined grip transition collar seam
+        float collarSeam = smoothstep(2.6f, 0.8f, abs(abs(p.y + 8.0f) - 76.0f)) * step(102.0f, abs(p.x));
+
+        // Gloss diagonal carbon-fiber weave material
+        float3 carbonAlb = mix(float3(0.032f, 0.036f, 0.042f), float3(0.115f, 0.125f, 0.140f), weaveTone);
+        float carbonSpec = pow(ndh, 52.0f) * (0.48f + 0.35f * weaveTone) + fresnel * 0.24f;
+        float3 carbonCol = carbonAlb * (0.38f + 0.95f * ndl + 0.26f * ndf) + float3(0.82f, 0.88f, 0.96f) * carbonSpec;
+
+        // Matte perforated charcoal Alcantara side grip material + subtle crimson inner contrast stitching
+        float2 perf = fract(p * 0.38f) - 0.5f;
+        float microDot = smoothstep(0.28f, 0.14f, length(perf));
+        float3 alcAlb = float3(0.068f, 0.072f, 0.080f) * (1.0f - 0.26f * microDot);
+        float alcSheen = pow(1.0f - max(N.z, 0.0f), 2.2f) * 0.14f;
+        float3 alcCol = alcAlb * (0.45f + 0.78f * ndl + 0.28f * ndf) + float3(0.16f, 0.17f, 0.19f) * alcSheen;
+        // Subtle dashed crimson stitching along inner contour of Alcantara grip
+        float stitchLine = smoothstep(0.11f, 0.04f, abs(tubeU + 0.42f)) * step(0.38f, fract(p.y * 0.16f));
+        alcCol = mix(alcCol, float3(0.82f, 0.12f, 0.10f), stitchLine * 0.85f);
+
+        float3 rimCol = mix(carbonCol, alcCol, gripZone);
+        // Subtle metallic transition seam collar
+        rimCol = mix(rimCol, float3(0.42f, 0.46f, 0.52f) * (0.5f + 0.6f * ndl), collarSeam * 0.80f);
+
+        // Iconic Crimson 12-o'clock Centering Stripe (rotates cleanly with steeringAngleRad!)
+        if (isTopStripe || stripeEdge > 0.01f) {
+            float3 redAlb = float3(0.84f, 0.07f, 0.06f);
+            float redSpec = pow(ndh, 42.0f) * 0.65f + fresnel * 0.20f;
+            float3 redCol = redAlb * (0.42f + 0.95f * ndl + 0.24f * ndf) + float3(1.00f, 0.82f, 0.80f) * redSpec;
+            float borderGroove = smoothstep(1.8f, 0.4f, abs(abs(p.x) - 10.2f));
+            redCol *= (1.0f - 0.55f * borderGroove);
+            rimCol = mix(rimCol, redCol, stripeEdge);
+        }
+
+        outCol = mix(outCol, rimCol, rimMask);
+    }
+
+    // 4. Render Center Carbon/Titanium Hub, Top 10-LED Progressive Shift Bar & Mini Crisp GEAR | KM/H OLED
+    float hubMask = smoothstep(1.2f, -0.8f, dHub);
+    if (hubMask > 0.001f) {
+        float hubGrad = smoothstep(66.0f, -66.0f, p.y);
+        float3 hubCol = mix(float3(0.026f, 0.030f, 0.038f), float3(0.075f, 0.084f, 0.098f), weaveTone * 0.65f + hubGrad * 0.35f);
+        // Chamfered brushed titanium outer bezel around hub
+        float hubBevel = smoothstep(4.2f, 0.6f, abs(dHub + 2.0f));
+        float3 bezelTi = mix(float3(0.28f, 0.31f, 0.36f), float3(0.68f, 0.72f, 0.78f), hubGrad);
+        hubCol = mix(hubCol, bezelTi, hubBevel * 0.88f);
+
+        // 6 recessed Torx bolts around hub perimeter
+        const float2 bolts[6] = {
+            float2(-70.0f, -34.0f), float2(70.0f, -34.0f),
+            float2(-72.0f,  16.0f), float2(72.0f,  16.0f),
+            float2(-44.0f,  48.0f), float2(44.0f,  48.0f)
+        };
+        for (int b = 0; b < 6; ++b) {
+            float db = length(p - bolts[b]);
+            if (db < 5.5f) {
+                float bm = smoothstep(4.4f, 3.2f, db);
+                float hole = smoothstep(2.0f, 1.0f, db);
+                float3 bCol = mix(float3(0.46f, 0.50f, 0.56f), float3(0.06f, 0.07f, 0.09f), hole);
+                hubCol = mix(hubCol, bCol, bm);
+            }
+        }
+
+        // 4A. Top-of-Hub 10-LED Progressive RPM Shift Bar (green -> amber -> blinking crimson redline!)
+        {
+            float dLedHousing = sdRoundedBoxHUD(p - float2(0.0f, -54.0f), float2(65.0f, 9.5f), 5.0f);
+            float hM = smoothstep(1.0f, -0.6f, dLedHousing);
+            if (hM > 0.001f) {
+                hubCol = mix(hubCol, float3(0.015f, 0.018f, 0.024f), hM * 0.94f);
+                hubCol = mix(hubCol, float3(0.32f, 0.36f, 0.42f), smoothstep(1.3f, 0.2f, abs(dLedHousing)) * 0.75f);
+            }
+
+            bool redlineBlink = (rpmNorm >= 0.91f);
+            float blinkOn = redlineBlink ? step(0.0f, sin(simT * 30.0f)) : 1.0f;
+
+            // Evaluate 10 circular LEDs at p.x = -54..+54 (12px spacing), p.y = -54
+            if (abs(p.x) < 72.0f && abs(p.y + 54.0f) < 18.0f) {
+                for (int i = 0; i < 10; ++i) {
+                    float lx = -54.0f + float(i) * 12.0f;
+                    float2 dp = p - float2(lx, -54.0f);
+                    float dLed = length(dp);
+                    if (dLed > 14.0f) continue;
+
+                    float3 ledCol = (i < 4) ? float3(0.10f, 0.96f, 0.30f)
+                                  : ((i < 7) ? float3(1.00f, 0.68f, 0.06f) : float3(1.00f, 0.12f, 0.08f));
+                    float thresh = 0.40f + (float(i) / 9.0f) * 0.51f;
+                    bool isLit = redlineBlink ? (blinkOn > 0.5f) : (rpmNorm >= thresh);
+
+                    if (isLit) {
+                        // Soft bloom halo + bright incandescent LED core
+                        float halo = smoothstep(13.0f, 2.5f, dLed) * 0.55f;
+                        hubCol += ledCol * halo;
+                        float dome = smoothstep(4.4f, 3.0f, dLed);
+                        float core = smoothstep(2.6f, 0.4f, length(dp + float2(0.0f, 0.8f)));
+                        float3 litRGB = mix(ledCol, float3(1.00f, 0.98f, 0.94f), core * 0.62f);
+                        hubCol = mix(hubCol, litRGB, dome);
+                    } else {
+                        // Unlit dark smoked polycarbonate LED dome
+                        float dome = smoothstep(4.4f, 3.0f, dLed);
+                        float3 unlitRGB = ledCol * 0.10f + float3(0.05f, 0.055f, 0.065f);
+                        float glint = smoothstep(2.0f, 0.6f, length(dp + float2(0.8f, 1.2f))) * 0.14f;
+                        hubCol = mix(hubCol, unlitRGB + glint, dome);
+                    }
+                }
+            }
+        }
+
+        // 4B. Mini Crisp Recessed Hub OLED (`GEAR | KM/H`)
+        {
+            float2 oledC = float2(0.0f, 3.0f);
+            float dOled = sdRoundedBoxHUD(p - oledC, float2(64.0f, 32.0f), 6.5f);
+            float oM = smoothstep(1.0f, -0.6f, dOled);
+            if (oM > 0.001f) {
+                // Deep obsidian OLED with faint diagonal anti-reflective glass sheen
+                float glassSheen = smoothstep(22.0f, -26.0f, p.x * 0.4f + p.y) * 0.025f;
+                float3 oled = float3(0.014f, 0.018f, 0.026f) + glassSheen;
+                float oRim = smoothstep(1.5f, 0.3f, abs(dOled));
+                oled = mix(oled, float3(0.34f, 0.40f, 0.48f), oRim * 0.85f);
+
+                // Vertical hairline divider separating GEAR (left) and KM/H (right)
+                if (abs(p.x + 12.0f) < 0.8f && abs(p.y - 3.0f) < 25.0f) {
+                    oled = mix(oled, float3(0.24f, 0.30f, 0.38f), 0.85f);
+                }
+
+                // Left Compartment: GEAR label + bold glowing 7-segment gear digit
+                const uint kGear[4] = { 71u,69u,65u,82u }; // GEAR
+                oled = mix(oled, float3(0.58f, 0.66f, 0.76f), evalLiteral7(p, float2(-54.0f, -24.5f), 1.15f, 7.2f, kGear, 4u));
+                int gearGlyph = (gearInt < 0) ? 11 : ((gearInt == 0) ? 10 : clamp(gearInt, 1, 6));
+                float3 gearCol = (rpmNorm > 0.88f) ? float3(1.00f, 0.20f, 0.14f) : float3(1.00f, 0.74f, 0.16f);
+                float2 gp = (p - float2(-38.0f, 8.5f)) / float2(18.5f, 16.5f);
+                if (abs(gp.x) < 0.72f && abs(gp.y) < 1.2f) {
+                    oled = mix(oled, float3(0.06f, 0.07f, 0.09f), evalSevenSegDigit(gp, 8, 0.12f) * 0.35f);
+                    oled = mix(oled, gearCol, evalSevenSegDigit(gp, gearGlyph, 0.12f));
+                }
+
+                // Right Compartment: 3-Digit Digital Speed + micro "KM/H" tag
+                int spd = clamp(int(speedVal + 0.5f), 0, 999);
+                int digs[3] = { (spd / 100) % 10, (spd / 10) % 10, spd % 10 };
+                bool showD[3] = { spd >= 100, spd >= 10, true };
+                float digX[3] = { 4.0f, 26.0f, 48.0f };
+                for (int k = 0; k < 3; ++k) {
+                    float2 dp = (p - float2(digX[k], -2.0f)) / float2(15.5f, 14.5f);
+                    if (abs(dp.x) < 0.72f && abs(dp.y) < 1.2f) {
+                        oled = mix(oled, float3(0.06f, 0.07f, 0.09f), evalSevenSegDigit(dp, 8, 0.115f) * 0.28f);
+                        if (showD[k]) {
+                            oled = mix(oled, float3(0.96f, 0.98f, 1.00f), evalSevenSegDigit(dp, digs[k], 0.115f));
+                        }
+                    }
+                }
+                const uint kKmhLbl[4] = { 75u,77u,47u,72u }; // KM/H
+                oled = mix(oled, float3(0.62f, 0.72f, 0.84f), evalLiteral7(p, float2(13.0f, 19.5f), 1.20f, 7.6f, kKmhLbl, 4u));
+
+                hubCol = mix(hubCol, oled, oM);
+            }
+        }
+
+        outCol = mix(outCol, hubCol, hubMask);
+    }
+
+    return outCol;
+}
+
 // Preserved public helper name (verified by tests/test_metal_raytracing.py)
 static inline float3 compositeDigitalDrivingHUD(
     float3 baseCol,
@@ -1549,7 +2133,8 @@ static inline float3 compositeDigitalDrivingHUD(
 
 // Standalone Post-FrameGen HUD + Presentation Output Kernel
 // Reads perceptual sRGB LDR input (real or MTLFXFrameInterpolator output), composites crisp
-// unwarped NFSMW 2005 SDF HUD + GPU Minimap + sliding EA TRAX Banner + Race HUD + O(1) World Map.
+// unwarped NFSMW 2005 SDF HUD + GPU Minimap + sliding EA TRAX Banner + Race HUD + O(1) World Map
+// + v1.3.0 GT7 Photo Mode Viewfinder & Post-FI Carbon/Alcantara Cockpit Steering Wheel!
 kernel void hudOverlayKernel(
     uint2 gid [[thread_position_in_grid]],
     texture2d<float, access::read> inLdrTex [[texture(0)]],
@@ -1561,7 +2146,8 @@ kernel void hudOverlayKernel(
     constant RTHudExtUniforms& ext [[buffer(2)]],
     constant RTMinimapBuffer& minimap [[buffer(3)]],
     constant RTMusicBannerUniforms& music [[buffer(4)]],
-    constant RTEventHudUniforms& evHud [[buffer(5)]]
+    constant RTEventHudUniforms& evHud [[buffer(5)]],
+    constant RTPhotoCockpitHudUniforms& photoCockpit [[buffer(6)]]
 ) {
     uint w = outTex.get_width();
     uint h = outTex.get_height();
@@ -1570,11 +2156,18 @@ kernel void hudOverlayKernel(
     float3 srgb = inLdrTex.read(gid).rgb;
     float2 px = float2(gid) + 0.5f;
     float2 res = float2(float(w), float(h));
+    bool photoActive = (photoCockpit.photoFlags & PHOTO_HUD_FLAG_ACTIVE) != 0u;
     bool mapOpen = (evHud.flags & EVENT_HUD_FLAG_WORLD_MAP) != 0u;
 
-    if (mapOpen) {
+    if (photoActive) {
+        // Photo Mode hides all driving/event/music widgets; hides viewfinder too during 4K 64-SPP snap
+        srgb = compositePhotoViewfinder(srgb, px, res, photoCockpit);
+    } else if (mapOpen) {
         srgb = compositeWorldMapOverlay(srgb, px, res, ext, evHud, worldMapTex, linearSamp);
     } else {
+        if ((photoCockpit.photoFlags & PHOTO_HUD_FLAG_COCKPIT) != 0u) {
+            srgb = compositeCockpitSteeringWheel(srgb, px, res, u, ext, photoCockpit);
+        }
         bool hudVisible = (u.hudParams.x > 0.5f) || ((ext.hudFlags & HUD_FLAG_VISIBLE) != 0u);
         if (hudVisible) {
             srgb = compositeDigitalDrivingHUD(srgb, px, res, u, ext, minimap);

@@ -21,6 +21,11 @@ final class RTShowcaseMTKView: MTKView {
         let dx = Float(pt.x - lastDrag.x)
         let dy = Float(pt.y - lastDrag.y)
         lastDrag = pt
+        if r.photoMode.isActive {
+            r.photoMode.rotate(deltaYaw: -dx * 0.0055, deltaPitch: dy * 0.0045)
+            r.resetAccumulation()
+            return
+        }
         r.camera.azimuthDeg -= dx * 0.35
         r.camera.elevationDeg = max(2.0, min(65.0, r.camera.elevationDeg - dy * 0.25))
         if r.denoiseMode == .off { r.resetAccumulation() }
@@ -28,6 +33,11 @@ final class RTShowcaseMTKView: MTKView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let r = rendererRef else { return }
+        if r.photoMode.isActive {
+            r.photoMode.adjustFocalLength(deltaMm: Float(event.scrollingDeltaY) * 1.2)
+            r.resetAccumulation()
+            return
+        }
         r.camera.distance = max(2.4, min(40.0, r.camera.distance - Float(event.scrollingDeltaY) * 0.18))
         if r.denoiseMode == .off { r.resetAccumulation() }
     }
@@ -37,7 +47,12 @@ final class RTShowcaseMTKView: MTKView {
             super.flagsChanged(with: event)
             return
         }
-        r.nosShiftHeld = event.modifierFlags.contains(.shift)
+        if r.photoMode.isActive {
+            r.photoFastHeld = event.modifierFlags.contains(.shift)
+            r.nosShiftHeld = false
+        } else {
+            r.nosShiftHeld = event.modifierFlags.contains(.shift)
+        }
         super.flagsChanged(with: event)
     }
 
@@ -74,6 +89,65 @@ final class RTShowcaseMTKView: MTKView {
             case "=", "+": r.eventManager.zoom(delta: 0.35)
             case "-", "_": r.eventManager.zoom(delta: -0.35)
             case "m", "\u{1b}": r.eventManager.closeWorldMap()
+            default: break
+            }
+            return
+        }
+
+        // Modal GT7 Photo Mode input guard (#24 Guardrail 1: Esc/O closes Photo Mode WITHOUT quitting; E NEVER fires events!)
+        if r.photoMode.isActive {
+            switch event.keyCode {
+            case 53:                                                               // Esc: Exit Photo Mode (DO NOT quit!)
+                _ = r.togglePhotoMode()
+                print("Photo Mode: CLOSED")
+                return
+            case 36, 76:                                                           // Enter/Return: 4K 64-SPP Tiled Snap!
+                let ts = Int(Date().timeIntervalSince1970)
+                let snapURL = URL(fileURLWithPath: "build/rockport_world/photo_4k_\(r.scene.canonicalCarName)_\(ts).png")
+                do {
+                    try r.renderPhotoSnap4K(outURL: snapURL, spp: 64)
+                    print("Saved 4K 3840x2160 64-SPP Photo Mode snap -> \(snapURL.path)")
+                } catch {
+                    print("4K Photo Snap failed: \(error)")
+                }
+                return
+            case 126: r.photoMoveFwdHeld = true; return
+            case 125: r.photoMoveBackHeld = true; return
+            case 123: r.photoMoveLeftHeld = true; return
+            case 124: r.photoMoveRightHeld = true; return
+            default: break
+            }
+            switch chars {
+            case "o", "\u{1b}":
+                _ = r.togglePhotoMode()
+                print("Photo Mode: CLOSED")
+            case "w": r.photoMoveFwdHeld = true
+            case "s": r.photoMoveBackHeld = true
+            case "a": r.photoMoveLeftHeld = true
+            case "d": r.photoMoveRightHeld = true
+            case "e": r.photoMoveUpHeld = true
+            case "q": r.photoMoveDownHeld = true
+            case "z", "[": r.photoRollLeftHeld = true
+            case "c", "]": r.photoRollRightHeld = true
+            case "=", "+":
+                r.photoMode.adjustFocalLength(deltaMm: 5.0)
+                r.resetAccumulation()
+            case "-", "_":
+                r.photoMode.adjustFocalLength(deltaMm: -5.0)
+                r.resetAccumulation()
+            case ",":
+                r.photoMode.adjustAperture(stops: -0.5)
+                r.resetAccumulation()
+            case ".":
+                r.photoMode.adjustAperture(stops: 0.5)
+                r.resetAccumulation()
+            case "f":
+                r.photoMode.refocusOnCar(r.carWorldPosition)
+                r.resetAccumulation()
+            case "g":
+                r.photoMode.showRuleOfThirds.toggle()
+            case "h":
+                r.photoMode.hideViewfinderForSnap.toggle()
             default: break
             }
             return
@@ -160,6 +234,9 @@ final class RTShowcaseMTKView: MTKView {
         case "m":
             let open = r.toggleWorldMap()
             print("World Map: \(open ? "OPEN" : "CLOSED")")
+        case "o":
+            let open = r.togglePhotoMode()
+            print("Photo Mode: \(open ? "OPEN (50mm f/2.0 — [WASD/QE] Fly [+/-] Lens [,/.] f-stop [Enter] 4K 64-SPP [O/Esc] Exit)" : "CLOSED")")
         case "e":
             if event.modifierFlags.contains(.shift) {
                 r.abortActiveEvent()
@@ -178,6 +255,27 @@ final class RTShowcaseMTKView: MTKView {
     override func keyUp(with event: NSEvent) {
         guard let r = rendererRef else { return }
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if r.photoMode.isActive {
+            switch event.keyCode {
+            case 126: r.photoMoveFwdHeld = false; return
+            case 125: r.photoMoveBackHeld = false; return
+            case 123: r.photoMoveLeftHeld = false; return
+            case 124: r.photoMoveRightHeld = false; return
+            default: break
+            }
+            switch chars {
+            case "w": r.photoMoveFwdHeld = false
+            case "s": r.photoMoveBackHeld = false
+            case "a": r.photoMoveLeftHeld = false
+            case "d": r.photoMoveRightHeld = false
+            case "e": r.photoMoveUpHeld = false
+            case "q": r.photoMoveDownHeld = false
+            case "z", "[": r.photoRollLeftHeld = false
+            case "c", "]": r.photoRollRightHeld = false
+            default: break
+            }
+            return
+        }
         switch event.keyCode {
         case 126: r.throttleHeld = false; return
         case 125: r.brakeHeld = false; return
@@ -280,6 +378,11 @@ struct RTCLIOptions {
     var showTrax = false
     var eventQuery: String? = nil
     var worldMap = false
+    var photoMode = false
+    var dofFStop: Float? = nil
+    var focalMm: Float? = nil
+    var photoSnap4KPath: String? = nil
+    var driftVFX = false
     var spawnPos: SIMD3<Float>? = nil
     var spawnYawDeg: Float? = nil
     var speedKmh: Float = 145.0
@@ -363,6 +466,16 @@ func parseRTArgs() -> RTCLIOptions {
             if let v = nextVal() { opts.eventQuery = v }
         case "--world-map":
             opts.worldMap = true
+        case "--photo-mode":
+            opts.photoMode = true
+        case "--dof-fstop":
+            if let v = nextVal(), let f = Float(v) { opts.dofFStop = f }
+        case "--focal-mm":
+            if let v = nextVal(), let f = Float(v) { opts.focalMm = f }
+        case "--photo-snap-4k":
+            if let v = nextVal() { opts.photoSnap4KPath = v }
+        case "--drift-vfx":
+            opts.driftVFX = true
         case "--spawn-pos":
             if let v = nextVal() {
                 let parts = v.split(separator: ",").compactMap { Float($0.trimmingCharacters(in: .whitespaces)) }
@@ -389,7 +502,7 @@ func parseRTArgs() -> RTCLIOptions {
             } else {
                 opts.frameGen = true
             }
-        case "--camera-mode":
+        case "--camera-mode", "--camera":
             if let v = nextVal() { opts.cameraMode = RTCameraMode.parse(v) }
         case "--no-livery":
             opts.livery = false
@@ -436,12 +549,13 @@ func parseRTArgs() -> RTCLIOptions {
             print("""
             RockportMetalRT — NFSMW: Rockport 2026 Apple Silicon Hardware Ray Tracing + MetalFX Engine
             Usage:
-              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--event <id|sprint|speedtrap|boss15..boss1>] [--world-map] [--spawn-pos x,y,z] [--spawn-yaw <deg>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
-              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--event <id|boss15|speedtrap|sprint>] [--world-map] [--pursuit] [--hud] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax]
+              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--event <id|sprint|speedtrap|boss15..boss1>] [--world-map] [--photo-mode] [--dof-fstop <1.4..16>] [--focal-mm <24..135>] [--photo-snap-4k <png>] [--drift-vfx] [--spawn-pos x,y,z] [--spawn-yaw <deg>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera|--camera-mode chase|close|hood|bumper|cockpit|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
+              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera|--camera-mode chase|close|hood|bumper|cockpit|hero|street|overhead] [--event <id|boss15|speedtrap|sprint>] [--world-map] [--photo-mode] [--drift-vfx] [--pursuit] [--hud] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax]
             Interactive Controls (Canonical Keymap):
               WASD / Arrows: Drive | Space: Handbrake/Drift | Shift / Z: NOS Boost | X / Tab: Speedbreaker
               F: Instant Pursuit (Heat 1->5) | E: Start Nearest Event (Shift+E: Abort) | M: Full-Island World Map
-              V: Cycle Landmark | G / Shift+G: Cycle Garage Car | C: Cycle Camera
+              O: GT7 Photo Mode (WASD/QE Fly, +/- Lens, ,/. f-stop, Enter 4K 64-SPP Snap, O/Esc Exit)
+              V: Cycle Landmark | G / Shift+G: Cycle Garage Car | C: 5-Camera Rig (Chase/Close/Hood/Bumper/Cockpit)
               [ / ]: Prev / Next EA TRAX Song | U: Mute/Unmute EA TRAX Music
               1/2/3/4: Presets & Live 24h | B: Rain | K: Frame-Gen | H: HUD | L: Livery | T: RT | N: Denoiser
               R: Reset Car & Pursuit | P: Save 64-SPP PNG | Mouse Drag: Orbit | Scroll: Zoom | Esc: Quit
@@ -504,6 +618,7 @@ do {
     renderer.forceSyntheticMode = opts.synthetic
     renderer.benchmarkNosForced = opts.nos
     renderer.benchmarkSpeedbreakerForced = opts.speedbreaker
+    renderer.benchmarkDriftVFXForced = opts.driftVFX
     if opts.pursuit {
         renderer.benchmarkPursuitHeat = opts.pursuitHeat
     }
@@ -607,10 +722,41 @@ do {
     if let dist = opts.distance { renderer.camera.distance = dist }
     if let fov = opts.fov { renderer.camera.fovDeg = fov }
 
+    if opts.photoMode || opts.photoSnap4KPath != nil {
+        let focal = opts.focalMm ?? 65.0
+        let fstop = opts.dofFStop ?? 1.8
+        if opts.azimuth != nil || opts.elevation != nil || opts.distance != nil {
+            let b = renderer.camera.basis()
+            renderer.photoMode.enter(fromCamPos: b.eye, lookTarget: renderer.camera.target, carPos: renderer.carWorldPosition)
+            renderer.photoMode.setFocalLength(mm: focal)
+            renderer.photoMode.setAperture(fStop: fstop)
+        } else {
+            renderer.enterPhotoModeHero(focalMm: focal, fStop: fstop)
+        }
+        if opts.hud == nil && opts.photoSnap4KPath == nil {
+            renderer.hudEnabled = true
+        }
+    }
+
     let totalTris = scene.totalTriangles + (worldPkg?.totalTriangles ?? 0) + (renderer.aiVehicles?.totalTriangles ?? 0)
     let totalBlas = scene.meshes.count + (worldPkg?.blasList.count ?? 0) + (renderer.aiVehicles?.blasList.count ?? 0)
 
-    if let benchFrames = opts.driveBenchFrames {
+    if let snap4KPath = opts.photoSnap4KPath {
+        let outURL = URL(fileURLWithPath: snap4KPath)
+        let snapSpp = max(1, opts.spp)
+        let t0 = CFAbsoluteTimeGetCurrent()
+        try renderer.renderPhotoSnap4K(outURL: outURL, spp: snapSpp)
+        let dt = CFAbsoluteTimeGetCurrent() - t0
+        let worldBytes = renderer.worldStreamer?.estimatedWorldVRAMBytes ?? worldPkg?.estimatedVRAMBytes ?? 0
+        let aiBytes = renderer.aiVehicles?.estimatedVRAMBytes ?? 0
+        let vramMB = Double(worldBytes + aiBytes) / (1024.0 * 1024.0)
+        print(String(format: "Metal RT 4K PhotoSnap GPU=%@ | msl=%@ | car=%@ | world=%@ | landmark=%@ | lens=%.0fmm f/%.1f focus=%.1fm | vram=%.1fMB | 3840x2160 @ %d spp -> %@ (%.2fs)",
+                     device.name, renderer.compiledMSLVersion, scene.carAlias,
+                     worldPkg?.url.lastPathComponent ?? "procedural",
+                     renderer.activeLandmarkName,
+                     renderer.photoMode.focalLengthMm, renderer.photoMode.apertureFStop, renderer.photoMode.focusDistM,
+                     vramMB, snapSpp, outURL.path, dt))
+    } else if let benchFrames = opts.driveBenchFrames {
         let outURL = URL(fileURLWithPath: opts.outPath)
         if opts.hud == nil { renderer.hudEnabled = true }
         let (avgMs, fps) = try renderer.runDriveBenchmark(frames: benchFrames, width: opts.width, height: opts.height, outURL: outURL)

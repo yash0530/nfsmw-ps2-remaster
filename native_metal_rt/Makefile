@@ -19,6 +19,7 @@ SWIFT_SRCS = \
 	RTAudioEngine.swift \
 	RTGameWorld.swift \
 	RTEventManager.swift \
+	RTVFXSystem.swift \
 	RTAIVehicleLoader.swift \
 	RTRenderer.swift \
 	main.swift

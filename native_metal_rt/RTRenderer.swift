@@ -1,7 +1,10 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 import Metal
 import MetalFX
 import MetalKit
+import UniformTypeIdentifiers
 import simd
 
 enum RTDenoiseMode: String {
@@ -30,22 +33,58 @@ enum RTDenoiseMode: String {
 enum RTCameraMode: String, CaseIterable {
     case hero = "hero"
     case chase = "chase"
+    case closeChase = "close"
+    case hood = "hood"
+    case bumper = "bumper"
+    case cockpit = "cockpit"
     case street = "street"
     case overhead = "overhead"
 
+    var driveCameraPreset: RTDriveCameraPreset? {
+        switch self {
+        case .chase:      return .chase
+        case .closeChase: return .closeChase
+        case .hood:       return .hood
+        case .bumper:     return .bumper
+        case .cockpit:    return .cockpit
+        case .hero, .street, .overhead: return nil
+        }
+    }
+
+    var isCarAttachedPOV: Bool {
+        switch self {
+        case .hood, .bumper, .cockpit: return true
+        default: return false
+        }
+    }
+
     static func parse(_ raw: String) -> RTCameraMode {
-        switch raw.lowercased() {
-        case "chase": return .chase
-        case "street": return .street
-        case "overhead", "top": return .overhead
-        default: return .hero
+        switch raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "chase", "far":                            return .chase
+        case "close", "closechase", "close_chase":      return .closeChase
+        case "hood", "bonnet":                          return .hood
+        case "bumper", "nose":                          return .bumper
+        case "cockpit", "interior", "driver":           return .cockpit
+        case "street":                                  return .street
+        case "overhead", "top":                         return .overhead
+        default:                                        return .hero
         }
     }
 
     func next() -> RTCameraMode {
-        let all = Self.allCases
-        let idx = all.firstIndex(of: self) ?? 0
-        return all[(idx + 1) % all.count]
+        return nextDriving()
+    }
+
+    /// 5-camera live `C`-key driving cycle: Chase -> Close Chase -> Hood -> Bumper -> Cockpit -> Chase.
+    func nextDriving() -> RTCameraMode {
+        switch self {
+        case .chase:      return .closeChase
+        case .closeChase: return .hood
+        case .hood:       return .bumper
+        case .bumper:     return .cockpit
+        case .cockpit:    return .chase
+        case .hero, .street, .overhead: return .chase
+        }
     }
 }
 
@@ -244,16 +283,34 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     private var smoothedFrameSec: Double = 1.0 / 60.0
     var forceSyntheticMode: Bool = false
 
-    // Authentic NFSMW 2005 Gameplay Subsystems (VLT Physics + Ginsu/ABKC Audio + Traffic/Pursuit AI + Events/WorldMap)
+    // Authentic NFSMW 2005 Gameplay Subsystems (VLT Physics + Ginsu/ABKC Audio + Traffic/Pursuit AI + Events/WorldMap + v1.3 VFX/Photo)
     let physicsEngine: RTPhysicsEngine
     let audioEngine: RTAudioEngine
     let gameWorld: RTGameWorld
     let eventManager: RTEventManager
+    let vfxSystem = RTVFXSystem()
+    let photoMode = RTPhotoModeController()
     var aiEnabled: Bool = true
+    var enableRISStreetlampShadows: Bool = true
     var benchmarkNosForced: Bool = false
     var benchmarkSpeedbreakerForced: Bool = false
     var benchmarkPursuitHeat: Int? = nil
     var benchmarkAutoSteerToEvent: Bool = false
+    var benchmarkDriftVFXForced: Bool = false
+
+    // v1.3.0 GPU VFX Buffer (slot 15), 4K Tiled Photo Snap & 6-DoF Free-Cam Input State
+    private var vfxBuffer: MTLBuffer!
+    private var activeTileCrop: SIMD4<Float> = SIMD4<Float>(0.0, 0.0, 1.0, 1.0)
+    private var forceZeroDenoiseForDoF: Bool = false
+    var photoMoveFwdHeld: Bool = false
+    var photoMoveBackHeld: Bool = false
+    var photoMoveLeftHeld: Bool = false
+    var photoMoveRightHeld: Bool = false
+    var photoMoveUpHeld: Bool = false
+    var photoMoveDownHeld: Bool = false
+    var photoRollLeftHeld: Bool = false
+    var photoRollRightHeld: Bool = false
+    var photoFastHeld: Bool = false
 
     // v1.1.0 EA TRAX Soundtrack Banner & Upward Sky-Ray Acoustic Tunnel Occlusion
     private(set) var rawSkyOcclusion: Float = 0.0
@@ -515,6 +572,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
               let wlgBuf = device.makeBuffer(length: 256, options: .storageModeShared),
               let dfxBuf = device.makeBuffer(length: MemoryLayout<RTDynamicFXGPU>.stride, options: .storageModeShared),
               let evFxBuf = device.makeBuffer(length: RTEventWorldFX.byteSize, options: .storageModeShared),
+              let vfxBuf = RTVFXSystem.makeEmptyBuffer(device: device, enableRISShadows: true),
               let fbMapTex = RTEventManager.makeFallbackWorldMapTexture(device: device) else {
             throw NSError(domain: "RTRenderer", code: 102, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate physics/ABI buffers"])
         }
@@ -526,6 +584,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         RTMusicBannerUniforms.assertLayout()
         RTEventWorldFX.assertLayout()
         RTEventHudUniforms.assertLayout()
+        RTVFXBuffer.assertLayout()
+        RTPhotoCockpitHudUniforms.assertLayout()
         self.physicsInBuffer = pin
         self.physicsOutBuffer = pout
         self.aiRoadProbeInBuffer = aiPin
@@ -535,6 +595,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         self.worldLightGridBuffer = wlgBuf
         self.dynamicFXBuffer = dfxBuf
         self.eventWorldFXBuffer = evFxBuf
+        self.vfxBuffer = vfxBuf
         self.fallbackWorldMapTex = fbMapTex
         var initEvFX = RTEventWorldFX.inactive()
         memcpy(evFxBuf.contents(), &initEvFX, RTEventWorldFX.byteSize)
@@ -662,6 +723,28 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             camera.elevationDeg = 8.2
             camera.distance = 4.55 + 0.35 * speedFrac
             camera.fovDeg = 44.0 + 18.0 * speedFrac
+        case .closeChase:
+            chaseCamEnabled = true
+            camera.target = SIMD3<Float>(carWorldPosition.x, carWorldPosition.y + 0.74, carWorldPosition.z)
+            camera.azimuthDeg = headingDeg + 180.0 + steerDeg * 0.36
+            camera.elevationDeg = 6.8
+            camera.distance = 3.55 + 0.25 * speedFrac
+            camera.fovDeg = 46.0 + 15.0 * speedFrac
+        case .hood, .bumper, .cockpit:
+            chaseCamEnabled = false
+            let pose = RTDrivingCamRig.worldCameraPose(
+                for: mode.driveCameraPreset ?? .hood,
+                carKey: scene.canonicalCarName,
+                carPos: carWorldPosition,
+                carHeadingRad: (world != nil) ? carHeadingRad : carYawRad,
+                carPitchRad: carPitchRad + terrainPitchRad,
+                carRollRad: carRollRad + terrainRollRad,
+                carHalfLength: max(2.10, scene.wheelBounds.frontAxleZ + 0.68),
+                carRoofY: RTDrivingCamRig.authenticHoodHeight(forCarKey: scene.canonicalCarName) + 0.08,
+                aspect: 16.0 / 9.0
+            )
+            camera.target = pose.target
+            camera.fovDeg = pose.vFovDeg
         case .street:
             chaseCamEnabled = false
             if world != nil && speedKmh < 1.0 && !driveDemoMode {
@@ -1948,6 +2031,206 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         memcpy(eventWorldFXBuffer.contents(), &evFX, RTEventWorldFX.byteSize)
     }
 
+    private func updateVFXBuffer() {
+        let wetness = max(resolvedPreset().wetness, effectiveRainAmount())
+        _ = vfxSystem.write(
+            to: vfxBuffer,
+            photoDoF: photoMode.photoDoFUniform(),
+            tileCrop: activeTileCrop,
+            isCockpitCam: !photoMode.isActive && cameraMode == .cockpit,
+            enableRISStreetlampShadows: enableRISStreetlampShadows,
+            photoModeActive: photoMode.isActive,
+            wetRoad: wetness > 0.25,
+            referencePos: carWorldPosition
+        )
+    }
+
+    private func makePhotoCockpitHudUniforms() -> RTPhotoCockpitHudUniforms {
+        var u = RTPhotoCockpitHudUniforms()
+        var flags: UInt32 = 0
+        if photoMode.isActive {
+            flags |= RTPhotoCockpitHudFlagBits.photoModeActive
+            if photoMode.hideViewfinderForSnap {
+                flags |= RTPhotoCockpitHudFlagBits.hideViewfinderForSnap
+            }
+            if photoMode.showRuleOfThirds {
+                flags |= RTPhotoCockpitHudFlagBits.showRuleOfThirds
+            }
+        } else if cameraMode == .cockpit && !eventManager.isWorldMapOpen {
+            flags |= RTPhotoCockpitHudFlagBits.cockpitActive
+        }
+        u.photoFlags = flags
+        u.focalMm = photoMode.focalLengthMm
+        u.fStop = photoMode.apertureFStop
+        u.focusDistM = photoMode.focusDistM
+        // Authentic steering wheel rotation (~3.5x front wheel angle; + = CCW left turn)
+        u.steeringAngleRad = (steerDeg * .pi / 180.0) * 3.5
+        u.rpmNorm = physicsEngine.state.rpmNorm
+        u.speedKmh = speedKmh
+        u.gearInt = (speedKmh < -0.5) ? -1 : Int32(physicsEngine.state.gear)
+        u.cameraMode = cameraMode.driveCameraPreset?.rawValue ?? 0
+        u.skidActiveCount = UInt32(vfxSystem.activeSkidCount)
+        u.sparkActiveCount = UInt32(vfxSystem.activeSparkCount)
+        u.smokeActiveCount = UInt32(vfxSystem.activeSmokeCount)
+        u.simTimeSec = simTimeSec
+        return u
+    }
+
+    private static func makePerspectiveProj(fovYDeg: Float, aspect: Float, reverseZ: Bool) -> simd_float4x4 {
+        let fovY = max(8.0, min(120.0, fovYDeg)) * .pi / 180.0
+        let yScale = 1.0 / tan(fovY * 0.5)
+        let xScale = yScale / max(aspect, 0.01)
+        let nearZ: Float = 0.20
+        let farZ: Float = 800.0
+        let zRange = farZ - nearZ
+        if reverseZ {
+            return simd_float4x4(
+                SIMD4<Float>(xScale, 0, 0, 0),
+                SIMD4<Float>(0, yScale, 0, 0),
+                SIMD4<Float>(0, 0, nearZ / zRange, -1),
+                SIMD4<Float>(0, 0, (farZ * nearZ) / zRange, 0)
+            )
+        } else {
+            return simd_float4x4(
+                SIMD4<Float>(xScale, 0, 0, 0),
+                SIMD4<Float>(0, yScale, 0, 0),
+                SIMD4<Float>(0, 0, -farZ / zRange, -1),
+                SIMD4<Float>(0, 0, -(farZ * nearZ) / zRange, 0)
+            )
+        }
+    }
+
+    private static func makeLookViewMatrix(eye: SIMD3<Float>, forward f: SIMD3<Float>, right s: SIMD3<Float>, up u: SIMD3<Float>) -> simd_float4x4 {
+        return simd_float4x4(
+            SIMD4<Float>(s.x, u.x, -f.x, 0),
+            SIMD4<Float>(s.y, u.y, -f.y, 0),
+            SIMD4<Float>(s.z, u.z, -f.z, 0),
+            SIMD4<Float>(-simd_dot(s, eye), -simd_dot(u, eye), simd_dot(f, eye), 1)
+        )
+    }
+
+    private func activeCameraState(aspect: Float) -> (
+        eye: SIMD3<Float>,
+        forward: SIMD3<Float>,
+        right: SIMD3<Float>,
+        up: SIMD3<Float>,
+        fovDeg: Float,
+        viewMatrix: simd_float4x4,
+        projMatrix: simd_float4x4,
+        projMatrixReverseZ: simd_float4x4
+    ) {
+        if photoMode.isActive {
+            let b = photoMode.cameraBasis()
+            let fov = photoMode.verticalFOVDegrees()
+            let vm = photoMode.viewMatrix()
+            let pm = Self.makePerspectiveProj(fovYDeg: fov, aspect: aspect, reverseZ: false)
+            let pmRZ = Self.makePerspectiveProj(fovYDeg: fov, aspect: aspect, reverseZ: true)
+            return (b.eye, b.forward, b.right, b.up, fov, vm, pm, pmRZ)
+        }
+        if cameraMode.isCarAttachedPOV, let preset = cameraMode.driveCameraPreset {
+            var pose = RTDrivingCamRig.worldCameraPose(
+                for: preset,
+                carKey: scene.canonicalCarName,
+                carPos: carWorldPosition,
+                carHeadingRad: (world != nil) ? carHeadingRad : carYawRad,
+                carPitchRad: carPitchRad + terrainPitchRad,
+                carRollRad: carRollRad + terrainRollRad,
+                carHalfLength: max(2.10, scene.wheelBounds.frontAxleZ + 0.68),
+                carRoofY: RTDrivingCamRig.authenticHoodHeight(forCarKey: scene.canonicalCarName) + 0.08,
+                aspect: aspect
+            )
+            if preset == .hood {
+                // Mount cowl Hood Cam cleanly forward of windshield glass so real RT hood reflections + night streets are 100% unobstructed!
+                let eyeFwd = pose.eye + pose.forward * 0.64 + pose.up * 0.02
+                let lookDown = simd_normalize(pose.forward - pose.up * 0.055)
+                let newUp = simd_normalize(simd_cross(pose.right, lookDown))
+                pose = (eyeFwd, eyeFwd + lookDown * 18.0, lookDown, pose.right, newUp, pose.vFovDeg)
+            } else if preset == .cockpit {
+                // Clear interior roll-cage bar & rearview mirror bracket while framing A-pillars, real hood & post-FI GT3 wheel!
+                let eyeFwd = pose.eye + pose.forward * 0.36 + pose.up * 0.03
+                let lookFwd = simd_normalize(pose.forward - pose.up * 0.025)
+                let newUp = simd_normalize(simd_cross(pose.right, lookFwd))
+                pose = (eyeFwd, eyeFwd + lookFwd * 18.0, lookFwd, pose.right, newUp, pose.vFovDeg)
+            }
+            let vm = Self.makeLookViewMatrix(eye: pose.eye, forward: pose.forward, right: pose.right, up: pose.up)
+            let pm = Self.makePerspectiveProj(fovYDeg: pose.vFovDeg, aspect: aspect, reverseZ: false)
+            let pmRZ = Self.makePerspectiveProj(fovYDeg: pose.vFovDeg, aspect: aspect, reverseZ: true)
+            return (pose.eye, pose.forward, pose.right, pose.up, pose.vFovDeg, vm, pm, pmRZ)
+        }
+        let b = camera.basis()
+        return (
+            b.eye, b.forward, b.right, b.up, camera.fovDeg,
+            camera.viewMatrix(),
+            camera.projMatrix(aspect: aspect),
+            camera.projMatrixReverseZ(aspect: aspect)
+        )
+    }
+
+    func clearPhotoModeHeldKeys() {
+        photoMoveFwdHeld = false
+        photoMoveBackHeld = false
+        photoMoveLeftHeld = false
+        photoMoveRightHeld = false
+        photoMoveUpHeld = false
+        photoMoveDownHeld = false
+        photoRollLeftHeld = false
+        photoRollRightHeld = false
+        photoFastHeld = false
+    }
+
+    @discardableResult
+    func togglePhotoMode() -> Bool {
+        if photoMode.isActive {
+            photoMode.exit()
+            clearPhotoModeHeldKeys()
+            historyResetPending = true
+            frameGenHistoryValid = false
+            resetAccumulation()
+            return false
+        }
+        if eventManager.isWorldMapOpen {
+            eventManager.closeWorldMap()
+        }
+        throttleHeld = false
+        brakeHeld = false
+        steerLeftHeld = false
+        steerRightHeld = false
+        handbrakeHeld = false
+        nosKeyHeld = false
+        speedbreakerHeld = false
+        clearPhotoModeHeldKeys()
+
+        let camState = activeCameraState(aspect: 16.0 / 9.0)
+        var startEye = camState.eye
+        let lookTarget = carWorldPosition + SIMD3<Float>(0.0, 0.62, 0.0)
+        if cameraMode.isCarAttachedPOV || simd_distance(startEye, carWorldPosition) < 2.2 {
+            // Step out to a dramatic low 3/4 hero framing when entering Photo Mode from Cockpit/Hood/Bumper!
+            let az = carHeadingRad + 44.0 * .pi / 180.0
+            let dist: Float = 4.65
+            startEye = carWorldPosition + SIMD3<Float>(sin(az) * dist, 1.08, cos(az) * dist)
+        }
+        photoMode.enter(fromCamPos: startEye, lookTarget: lookTarget, carPos: carWorldPosition)
+        historyResetPending = true
+        frameGenHistoryValid = false
+        resetAccumulation()
+        return true
+    }
+
+    func enterPhotoModeHero(focalMm: Float? = nil, fStop: Float? = nil) {
+        if eventManager.isWorldMapOpen { eventManager.closeWorldMap() }
+        // Dramatic low 3/4 GT7 Scapes telephoto hero angle framing the full car + glowing background bokeh!
+        let az = carHeadingRad + 42.0 * .pi / 180.0
+        let dist: Float = 6.45
+        let startEye = carWorldPosition + SIMD3<Float>(sin(az) * dist, 1.06, cos(az) * dist)
+        let lookTarget = carWorldPosition + SIMD3<Float>(0.0, 0.56, 0.0)
+        photoMode.enter(fromCamPos: startEye, lookTarget: lookTarget, carPos: carWorldPosition)
+        if let f = focalMm { photoMode.setFocalLength(mm: f) }
+        if let n = fStop { photoMode.setAperture(fStop: n) }
+        historyResetPending = true
+        frameGenHistoryValid = false
+        resetAccumulation()
+    }
+
     private func updateMinimapBuffer() {
         if world != nil && !gameWorld.roadGraph.isEmpty {
             minimapBuffer = gameWorld.packMinimap(
@@ -2121,10 +2404,10 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     ) -> RTFrameUniforms {
         let p = resolvedPreset()
         let aspect = Float(width) / Float(max(height, 1))
-        let vp = camera.viewProjMatrix(aspect: aspect)
+        let cam = activeCameraState(aspect: aspect)
+        let vp = cam.projMatrix * cam.viewMatrix
         let invVP = simd_inverse(vp)
         let prevVP = hasValidPrevFrame ? prevViewProj : vp
-        let b = camera.basis()
 
         let exposure = lookdevConfig.exposure ?? p.exposure
         let wetness = lookdevConfig.puddle_wetness ?? p.wetness
@@ -2138,10 +2421,11 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         if smoothedSkyOcclusion > 0.50 {
             headsOn = max(headsOn, 1.0 + smoothedSkyOcclusion)
         }
-        let vignette = lookdevConfig.vignette ?? 0.12
+        let vignette = photoMode.isActive ? photoMode.shutterVignette : (lookdevConfig.vignette ?? 0.12)
         let contrast = lookdevConfig.contrast ?? 1.03
         let saturation = lookdevConfig.saturation ?? 1.08
-        let denoisePasses = Float(denoiserEnabled ? (lookdevConfig.denoise_passes ?? (temporal1SPP ? 3 : 4)) : 0)
+        let skipAtrousForDoF = forceZeroDenoiseForDoF || (!temporal1SPP && photoMode.computeApertureRadiusMeters() > 1e-4)
+        let denoisePasses = Float((denoiserEnabled && !skipAtrousForDoF) ? (lookdevConfig.denoise_passes ?? (temporal1SPP ? 3 : 4)) : 0)
 
         let gearVal = Float(physicsEngine.state.gear)
         let rpmNorm = physicsEngine.state.rpmNorm
@@ -2152,10 +2436,10 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             invViewProjMatrix: invVP,
             currViewProjMatrix: vp,
             prevViewProjMatrix: prevVP,
-            cameraPos: SIMD4<Float>(b.eye, camera.fovDeg),
-            cameraForward: SIMD4<Float>(b.forward, aspect),
-            cameraRight: SIMD4<Float>(b.right, tan(camera.fovDeg * .pi / 360.0)),
-            cameraUp: SIMD4<Float>(b.up, exposure),
+            cameraPos: SIMD4<Float>(cam.eye, cam.fovDeg),
+            cameraForward: SIMD4<Float>(cam.forward, aspect),
+            cameraRight: SIMD4<Float>(cam.right, tan(cam.fovDeg * .pi / 360.0)),
+            cameraUp: SIMD4<Float>(cam.up, exposure),
             sunDir: SIMD4<Float>(resolvedSunDirection(preset: p), p.sunIntensity),
             sunColor: SIMD4<Float>(p.sunColor, p.sunConeRadius),
             coronaColor: SIMD4<Float>(p.coronaColor, p.iblIntensity),
@@ -2251,6 +2535,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.setBuffer(instanceMetaBuffer, offset: 0, index: 5)
         enc.setBuffer(scene.materialBuffer, offset: 0, index: 6)
         updateDynamicFXBuffer()
+        updateVFXBuffer()
         updateEventWorldFXBuffer()
         enc.setBuffer(world?.vertexBuffer ?? dummyWorldVB, offset: 0, index: 7)
         enc.setBuffer(world?.indexBuffer ?? dummyWorldIB, offset: 0, index: 8)
@@ -2260,6 +2545,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.setBuffer(worldStreamer?.lightGridBuffer ?? worldLightGridBuffer, offset: 0, index: 12)
         enc.setBuffer(dynamicFXBuffer, offset: 0, index: 13)
         enc.setBuffer(aiVehicles?.sceneDataBuffer ?? aiSceneDataFallbackBuffer, offset: 0, index: 14)
+        enc.setBuffer(vfxBuffer, offset: 0, index: 15)
         enc.setBuffer(eventWorldFXBuffer, offset: 0, index: 16)
         if world?.hasResidentBLASes == true {
             enc.useResources(carBlasList, usage: .read)
@@ -2304,6 +2590,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         var mm = minimapBuffer
         var musicBanner = makeMusicBannerUniforms()
         var evHud = makeEventHudUniforms()
+        var photoCockpitHud = makePhotoCockpitHudUniforms()
         enc.setComputePipelineState(hudOverlayPSO)
         enc.setTexture(inputTexture, index: 0)
         enc.setTexture(outputTexture, index: 1)
@@ -2315,6 +2602,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.setBytes(&mm, length: RTMinimapBuffer.byteSize, index: 3)
         enc.setBytes(&musicBanner, length: RTMusicBannerUniforms.byteSize, index: 4)
         enc.setBytes(&evHud, length: RTEventHudUniforms.byteSize, index: 5)
+        enc.setBytes(&photoCockpitHud, length: RTPhotoCockpitHudUniforms.byteSize, index: 6)
         dispatch2D(encoder: enc, pso: hudOverlayPSO, width: outW, height: outH)
         enc.endEncoding()
     }
@@ -2336,6 +2624,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             let outW = outputTexture.width
             let outH = outputTexture.height
             let aspect = Float(outW) / Float(max(outH, 1))
+            let cam = activeCameraState(aspect: aspect)
             fi.colorTexture = currTexture
             fi.prevColorTexture = prevTexture
             fi.depthTexture = gDep
@@ -2348,12 +2637,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             fi.deltaTime = max(0.001, dt)
             fi.nearPlane = 0.20
             fi.farPlane = 800.0
-            fi.fieldOfView = camera.fovDeg
+            fi.fieldOfView = cam.fovDeg
             fi.aspectRatio = aspect
             fi.isDepthReversed = true
             if #available(macOS 27.0, *) {
-                fi.worldToViewMatrix = camera.viewMatrix()
-                fi.viewToClipMatrix = camera.projMatrixReverseZ(aspect: aspect)
+                fi.worldToViewMatrix = cam.viewMatrix
+                fi.viewToClipMatrix = cam.projMatrixReverseZ
             }
             fi.shouldResetHistory = resetHistory
             fi.encode(commandBuffer: commandBuffer)
@@ -2406,6 +2695,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         if temporal1SPP && metalFXActive && !splitCompare {
             if #available(macOS 26.0, *), let scaler = temporalScaler as? MTLFXTemporalDenoisedScaler {
                 let aspect = Float(outW) / Float(max(outH, 1))
+                let cam = activeCameraState(aspect: aspect)
                 scaler.colorTexture = gCol
                 scaler.depthTexture = gDep
                 scaler.motionTexture = gMot
@@ -2420,8 +2710,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                 scaler.motionVectorScaleX = 1.0
                 scaler.motionVectorScaleY = 1.0
                 scaler.isDepthReversed = true
-                scaler.worldToViewMatrix = camera.viewMatrix()
-                scaler.viewToClipMatrix = camera.projMatrixReverseZ(aspect: aspect)
+                scaler.worldToViewMatrix = cam.viewMatrix
+                scaler.viewToClipMatrix = cam.projMatrixReverseZ
                 scaler.shouldResetHistory = historyResetPending
                 scaler.encode(commandBuffer: commandBuffer)
                 historyResetPending = false
@@ -2537,6 +2827,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             var mm = minimapBuffer
             var musicBanner = makeMusicBannerUniforms()
             var evHud = makeEventHudUniforms()
+            var photoCockpitHud = makePhotoCockpitHudUniforms()
             enc.setComputePipelineState(hudOverlayPSO)
             enc.setTexture(ldrScratch, index: 0)
             enc.setTexture(outputTexture, index: 1)
@@ -2548,6 +2839,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             enc.setBytes(&mm, length: RTMinimapBuffer.byteSize, index: 3)
             enc.setBytes(&musicBanner, length: RTMusicBannerUniforms.byteSize, index: 4)
             enc.setBytes(&evHud, length: RTEventHudUniforms.byteSize, index: 5)
+            enc.setBytes(&photoCockpitHud, length: RTPhotoCockpitHudUniforms.byteSize, index: 6)
             dispatch2D(encoder: enc, pso: hudOverlayPSO, width: outW, height: outH)
         }
         enc.endEncoding()
@@ -2567,7 +2859,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         }
 
         let aspect = Float(outW) / Float(max(outH, 1))
-        prevViewProj = camera.viewProjMatrix(aspect: aspect)
+        let cam = activeCameraState(aspect: aspect)
+        prevViewProj = cam.projMatrix * cam.viewMatrix
         hasValidPrevFrame = true
     }
 
@@ -2664,6 +2957,328 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         try RTSceneBuilder.writeBGRA8TextureToPNG(texture: outTex, outURL: outURL)
     }
 
+    /// Zero-Extra-VRAM 4K `3840x2160` `64-SPP` Tiled Photo Mode Snap (`2x2` `1920x1080` sub-frustum tiles).
+    /// Reuses existing 1080p HDR accumulation buffers (0 MB extra GPU VRAM), stitches pure linear HDR into 4K,
+    /// runs seamless global half-res optical bloom + global vignette + exact ACES Filmic sRGB curve, and hides viewfinder HUD.
+    func renderPhotoSnap4K(outURL: URL, spp: Int = 64) throws {
+        let tileW = 1920
+        let tileH = 1080
+        let fullW = tileW * 2
+        let fullH = tileH * 2
+        let totalSPP = max(1, spp)
+
+        let wasPhotoActive = photoMode.isActive
+        let prevHide = photoMode.hideViewfinderForSnap
+        let prevCrop = activeTileCrop
+        let prevZeroDenoise = forceZeroDenoiseForDoF
+        if !wasPhotoActive {
+            enterPhotoModeHero()
+        }
+        photoMode.hideViewfinderForSnap = true
+        forceZeroDenoiseForDoF = (photoMode.computeApertureRadiusMeters() > 1e-4)
+        defer {
+            activeTileCrop = prevCrop
+            photoMode.hideViewfinderForSnap = prevHide
+            forceZeroDenoiseForDoF = prevZeroDenoise
+            if !wasPhotoActive {
+                photoMode.exit()
+            }
+            resetAccumulation()
+        }
+
+        ensureRenderTargets(width: tileW, height: tileH, useMetalFX: false, useFrameGen: false)
+        guard let hdrRes = hdrResolvedTex,
+              let diffAcc = accumDiffTex,
+              let specAcc = accumSpecTex,
+              let gAlb = gAlbedoTex,
+              let gEm = gEmissiveTex else {
+            throw NSError(domain: "RTRenderer", code: 120, userInfo: [NSLocalizedDescriptionKey: "Render targets unavailable for 4K photo snap"])
+        }
+
+        let readDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: tileW, height: tileH, mipmapped: false)
+        readDesc.usage = [.shaderRead]
+        readDesc.storageMode = .shared
+        guard let sharedTileHDR = device.makeTexture(descriptor: readDesc) else {
+            throw NSError(domain: "RTRenderer", code: 121, userInfo: [NSLocalizedDescriptionKey: "Failed to create tile readback texture"])
+        }
+
+        // Full 4K linear HDR RGB staging buffer on CPU (0 MB permanent GPU VRAM!)
+        var fullHDR = [Float](repeating: 0.0, count: fullW * fullH * 3)
+        var tileHalf = [Float16](repeating: 0.0, count: tileW * tileH * 4)
+        let bytesPerRow = tileW * 4 * MemoryLayout<Float16>.stride
+
+        for ty in 0..<2 {
+            for tx in 0..<2 {
+                activeTileCrop = SIMD4<Float>(Float(tx) * 0.5, Float(ty) * 0.5, 0.5, 0.5)
+                resetAccumulation()
+
+                let batchSize = 4
+                var s = 0
+                while s < totalSPP {
+                    guard let cb = commandQueue.makeCommandBuffer() else {
+                        throw NSError(domain: "RTRenderer", code: 122, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate tile command buffer"])
+                    }
+                    let end = min(totalSPP, s + batchSize)
+                    while s < end {
+                        encodeRayTraceSample(
+                            commandBuffer: cb,
+                            width: tileW,
+                            height: tileH,
+                            sampleIdx: UInt32(s),
+                            splitCompare: false,
+                            temporal1SPP: false,
+                            jitter: .zero
+                        )
+                        s += 1
+                    }
+                    cb.commit()
+                    cb.waitUntilCompleted()
+                    if let err = cb.error { throw err }
+                }
+
+                // Remodulate linear HDR & blit tile to shared CPU readback
+                guard let resolveCB = commandQueue.makeCommandBuffer(),
+                      let enc = resolveCB.makeComputeCommandEncoder() else {
+                    throw NSError(domain: "RTRenderer", code: 123, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve 4K tile HDR"])
+                }
+                var finalDiff: MTLTexture = diffAcc
+                var finalSpec: MTLTexture = specAcc
+                let doAtrous = denoiserEnabled && !forceZeroDenoiseForDoF
+                if doAtrous,
+                   let dPing = denoiseDiffPing, let dPong = denoiseDiffPong,
+                   let sPing = denoiseSpecPing, let sPong = denoiseSpecPong,
+                   let gNR = gNormalRoughTex, let gDep = gDepthTex {
+                    var uTile = makeUniforms(width: tileW, height: tileH, sampleIdx: UInt32(totalSPP), splitCompare: false, temporal1SPP: false, jitter: .zero)
+                    let steps: [Int32] = [1, 2, 4, 8]
+                    for passIdx in 0..<steps.count {
+                        var stepVal = steps[passIdx]
+                        let srcD: MTLTexture = (passIdx == 0) ? diffAcc : ((passIdx % 2 == 1) ? dPing : dPong)
+                        let srcS: MTLTexture = (passIdx == 0) ? specAcc : ((passIdx % 2 == 1) ? sPing : sPong)
+                        let dstD: MTLTexture = (passIdx % 2 == 0) ? dPing : dPong
+                        let dstS: MTLTexture = (passIdx % 2 == 0) ? sPing : sPong
+                        enc.setComputePipelineState(denoiseAtrousPSO)
+                        enc.setTexture(srcD, index: 0)
+                        enc.setTexture(srcS, index: 1)
+                        enc.setTexture(dstD, index: 2)
+                        enc.setTexture(dstS, index: 3)
+                        enc.setTexture(gNR, index: 4)
+                        enc.setTexture(gDep, index: 5)
+                        enc.setBytes(&uTile, length: MemoryLayout<RTFrameUniforms>.stride, index: 0)
+                        enc.setBytes(&stepVal, length: MemoryLayout<Int32>.stride, index: 1)
+                        dispatch2D(encoder: enc, pso: denoiseAtrousPSO, width: tileW, height: tileH)
+                        finalDiff = dstD
+                        finalSpec = dstS
+                    }
+                }
+
+                enc.setComputePipelineState(remodulatePSO)
+                enc.setTexture(finalDiff, index: 0)
+                enc.setTexture(finalSpec, index: 1)
+                enc.setTexture(gAlb, index: 2)
+                enc.setTexture(gEm, index: 3)
+                enc.setTexture(hdrRes, index: 4)
+                dispatch2D(encoder: enc, pso: remodulatePSO, width: tileW, height: tileH)
+                enc.endEncoding()
+
+                if let blit = resolveCB.makeBlitCommandEncoder() {
+                    blit.copy(
+                        from: hdrRes, sourceSlice: 0, sourceLevel: 0,
+                        sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                        sourceSize: MTLSize(width: tileW, height: tileH, depth: 1),
+                        to: sharedTileHDR, destinationSlice: 0, destinationLevel: 0,
+                        destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+                    )
+                    blit.endEncoding()
+                }
+                resolveCB.commit()
+                resolveCB.waitUntilCompleted()
+                if let err = resolveCB.error { throw err }
+
+                sharedTileHDR.getBytes(
+                    &tileHalf,
+                    bytesPerRow: bytesPerRow,
+                    from: MTLRegionMake2D(0, 0, tileW, tileH),
+                    mipmapLevel: 0
+                )
+
+                let dstOffX = tx * tileW
+                let dstOffY = ty * tileH
+                for y in 0..<tileH {
+                    let srcRow = y * tileW * 4
+                    let dstRow = ((dstOffY + y) * fullW + dstOffX) * 3
+                    for x in 0..<tileW {
+                        let si = srcRow + x * 4
+                        let di = dstRow + x * 3
+                        fullHDR[di + 0] = max(0.0, Float(tileHalf[si + 0]))
+                        fullHDR[di + 1] = max(0.0, Float(tileHalf[si + 1]))
+                        fullHDR[di + 2] = max(0.0, Float(tileHalf[si + 2]))
+                    }
+                }
+            }
+        }
+
+        // Seamless global 4K half-res (1920x1080) optical bloom (ZERO center '+' tile seam!)
+        let p = resolvedPreset()
+        let exposure = lookdevConfig.exposure ?? p.exposure
+        let bloomThresh = lookdevConfig.bloom_threshold ?? p.bloomThreshold
+        let bloomInt = lookdevConfig.bloom_intensity ?? p.bloomIntensity
+        let vigStrength = max(0.0, min(0.6, photoMode.shutterVignette))
+        let contrast = max(0.5, min(1.8, lookdevConfig.contrast ?? 1.03))
+        let sat = max(0.2, min(1.8, lookdevConfig.saturation ?? 1.08))
+        let sCurveW = max(-0.45, min(0.65, (contrast - 1.0) * 0.65))
+
+        let bw = fullW / 2
+        let bh = fullH / 2
+        var bloomA = [Float](repeating: 0.0, count: bw * bh * 3)
+        var bloomB = [Float](repeating: 0.0, count: bw * bh * 3)
+
+        for y in 0..<bh {
+            let sy0 = (y * 2) * fullW
+            let sy1 = (y * 2 + 1) * fullW
+            let dstRow = y * bw * 3
+            for x in 0..<bw {
+                let i00 = (sy0 + x * 2) * 3
+                let i10 = (sy0 + x * 2 + 1) * 3
+                let i01 = (sy1 + x * 2) * 3
+                let i11 = (sy1 + x * 2 + 1) * 3
+                let r = (fullHDR[i00] + fullHDR[i10] + fullHDR[i01] + fullHDR[i11]) * 0.25
+                let g = (fullHDR[i00 + 1] + fullHDR[i10 + 1] + fullHDR[i01 + 1] + fullHDR[i11 + 1]) * 0.25
+                let b = (fullHDR[i00 + 2] + fullHDR[i10 + 2] + fullHDR[i01 + 2] + fullHDR[i11 + 2]) * 0.25
+                let lum = r * 0.2126 + g * 0.7152 + b * 0.0722
+                let soft = max(lum - bloomThresh, 0.0) / max(lum, 1e-4)
+                let di = dstRow + x * 3
+                bloomA[di + 0] = r * soft
+                bloomA[di + 1] = g * soft
+                bloomA[di + 2] = b * soft
+            }
+        }
+
+        let kW: [Float] = [0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216]
+        for step in [1, 2, 4] {
+            // Horizontal pass bloomA -> bloomB
+            for y in 0..<bh {
+                let row = y * bw
+                for x in 0..<bw {
+                    let c0 = (row + x) * 3
+                    var sr = bloomA[c0] * kW[0]
+                    var sg = bloomA[c0 + 1] * kW[0]
+                    var sb = bloomA[c0 + 2] * kW[0]
+                    for k in 1..<5 {
+                        let xA = min(bw - 1, x + k * step)
+                        let xB = max(0, x - k * step)
+                        let iA = (row + xA) * 3
+                        let iB = (row + xB) * 3
+                        let w = kW[k]
+                        sr += (bloomA[iA] + bloomA[iB]) * w
+                        sg += (bloomA[iA + 1] + bloomA[iB + 1]) * w
+                        sb += (bloomA[iA + 2] + bloomA[iB + 2]) * w
+                    }
+                    bloomB[c0] = sr; bloomB[c0 + 1] = sg; bloomB[c0 + 2] = sb
+                }
+            }
+            // Vertical pass bloomB -> bloomA
+            for y in 0..<bh {
+                for x in 0..<bw {
+                    let c0 = (y * bw + x) * 3
+                    var sr = bloomB[c0] * kW[0]
+                    var sg = bloomB[c0 + 1] * kW[0]
+                    var sb = bloomB[c0 + 2] * kW[0]
+                    for k in 1..<5 {
+                        let yA = min(bh - 1, y + k * step)
+                        let yB = max(0, y - k * step)
+                        let iA = (yA * bw + x) * 3
+                        let iB = (yB * bw + x) * 3
+                        let w = kW[k]
+                        sr += (bloomB[iA] + bloomB[iB]) * w
+                        sg += (bloomB[iA + 1] + bloomB[iB + 1]) * w
+                        sb += (bloomB[iA + 2] + bloomB[iB + 2]) * w
+                    }
+                    bloomA[c0] = sr; bloomA[c0 + 1] = sg; bloomA[c0 + 2] = sb
+                }
+            }
+        }
+
+        // Exact global compositeKernel ACES Filmic + perceptual sRGB S-curve + saturation -> 4K BGRA8 PNG
+        @inline(__always)
+        func acesChannel(_ x: Float) -> Float {
+            let v = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)
+            return max(0.0, min(1.0, v))
+        }
+        @inline(__always)
+        func linToSRGB(_ c: Float) -> Float {
+            return (c <= 0.0031308) ? (c * 12.92) : (1.055 * pow(max(c, 0.0), 1.0 / 2.4) - 0.055)
+        }
+
+        var bgra = [UInt8](repeating: 255, count: fullW * fullH * 4)
+        let invW = 1.0 / Float(fullW)
+        let invH = 1.0 / Float(fullH)
+
+        for y in 0..<fullH {
+            let vCoord = ((Float(y) + 0.5) * invH) * 2.0 - 1.0
+            let by = min(bh - 1, y >> 1)
+            let byRow = by * bw
+            let srcRow = y * fullW
+            for x in 0..<fullW {
+                let uCoord = ((Float(x) + 0.5) * invW) * 2.0 - 1.0
+                let vig = max(0.55, min(1.0, 1.0 - (uCoord * uCoord + vCoord * vCoord) * vigStrength))
+                let si = (srcRow + x) * 3
+                let bi = (byRow + min(bw - 1, x >> 1)) * 3
+
+                let cr = (fullHDR[si + 0] + bloomA[bi + 0] * bloomInt) * exposure * vig
+                let cg = (fullHDR[si + 1] + bloomA[bi + 1] * bloomInt) * exposure * vig
+                let cb = (fullHDR[si + 2] + bloomA[bi + 2] * bloomInt) * exposure * vig
+
+                var sr = linToSRGB(acesChannel(cr))
+                var sg = linToSRGB(acesChannel(cg))
+                var sb = linToSRGB(acesChannel(cb))
+
+                let scR = sr * sr * (3.0 - 2.0 * sr)
+                let scG = sg * sg * (3.0 - 2.0 * sg)
+                let scB = sb * sb * (3.0 - 2.0 * sb)
+                sr = max(0.0, min(1.0, sr + (scR - sr) * sCurveW))
+                sg = max(0.0, min(1.0, sg + (scG - sg) * sCurveW))
+                sb = max(0.0, min(1.0, sb + (scB - sb) * sCurveW))
+
+                let lum = sr * 0.2126 + sg * 0.7152 + sb * 0.0722
+                sr = max(0.0, min(1.0, lum + (sr - lum) * sat))
+                sg = max(0.0, min(1.0, lum + (sg - lum) * sat))
+                sb = max(0.0, min(1.0, lum + (sb - lum) * sat))
+
+                let oi = (srcRow + x) * 4
+                bgra[oi + 0] = UInt8(max(0, min(255, Int(sb * 255.0 + 0.5))))
+                bgra[oi + 1] = UInt8(max(0, min(255, Int(sg * 255.0 + 0.5))))
+                bgra[oi + 2] = UInt8(max(0, min(255, Int(sr * 255.0 + 0.5))))
+                bgra[oi + 3] = 255
+            }
+        }
+
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let provider = CGDataProvider(data: Data(bgra) as CFData),
+              let cgImage = CGImage(
+                  width: fullW,
+                  height: fullH,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: fullW * 4,
+                  space: cs,
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: false,
+                  intent: .defaultIntent
+              ) else {
+            throw NSError(domain: "RTRenderer", code: 124, userInfo: [NSLocalizedDescriptionKey: "Failed to build 4K CGImage"])
+        }
+        try FileManager.default.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let dest = CGImageDestinationCreateWithURL(outURL as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw NSError(domain: "RTRenderer", code: 125, userInfo: [NSLocalizedDescriptionKey: "Failed to create 4K PNG destination"])
+        }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            throw NSError(domain: "RTRenderer", code: 126, userInfo: [NSLocalizedDescriptionKey: "Failed to finalize 4K PNG"])
+        }
+    }
+
     // Drive forward N real-time frames with MetalFX/SVGF (+ optional 2x MTLFXFrameInterpolator), measuring GPU ms/frame & FPS and saving final frame
     func runDriveBenchmark(frames: Int, width: Int, height: Int, outURL: URL) throws -> (avgMs: Double, fps: Double) {
         let totalFrames = max(1, frames)
@@ -2719,6 +3334,25 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                 //   f odd : Render R_k + encode FI(R_{k-1}, R_k) -> present FI (half-frame t = k - 0.5)
                 //   f even: Present R_k directly via post-FI hudOverlayKernel (t = k)
                 if f == 0 || (f % 2 == 1) {
+                    if benchmarkDriftVFXForced && !eventManager.isEventActiveOrCountdown {
+                        let frac = Float(f) / Float(max(1, totalFrames))
+                        // Controlled power-slide staying squarely in the wide center lanes of Rosewood Blvd
+                        handbrakeHeld = (frac >= 0.35 && frac <= 0.68)
+                        steerLeftHeld = (frac >= 0.32 && frac <= 0.65)
+                        steerRightHeld = (frac > 0.65 && frac <= 0.92)
+                        let targetSeedFrame = max(4, (totalFrames / 2) - 5)
+                        if realFrameIdx == 4 || Int(realFrameIdx) == targetSeedFrame {
+                            vfxSystem.seedDriftDemoBurst(
+                                carPos: carWorldPosition,
+                                carHeadingRad: carHeadingRad,
+                                carVel: physicsEngine.state.velocityWorld,
+                                roadY: carWorldPosition.y,
+                                wetness: max(resolvedPreset().wetness, effectiveRainAmount()),
+                                rearAxleZ: scene.wheelBounds.rearAxleZ,
+                                halfTrackR: max(0.74, scene.wheelBounds.halfTrackR)
+                            )
+                        }
+                    }
                     _ = stepDrivePhysics(dt: dt)
                     simTimeSec += dt * physicsEngine.state.effectiveTimeScale
                     if timeCycleEnabled {
@@ -2804,6 +3438,24 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                     if let err = cb.error { throw err }
                 }
             } else {
+                if benchmarkDriftVFXForced && !eventManager.isEventActiveOrCountdown {
+                    let frac = Float(f) / Float(max(1, totalFrames))
+                    handbrakeHeld = (frac >= 0.35 && frac <= 0.68)
+                    steerLeftHeld = (frac >= 0.32 && frac <= 0.65)
+                    steerRightHeld = (frac > 0.65 && frac <= 0.92)
+                    let targetSeedFrame = max(4, totalFrames - 6)
+                    if f == 4 || f == targetSeedFrame {
+                        vfxSystem.seedDriftDemoBurst(
+                            carPos: carWorldPosition,
+                            carHeadingRad: carHeadingRad,
+                            carVel: physicsEngine.state.velocityWorld,
+                            roadY: carWorldPosition.y,
+                            wetness: max(resolvedPreset().wetness, effectiveRainAmount()),
+                            rearAxleZ: scene.wheelBounds.rearAxleZ,
+                            halfTrackR: max(0.74, scene.wheelBounds.halfTrackR)
+                        )
+                    }
+                }
                 _ = stepDrivePhysics(dt: dt)
                 simTimeSec += dt * physicsEngine.state.effectiveTimeScale
                 if timeCycleEnabled {
@@ -2860,6 +3512,9 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             }
         }
         throttleHeld = false
+        handbrakeHeld = false
+        steerLeftHeld = false
+        steerRightHeld = false
 
         try RTSceneBuilder.writeBGRA8TextureToPNG(texture: outTex, outURL: outURL)
         let avgMs = (timedFrames > 0) ? (totalWallSec / Double(timedFrames)) * 1000.0 : 0.0
@@ -2869,6 +3524,17 @@ final class RTRenderer: NSObject, MTKViewDelegate {
 
     func stepDrivePhysics(dt: Float) -> Bool {
         if eventManager.isWorldMapOpen {
+            return false
+        }
+        if photoMode.isActive {
+            let mf: Float = (photoMoveFwdHeld ? 1.0 : 0.0) - (photoMoveBackHeld ? 1.0 : 0.0)
+            let mr: Float = (photoMoveRightHeld ? 1.0 : 0.0) - (photoMoveLeftHeld ? 1.0 : 0.0)
+            let mu: Float = (photoMoveUpHeld ? 1.0 : 0.0) - (photoMoveDownHeld ? 1.0 : 0.0)
+            let rd: Float = (photoRollRightHeld ? 1.0 : 0.0) - (photoRollLeftHeld ? 1.0 : 0.0)
+            if abs(mf) > 0 || abs(mr) > 0 || abs(mu) > 0 || abs(rd) > 0 {
+                photoMode.step(dt: dt, moveForward: mf, moveRight: mr, moveUp: mu, rollDelta: rd, fast: photoFastHeld)
+                return true
+            }
             return false
         }
         var steerInput: Float = (steerLeftHeld ? 1.0 : 0.0) + (steerRightHeld ? -1.0 : 0.0)
@@ -3000,21 +3666,49 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         nosActiveStrength = st.nosFlameIntensity
         speedbreakerStrength = st.speedbreakerBlend
 
-        // Authentic NFSMW chase camera with drift slip lag, NOS FOV kick & Speedbreaker zoom
+        // Step analytical Drift VFX (persistent wet skidmarks <=128, ballistic sparks <=64, tire smoke <=16)
+        vfxSystem.step(RTVFXStepInput(
+            dt: simDt,
+            carPos: st.worldPosition,
+            carVel: st.velocityWorld,
+            carHeadingRad: (world != nil) ? st.headingRad : st.visualYawRad,
+            roadY: st.worldPosition.y,
+            driftSlipDeg: st.slipAngleRad * 180.0 / .pi,
+            driftIntensity: st.driftIntensity,
+            speedMs: st.speedKmh / 3.6,
+            handbrake: handbrakeHeld,
+            nosActive: st.nosActive,
+            throttle: throttleHeld ? 1.0 : 0.0,
+            scrapeIntensity: st.scrapeIntensity,
+            impactIntensity: st.impactIntensity,
+            wetness: max(resolvedPreset().wetness, effectiveRainAmount()),
+            rearAxleZ: scene.wheelBounds.rearAxleZ,
+            halfTrackR: max(0.74, scene.wheelBounds.halfTrackR),
+            scrapeSideSign: probeSample.wallNormalSide.w,
+            demoTrigger: benchmarkDriftVFXForced
+        ))
+
+        // Authentic NFSMW chase / close-chase camera with drift slip lag, NOS FOV kick & Speedbreaker zoom
         if world != nil {
-            if cameraMode == .chase || chaseCamEnabled {
+            if cameraMode == .chase || cameraMode == .closeChase || chaseCamEnabled {
                 let cam = physicsEngine.chaseCameraTarget()
                 camera.target = cam.target
                 camera.azimuthDeg = cam.azimuthDeg
-                camera.distance = cam.distance
-                camera.fovDeg = cam.fovDeg
-            } else {
+                if cameraMode == .closeChase {
+                    camera.distance = max(3.25, cam.distance - 0.95)
+                    camera.elevationDeg = 6.8
+                    camera.fovDeg = cam.fovDeg + 2.0
+                } else {
+                    camera.distance = cam.distance
+                    camera.fovDeg = cam.fovDeg
+                }
+            } else if !cameraMode.isCarAttachedPOV {
                 camera.target = SIMD3<Float>(carWorldPosition.x, carWorldPosition.y + 0.52, carWorldPosition.z)
             }
         } else if chaseCamEnabled {
             let cam = physicsEngine.chaseCameraTarget()
             camera.fovDeg = cam.fovDeg
-            camera.distance = max(4.35, cam.distance - 0.10)
+            camera.distance = (cameraMode == .closeChase) ? max(3.35, cam.distance - 0.95) : max(4.35, cam.distance - 0.10)
         }
 
         // Real-time Ginsu PSOLA engine + SFX + 3D Doppler siren + Tunnel Reverb audio (silent no-op in headless)
@@ -3073,6 +3767,38 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         ensureRenderTargets(width: tex.width, height: tex.height, useMetalFX: useTemporalMFX, useFrameGen: useFG)
 
         let encodeSRGB = (view.colorPixelFormat == .bgra8Unorm)
+
+        // Live GT7 Photo Mode: bypass 1-SPP Frame-Gen and converge cleanly with progressive optical RT DoF bokeh!
+        if photoMode.isActive {
+            let movedPhoto = stepDrivePhysics(dt: dt)
+            if movedPhoto {
+                resetAccumulation()
+            }
+            if sampleIndex < 64 {
+                encodeRayTraceSample(
+                    commandBuffer: cmdBuf,
+                    width: rtWidth,
+                    height: rtHeight,
+                    sampleIdx: sampleIndex,
+                    splitCompare: false,
+                    temporal1SPP: false,
+                    jitter: .zero
+                )
+                sampleIndex += 1
+            }
+            encodePostProcess(
+                commandBuffer: cmdBuf,
+                outputTexture: tex,
+                encodeSRGB: encodeSRGB,
+                splitCompare: false,
+                temporal1SPP: false,
+                jitter: .zero,
+                runHudOverlay: true
+            )
+            cmdBuf.present(drawable)
+            cmdBuf.commit()
+            return
+        }
 
         // Interactive 120 Hz 2x Frame-Gen pacing:
         //   Phase 0: Step physics, RT + MetalFX TDS -> currLdr, interpolate FI(prevLdr, currLdr) -> HUD -> present

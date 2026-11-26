@@ -167,6 +167,37 @@ struct RTEventWorldFX {
 };
 static_assert(sizeof(RTEventWorldFX) == 128, "RTEventWorldFX must match locked 128-byte ABI");
 
+// Locked v1.3.0 Analytical Drift VFX, Thin-Lens DoF & 4K Tile Crop ABI (Buffer Slot 15, #24 Guardrail 2 + #106)
+struct RTSkidMarkGPU {
+    float4 p0Width;        // xyz = start world pos, w = half-width (m)
+    float4 p1Alpha;        // xyz = end world pos, w = opacity (0..1)
+};
+static_assert(sizeof(RTSkidMarkGPU) == 32, "RTSkidMarkGPU must be 32 bytes");
+
+struct RTSparkGPU {
+    float4 posLife;        // xyz = world pos, w = normalized life (0..1)
+    float4 velTemp;        // xyz = world velocity (m/s), w = temperature (0..1)
+};
+static_assert(sizeof(RTSparkGPU) == 32, "RTSparkGPU must be 32 bytes");
+
+struct RTSmokePuffGPU {
+    float4 posRadius;      // xyz = world pos, w = puff radius (m)
+    float4 velAlpha;       // xyz = world vel (m/s), w = opacity (0..1)
+};
+static_assert(sizeof(RTSmokePuffGPU) == 32, "RTSmokePuffGPU must be 32 bytes");
+
+struct RTVFXBuffer {
+    uint4 counts;               // x = skidCount (<=128), y = sparkCount (<=64), z = smokeCount (<=16), w = flags (bit0=isCockpitCam, bit1=enableRISShadows)
+    float4 skidBoundsMinMaxXZ;  // x = minX, y = minZ, z = maxX, w = maxZ
+    float4 fxSphere;            // xyz = bounding sphere center enclosing active sparks+smoke, w = radius (m)
+    float4 photoDoF;            // x = apertureRadiusM (0=off), y = focusDistM, z = focalLengthMm, w = shutterVignette
+    float4 tileCrop;            // x = offsetU, y = offsetV, z = scaleU, w = scaleV (default 0,0,1,1)
+    RTSkidMarkGPU skids[128];   // 4,096 B
+    RTSparkGPU sparks[64];      // 2,048 B
+    RTSmokePuffGPU smoke[16];   //   512 B
+};
+static_assert(sizeof(RTVFXBuffer) == 6736, "RTVFXBuffer must match locked 6736-byte ABI");
+
 // Locked Hour 3 AI Vehicle RT ABI (Buffer Slot 14 + aiRoadProbeKernel)
 struct RTAIVertex {
     packed_float3 position;
@@ -2413,18 +2444,28 @@ static void evaluateDirectSunSplit(
     outDirectSpec = min(outDirectSpec, float3(6.5f));
 }
 
-static void evaluateLocalAreaLightsSplit(
+static void evaluateLocalAreaLightsImpl(
     HitSurface s,
     float3 V,
     constant RTFrameUniforms& u,
     device const RTWorldLight* worldLights,
     device const ushort* worldLightGrid,
     constant RTDynamicFX& dynFX,
+    bool collectRIS,
+    float xiPick,
     thread float3& outDiffIrrad,
-    thread float3& outSpec
+    thread float3& outSpec,
+    thread float4& outRISPosDist,
+    thread float3& outRISDiff,
+    thread float3& outRISSpec,
+    thread float& outRISWeightRatio
 ) {
     outDiffIrrad = float3(0.0f);
     outSpec = float3(0.0f);
+    outRISPosDist = float4(0.0f);
+    outRISDiff = float3(0.0f);
+    outRISSpec = float3(0.0f);
+    outRISWeightRatio = 0.0f;
     float tunnelHead = clamp(u.skyGround.w - 1.0f, 0.0f, 1.0f);
     float headScale = min(u.skyGround.w, 1.0f);
     float yaw = u.carDynParams.z;
@@ -2577,6 +2618,10 @@ static void evaluateLocalAreaLightsSplit(
             float lampRough = max(s.roughness, 0.06f);
             float lampAlpha = max(lampRough * lampRough, 0.004f);
 
+            float risWSum = 0.0f;
+            float risWinW = 0.0f;
+            float randAccum = clamp(xiPick, 0.0001f, 0.9999f);
+
             for (uint slot = 0u; slot < 8u; ++slot) {
                 uint li = uint(worldLightGrid[cellBase + slot]);
                 if (li == 0xFFFFu || li >= worldLightCount) break;
@@ -2608,8 +2653,8 @@ static void evaluateLocalAreaLightsSplit(
                 float D = D_GGX(NdotH, lampAlpha);
                 float G = G_SmithGGX(NdotV, NdotL, lampRough);
                 float3 specBRDF = (D * G * F) / max(4.0f * NdotV * NdotL, 1e-4f);
-                outDiffIrrad += (lRad / PI) * NdotL * atten;
-                outSpec += min(specBRDF * lRad * NdotL * atten, float3(4.5f));
+                float3 diffContrib = (lRad / PI) * NdotL * atten;
+                float3 specContrib = min(specBRDF * lRad * NdotL * atten, float3(4.5f));
                 if (s.clearcoat > 0.05f) {
                     float ccNdotL = max(dot(s.clearcoatN, L), 0.0f);
                     float ccNdotV = max(dot(s.clearcoatN, V), 1e-4f);
@@ -2619,8 +2664,31 @@ static void evaluateLocalAreaLightsSplit(
                     float F_cc = F_SchlickScalar(max(dot(V, H), 0.0f), f0_cc) * s.clearcoat;
                     float specCC = (D_GGX(ccNdotH, ccR * ccR) * G_SmithGGX(ccNdotV, ccNdotL, ccR) * F_cc)
                                  / max(4.0f * ccNdotV * ccNdotL, 1e-4f);
-                    outSpec += min(float3(specCC) * lRad * ccNdotL * atten, float3(4.2f));
+                    specContrib += min(float3(specCC) * lRad * ccNdotL * atten, float3(4.2f));
                 }
+                outDiffIrrad += diffContrib;
+                outSpec += specContrib;
+
+                if (collectRIS) {
+                    float wLum = dot(lRad, float3(0.2126f, 0.7152f, 0.0722f)) * atten * NdotL;
+                    if (wLum > 1e-4f) {
+                        risWSum += wLum;
+                        // Weighted Reservoir Sampling (1-Ray RIS over cell luminaires)
+                        float prob = wLum / max(risWSum, 1e-5f);
+                        if (randAccum < prob) {
+                            randAccum = randAccum / max(prob, 1e-4f);
+                            risWinW = wLum;
+                            outRISPosDist = float4(wl.posRadius.xyz, sqrt(max(d2, 0.01f)));
+                            outRISDiff = diffContrib;
+                            outRISSpec = specContrib;
+                        } else {
+                            randAccum = (randAccum - prob) / max(1.0f - prob, 1e-4f);
+                        }
+                    }
+                }
+            }
+            if (collectRIS && risWinW > 1e-4f) {
+                outRISWeightRatio = risWSum / risWinW;
             }
         } else {
             // Backward-compatible v1 .rkpt pilot fallback (when no v2 RTWorldLight table is present)
@@ -2725,6 +2793,25 @@ static void evaluateLocalAreaLightsSplit(
             }
         }
     }
+}
+
+static void evaluateLocalAreaLightsSplit(
+    HitSurface s,
+    float3 V,
+    constant RTFrameUniforms& u,
+    device const RTWorldLight* worldLights,
+    device const ushort* worldLightGrid,
+    constant RTDynamicFX& dynFX,
+    thread float3& outDiffIrrad,
+    thread float3& outSpec
+) {
+    float4 unusedPos;
+    float3 unusedD, unusedS;
+    float unusedR;
+    evaluateLocalAreaLightsImpl(
+        s, V, u, worldLights, worldLightGrid, dynFX, false, 0.5f,
+        outDiffIrrad, outSpec, unusedPos, unusedD, unusedS, unusedR
+    );
 }
 
 static float3 evaluateSecondaryHitRadiance(
@@ -2975,6 +3062,217 @@ static inline float3 evaluateEventGateFX(
 }
 
 // ---------------------------------------------------------------------------
+// v1.3.0 Analytical Drift VFX: Persistent Road Skidmarks (<=128), Ballistic
+// Sparks (<=64) & Volumetric Tire Smoke (<=16) (#24 Guardrail 2: < 0.5 ms GPU)
+// ---------------------------------------------------------------------------
+
+static inline void applyRoadSkidmarks(
+    thread HitSurface& s,
+    float hitDist,
+    bool temporal1SPP,
+    constant RTVFXBuffer& vfx
+) {
+    uint skidCount = min(vfx.counts.x, 128u);
+    float maxDist = temporal1SPP ? 32.0f : 45.0f;
+    if (skidCount == 0u || hitDist >= maxDist) return;
+    float2 pXZ = s.worldPos.xz;
+    // 1-instruction bounding-box early-out rejects >96% of road pixels immediately
+    if (pXZ.x < vfx.skidBoundsMinMaxXZ.x || pXZ.x > vfx.skidBoundsMinMaxXZ.z ||
+        pXZ.y < vfx.skidBoundsMinMaxXZ.y || pXZ.y > vfx.skidBoundsMinMaxXZ.w) {
+        return;
+    }
+
+    float maxMask = 0.0f;
+    for (uint i = 0u; i < skidCount; ++i) {
+        RTSkidMarkGPU sk = vfx.skids[i];
+        float alpha = sk.p1Alpha.w;
+        if (alpha <= 0.01f) continue;
+        float halfW = max(sk.p0Width.w, 0.08f);
+        float2 a = sk.p0Width.xz;
+        float2 b = sk.p1Alpha.xz;
+        // Fast per-segment AABB reject (eliminates >95% of dot/sqrt math!)
+        if (pXZ.x < min(a.x, b.x) - halfW || pXZ.x > max(a.x, b.x) + halfW ||
+            pXZ.y < min(a.y, b.y) - halfW || pXZ.y > max(a.y, b.y) + halfW) {
+            continue;
+        }
+        float avgY = 0.5f * (sk.p0Width.y + sk.p1Alpha.y);
+        if (abs(s.worldPos.y - avgY) > 1.35f) continue;
+
+        float2 ab = b - a;
+        float lenSq = max(dot(ab, ab), 1e-4f);
+        float t = clamp(dot(pXZ - a, ab) / lenSq, 0.0f, 1.0f);
+        float2 dVec = pXZ - (a + ab * t);
+        float dSq = dot(dVec, dVec);
+        if (dSq < halfW * halfW) {
+            float dNorm = sqrt(dSq) / halfW;
+            float edge = smoothstep(1.0f, 0.36f, dNorm);
+            // Subtle vulcanized 3-groove tire tread striation
+            float tread = 0.84f + 0.16f * cos(dNorm * 9.5f);
+            maxMask = max(maxMask, edge * tread * alpha);
+        }
+    }
+
+    if (maxMask > 0.01f) {
+        float distFade = smoothstep(maxDist, maxDist * 0.45f, hitDist);
+        float m = clamp(maxMask * distFade, 0.0f, 0.95f);
+        // Darken rubber tracks and boost slick wet-rubber specular sheen
+        s.baseAlbedo *= mix(1.0f, 0.16f, m * 0.92f);
+        s.roughness = mix(s.roughness, 0.12f, m * 0.72f);
+        s.clearcoat = max(s.clearcoat, m * 0.52f);
+        s.ccRoughness = mix(s.ccRoughness, 0.032f, m * 0.55f);
+    }
+}
+
+static inline void evaluateDriftVFXPrimary(
+    float3 rayOrigin,
+    float3 rayDir,
+    float gDepth,
+    bool temporal1SPP,
+    constant RTVFXBuffer& vfx,
+    constant RTFrameUniforms& u,
+    constant RTDynamicFX& dynFX,
+    thread float3& outSparkRGB,
+    thread float3& outSmokeRGB,
+    thread float& outSmokeTransmittance,
+    thread float& outReactive
+) {
+    outSparkRGB = float3(0.0f);
+    outSmokeRGB = float3(0.0f);
+    outSmokeTransmittance = 1.0f;
+    outReactive = 0.0f;
+
+    uint sparkCount = min(vfx.counts.y, 64u);
+    uint smokeCount = min(vfx.counts.z, 16u);
+    float sphR = vfx.fxSphere.w;
+    if ((sparkCount == 0u && smokeCount == 0u) || sphR <= 0.05f) return;
+
+    // Single-instruction bounding-sphere reject enclosing all active sparks + smoke
+    float3 ocAll = vfx.fxSphere.xyz - rayOrigin;
+    float bAll = dot(ocAll, rayDir);
+    if (bAll < -sphR) return;
+    float3 nearAll = rayOrigin + rayDir * max(bAll, 0.0f);
+    float3 dAllVec = nearAll - vfx.fxSphere.xyz;
+    if (dot(dAllVec, dAllVec) > sphR * sphR) return;
+
+    // 1. Ballistic Golden-Orange Metal Sparks (<= 64, razor-sharp incandescent needles w/ fast sphere reject)
+    for (uint i = 0u; i < sparkCount; ++i) {
+        RTSparkGPU sp = vfx.sparks[i];
+        float life = sp.posLife.w;
+        if (life <= 0.01f) continue;
+
+        float3 vel = sp.velTemp.xyz;
+        float3 pTip = sp.posLife.xyz + vel * 0.005f;
+        float3 pTail = sp.posLife.xyz - vel * 0.024f;
+        float3 mid = 0.5f * (pTip + pTail);
+        float tMid = dot(mid - rayOrigin, rayDir);
+        // Reject sparks closer than 1.25m to camera lens so stray near-camera particles never blow up across HUD
+        if (tMid < 1.25f || tMid > gDepth + 0.45f) continue;
+        float3 seg = pTip - pTail;
+        float segLenSq = max(dot(seg, seg), 1e-4f);
+        float boundR2 = segLenSq * 0.32f + 0.22f;
+        float3 dMid = (rayOrigin + rayDir * tMid) - mid;
+        if (dot(dMid, dMid) > boundR2) continue;
+
+        // Exact closest approach between primary ray and spark streak segment
+        float3 w0 = rayOrigin - pTail;
+        float b = dot(rayDir, seg);
+        float d = dot(rayDir, w0);
+        float e = dot(seg, w0);
+        float denom = max(segLenSq - b * b, 1e-4f);
+        float sParam = clamp((e - b * d) / denom, 0.0f, 1.0f);
+        float3 segPt = pTail + seg * sParam;
+        float tRay = dot(segPt - rayOrigin, rayDir);
+        if (tRay > 1.25f && tRay < gDepth + 0.04f) {
+            float3 diff = (rayOrigin + rayDir * tRay) - segPt;
+            float distSq = dot(diff, diff);
+            float coreR = 0.0068f + tRay * 0.00055f;
+            float coreR2 = max(coreR * coreR, 1e-6f);
+            if (distSq < coreR2 * 22.0f) {
+                float core = exp(-distSq / coreR2);
+                float halo = exp(-distSq / (coreR2 * 4.5f)) * 0.32f;
+                float taper = smoothstep(0.0f, 0.28f, sParam) * (0.42f + 0.58f * sParam);
+                float temp = clamp(sp.velTemp.w, 0.0f, 1.0f);
+                float3 sparkCol = mix(float3(1.00f, 0.30f, 0.03f), float3(1.00f, 0.86f, 0.40f), temp * (0.35f + 0.65f * core));
+                float intensity = (core * 6.2f + halo * 1.9f) * taper * smoothstep(0.0f, 0.18f, life);
+                outSparkRGB += sparkCol * intensity;
+            }
+        }
+    }
+    if (dot(outSparkRGB, outSparkRGB) > 0.002f) {
+        outSparkRGB = min(outSparkRGB, float3(11.0f));
+        outReactive = 1.0f;
+    }
+
+    // 2. Volumetric Tire-Smoke Puffs (<= 16, soft ray-sphere clouds lit by sun, sky, taillights & cop strobes)
+    if (smokeCount > 0u) {
+        float simT = dynFX.timeWeather.x;
+        float isNight = smoothstep(0.036f, 0.015f, u.skyZenith.r);
+        float3 sunDir = normalize(u.sunDir.xyz);
+        float sunPhase = 0.55f + 0.45f * clamp(dot(rayDir, sunDir), -1.0f, 1.0f);
+        float3 baseSmokeLight = (u.skyZenith.rgb * 0.65f + u.skyHorizon.rgb * 0.78f) * max(u.coronaColor.w, 0.40f) * 0.72f
+                              + u.sunColor.rgb * u.sunDir.w * (0.32f * sunPhase)
+                              + float3(0.065f, 0.072f, 0.088f) * isNight;
+        float smokeDensityAccum = 0.0f;
+        float3 smokeLightAccum = float3(0.0f);
+
+        for (uint i = 0u; i < smokeCount; ++i) {
+            RTSmokePuffGPU sm = vfx.smoke[i];
+            float rad = sm.posRadius.w;
+            float alpha = sm.velAlpha.w;
+            if (rad <= 0.05f || alpha <= 0.008f) continue;
+
+            float3 oc = rayOrigin - sm.posRadius.xyz;
+            float b = dot(oc, rayDir);
+            float c = dot(oc, oc) - rad * rad;
+            float disc = b * b - c;
+            if (disc <= 0.0f) continue;
+
+            float sqrtD = sqrt(disc);
+            float t0 = max(-b - sqrtD, 1.25f);
+            float t1 = min(-b + sqrtD, gDepth);
+            if (t1 <= t0) continue;
+
+            float chord = (t1 - t0) / max(2.0f * rad, 0.1f);
+            float3 pMid = rayOrigin + rayDir * (0.5f * (t0 + t1));
+            float radialNorm = length(pMid - sm.posRadius.xyz) / rad;
+            float radialFalloff = pow(max(0.0f, 1.0f - radialNorm * radialNorm), 1.85f);
+            float nearCamFade = smoothstep(1.35f, 3.0f, 0.5f * (t0 + t1));
+
+            // Fast 1-octave billowing curl in 1-SPP real-time driving (4x faster than fbm2D!), full FBM in Photo Mode
+            float2 wUV = pMid.xz * 1.55f + float2(pMid.y * 1.15f - simT * 0.45f, float(i) * 2.31f);
+            float billow = temporal1SPP
+                ? (0.56f + 0.44f * noise2D(wUV))
+                : (0.56f + 0.44f * fbm2D(wUV));
+            float localDens = chord * radialFalloff * nearCamFade * billow * alpha * 1.65f;
+            if (localDens <= 0.003f) continue;
+
+            // Local crimson taillight + red/blue cop strobe scattering inside tire smoke!
+            float3 puffLight = baseSmokeLight;
+            float dCar = length(pMid - u.carWorldPos.xyz);
+            float tailGlow = exp(-dCar * 0.34f) * 0.65f;
+            puffLight += float3(1.15f, 0.09f, 0.03f) * tailGlow;
+            for (int cIdx = 0; cIdx < 2; ++cIdx) {
+                float strobe = dynFX.copLightPos[cIdx].w * dynFX.copLightCol[cIdx].w;
+                if (strobe > 0.02f) {
+                    float dCop2 = dot(pMid - dynFX.copLightPos[cIdx].xyz, pMid - dynFX.copLightPos[cIdx].xyz);
+                    puffLight += dynFX.copLightCol[cIdx].rgb * (strobe * 1.5f / (1.0f + dCop2 * 0.06f));
+                }
+            }
+            float3 smokeAlbedo = mix(float3(0.74f, 0.76f, 0.80f), float3(0.92f, 0.93f, 0.95f), billow);
+            smokeLightAccum += smokeAlbedo * puffLight * localDens;
+            smokeDensityAccum += localDens;
+        }
+
+        if (smokeDensityAccum > 0.004f) {
+            float T = exp(-min(smokeDensityAccum, 1.15f));
+            outSmokeTransmittance = T;
+            outSmokeRGB = (smokeLightAccum / max(smokeDensityAccum, 1e-4f)) * (1.0f - T);
+            outReactive = max(outReactive, clamp((1.0f - T) * 2.2f, 0.0f, 1.0f));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Primary Hardware Ray Tracing Kernel (Outputs Demodulated Buffers + G-Buffer)
 // ---------------------------------------------------------------------------
 
@@ -3021,6 +3319,7 @@ kernel void raytraceKernel(
     device const ushort* worldLightGrid [[buffer(12)]],
     constant RTDynamicFX& dynFX [[buffer(13)]],
     constant RTAISceneData& aiScene [[buffer(14)]],
+    constant RTVFXBuffer& vfx [[buffer(15)]],
     constant RTEventWorldFX& eventFX [[buffer(16)]]
 ) {
     // worldLights & worldLightGrid & dynFX actively drive real 4,309-light O(1) lookup, cop strobes, NOS & rain!
@@ -3065,7 +3364,10 @@ kernel void raytraceKernel(
     float2 pixelJitter = temporal1SPP
         ? (float2(0.5f, 0.5f) + u.jitterParams.xy)
         : ((sampleIdx == 0u && !useRT) ? float2(0.5f, 0.5f) : xiAA);
-    float2 uv = (float2(gid) + pixelJitter) / resF;
+    float2 localUV = (float2(gid) + pixelJitter) / resF;
+    // Zero-Extra-VRAM 2x2 tiled 4K snap crop (default 0,0,1,1 for normal frames)
+    float2 tileScale = (vfx.tileCrop.z > 1e-4f && vfx.tileCrop.w > 1e-4f) ? vfx.tileCrop.zw : float2(1.0f, 1.0f);
+    float2 uv = vfx.tileCrop.xy + localUV * tileScale;
     float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
 
     float4 worldFar = u.invViewProjMatrix * float4(ndc, 1.0f, 1.0f);
@@ -3073,16 +3375,85 @@ kernel void raytraceKernel(
     float3 rayOrigin = u.cameraPos.xyz;
     float3 rayDir = normalize(targetPt - rayOrigin);
 
+    // Hardware-RT Thin-Lens DoF Bokeh (7-blade polygonal aperture disk, active in Photo Mode when apertureRadiusM > 0)
+    bool photoDoFActive = (vfx.photoDoF.x > 1e-4f);
+    if (photoDoFActive) {
+        float2 xiLens = r2Sequence(sampleIdx + 211u, fract(cpShift + float2(0.83f, 0.19f)));
+        float2 d = xiLens * 2.0f - 1.0f;
+        float rDisk = 0.0f;
+        float theta = 0.0f;
+        if (abs(d.x) > 1e-5f || abs(d.y) > 1e-5f) {
+            if (abs(d.x) > abs(d.y)) {
+                rDisk = d.x;
+                theta = (PI * 0.25f) * (d.y / d.x);
+            } else {
+                rDisk = d.y;
+                theta = (PI * 0.5f) - (PI * 0.25f) * (d.x / d.y);
+            }
+        }
+        // Authentic 7-blade photographic iris polygon (cos(PI/7) / cos(sectorAngle))
+        const float sector = PI * 2.0f / 7.0f;
+        const float halfSec = sector * 0.5f;
+        float modAngle = fmod(theta + PI * 4.0f, sector) - halfSec;
+        float polyScale = cos(halfSec) / max(cos(modAngle), 0.72f);
+        float2 lensDisk = float2(cos(theta), sin(theta)) * (rDisk * polyScale) * vfx.photoDoF.x;
+
+        // World-space focal plane perpendicular to cameraForward (100% seam-free across 2x2 4K tiles!)
+        float cosFwd = max(dot(rayDir, normalize(u.cameraForward.xyz)), 0.12f);
+        float tFocus = max(vfx.photoDoF.y, 0.5f) / cosFwd;
+        float3 focalPt = rayOrigin + rayDir * tFocus;
+
+        float3 camR = normalize(u.cameraRight.xyz);
+        float3 camU = normalize(u.cameraUp.xyz);
+        rayOrigin = rayOrigin + camR * lensDisk.x + camU * lensDisk.y;
+        rayDir = normalize(focalPt - rayOrigin);
+    }
+
     ray r;
     r.origin = rayOrigin;
     r.direction = rayDir;
     r.min_distance = 0.02f;
     r.max_distance = hasRkptWorld ? 650.0f : 250.0f;
 
+    uint primaryMask = 0xFFu;
+    bool cockpitCamActive = ((vfx.counts.w & 1u) != 0u);
+    // In Cockpit POV, exclude player car roof/wiper/glass above horizon so sky & road are 100% unobstructed,
+    // while keeping the sculpted hood & lower dash framing visible below horizon!
+    if (cockpitCamActive && rayDir.y > -0.04f) {
+        primaryMask = (0xFFu & ~(TLAS_MASK_CAR | TLAS_MASK_GLASS));
+    }
+
     TraceResult hit = traceSceneRay(
-        r, tlas, 0xFFu, hasRkptWorld,
+        r, tlas, primaryMask, hasRkptWorld,
         instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
     );
+
+    // One-Way Interior Windshield Transmittance (Cockpit POV: counts.w bit0 = 1)
+    // Lets outgoing driver rays below horizon pass cleanly through lower windshield glass onto the sculpted hood & road!
+    bool cockpitWindshieldPassed = cockpitCamActive && (rayDir.y > -0.04f);
+    if (hit.hit && cockpitCamActive && hit.distance < 2.15f) {
+        RTInstanceMeta firstInst = instances[hit.instanceID];
+        bool isPlayerCar = ((firstInst.flags & ((1u << 4) | (1u << 7) | 4u)) == 0u);
+        if (isPlayerCar) {
+            uint firstTriMat = triMaterials[firstInst.triOffset + hit.primitiveID];
+            if (firstTriMat == MAT_SMOKED_GLASS || firstTriMat == MAT_INTERIOR_DARK) {
+                ray rPass;
+                rPass.origin = rayOrigin + rayDir * (hit.distance + 0.03f);
+                rPass.direction = rayDir;
+                rPass.min_distance = 0.01f;
+                rPass.max_distance = r.max_distance;
+                TraceResult passHit = traceSceneRay(
+                    rPass, tlas, (0xFFu & ~TLAS_MASK_GLASS), hasRkptWorld,
+                    instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                );
+                if (passHit.hit) {
+                    passHit.distance += (hit.distance + 0.03f);
+                }
+                hit = passHit;
+                cockpitWindshieldPassed = true;
+            }
+        }
+    }
 
     float3 outDiffIrrad = float3(0.0f);
     float3 outSpecRad   = float3(0.0f);
@@ -3123,6 +3494,10 @@ kernel void raytraceKernel(
 
         // Exact Reverse-Z depth (nearZ=0.20, farZ=800.0 -> 1.0 at near, 0.0 at far) + static/dynamic motion vectors
         RTInstanceMeta hitInst = instances[hit.instanceID];
+        // Persistent analytical drift skidmarks (<=128, road asphalt only, <32-45m, 1-instruction AABB early-out)
+        if ((hitInst.flags & (1u << 4)) != 0u && s.matID == MAT_WET_ASPHALT) {
+            applyRoadSkidmarks(s, hit.distance, temporal1SPP, vfx);
+        }
         float4 currClip = u.currViewProjMatrix * float4(s.worldPos, 1.0f);
         float viewZ = max(currClip.w, 0.20f);
         clipDepth = clamp((0.20f * (800.0f - viewZ)) / (viewZ * 799.8f), 0.0f, 1.0f);
@@ -3267,7 +3642,43 @@ kernel void raytraceKernel(
             evaluateDirectSunSplit(s, V, L, sunRad, sunVis, directDiffIrrad, directSpec);
 
             float3 localDiffIrrad, localSpec;
-            evaluateLocalAreaLightsSplit(s, V, u, worldLights, worldLightGrid, dynFX, localDiffIrrad, localSpec);
+            bool isFoliageCard = (s.matID == MAT_FOLIAGE_AUTUMN || s.matID == MAT_FOLIAGE_PINE);
+            bool risAllowed = useRT && hasRkptWorld && ((vfx.counts.w & 2u) != 0u) && (hit.distance < 95.0f) && (!temporal1SPP || !isFoliageCard);
+            float2 xiRIS = r2Sequence(sampleIdx + 263u, fract(cpShift + float2(0.29f, 0.91f)));
+            float4 risPosDist;
+            float3 risDiff, risSpec;
+            float risWeightRatio;
+            evaluateLocalAreaLightsImpl(
+                s, V, u, worldLights, worldLightGrid, dynFX,
+                risAllowed, xiRIS.x,
+                localDiffIrrad, localSpec, risPosDist, risDiff, risSpec, risWeightRatio
+            );
+            // 1-Ray RIS Hardware-RT Streetlamp Shadows (< 0.6 ms GPU; grounded car, pole & building shadows at night!)
+            if (risAllowed && risPosDist.w > 0.65f && risWeightRatio > 0.01f) {
+                // Soft 0.18m lamp fixture jitter disk for natural streetlamp penumbrae
+                float phiL = xiRIS.y * 2.0f * PI;
+                float rL = 0.18f * sqrt(fract(xiRIS.x * 7.31f + xiRIS.y * 3.17f));
+                float3 lampTarget = risPosDist.xyz + float3(cos(phiL) * rL, 0.0f, sin(phiL) * rL);
+                float3 toLamp = lampTarget - s.worldPos;
+                float lampDist = length(toLamp);
+                if (lampDist > 0.65f) {
+                    ray lsr;
+                    lsr.origin = s.worldPos + s.geomN * 0.014f;
+                    lsr.direction = toLamp / lampDist;
+                    lsr.min_distance = 0.02f;
+                    lsr.max_distance = min(lampDist - 0.50f, 42.0f);
+                    float lampVis = traceShadowVisibility(
+                        lsr, tlas, TLAS_MASK_SHADOW_ALL, hasRkptWorld,
+                        instances, worldVertices, worldIndices, worldMaterials, worldTextures, worldTexCount, repeatSamp
+                    );
+                    if (lampVis < 0.999f) {
+                        // Variance-bounded control-variate RIS shadow modulation (unbiased for 1-2 dominant lamps, zero 1-SPP fireflies!)
+                        float shadowScale = min(risWeightRatio, temporal1SPP ? 2.15f : 4.0f) * (1.0f - lampVis);
+                        localDiffIrrad = max(float3(0.0f), localDiffIrrad - risDiff * shadowScale);
+                        localSpec      = max(float3(0.0f), localSpec      - risSpec * shadowScale);
+                    }
+                }
+            }
 
             float NdotV = max(dot(s.N, V), 1e-4f);
             float3 F0 = mix(float3(0.04f), s.baseAlbedo, s.metallic);
@@ -3704,6 +4115,32 @@ kernel void raytraceKernel(
         }
     }
 
+    // Analytical Drift VFX: Ballistic Sparks (<=64) & Volumetric Tire Smoke (<=16) on primary rays ONLY (#24 Guardrail 2)
+    if (vfx.counts.y > 0u || vfx.counts.z > 0u) {
+        float3 sparkRGB, smokeRGB;
+        float smokeT, vfxReact;
+        evaluateDriftVFXPrimary(
+            rayOrigin, rayDir, gDepth, temporal1SPP, vfx, u, dynFX,
+            sparkRGB, smokeRGB, smokeT, vfxReact
+        );
+        if (smokeT < 0.999f) {
+            gAlbedo *= smokeT;
+            gEmissive *= smokeT;
+            outSpecRad = outSpecRad * smokeT + smokeRGB;
+            // Damp road motion vectors through semi-opaque tire smoke so 2x Frame-Gen never tears optical-flow tiles!
+            motionPx *= mix(1.0f, 0.25f, clamp(1.0f - smokeT, 0.0f, 1.0f));
+        }
+        if (vfxReact > 0.001f) {
+            outSpecRad += sparkRGB;
+            gReactiveVal = max(gReactiveVal, vfxReact);
+        }
+    }
+
+    // Ultra-subtle optical interior windshield clarity hint in Cockpit POV (zero dark exterior tint!)
+    if (cockpitWindshieldPassed) {
+        outSpecRad = outSpecRad * float3(0.97f, 0.99f, 1.00f) + float3(0.006f, 0.009f, 0.012f) * smoothstep(0.45f, 0.0f, pxNorm.y);
+    }
+
     // Subtle high-speed rear-tire wet mist / spray veil behind rear wheels when driving fast (procedural overpass)
     float driveSpd = clamp(u.driveParams.x / 180.0f, 0.0f, 1.0f);
     if (!hasRkptWorld && driveSpd > 0.30f && rayOrigin.z < -2.2f && rayDir.z > 0.35f) {
@@ -3737,6 +4174,14 @@ kernel void raytraceKernel(
 
     outDiffIrrad = clamp(outDiffIrrad, float3(0.0f), float3(18.0f));
     outSpecRad   = clamp(outSpecRad,   float3(0.0f), float3(16.0f));
+
+    // Exact unbiased progressive optical DoF accumulation (avoids E[diff]*E[albedo] bleeding across out-of-focus edges!)
+    if (!temporal1SPP && photoDoFActive) {
+        outSpecRad = clamp(outDiffIrrad * gAlbedo + outSpecRad + gEmissive, float3(0.0f), float3(22.0f));
+        outDiffIrrad = float3(0.0f);
+        gAlbedo = float3(0.0f);
+        gEmissive = float3(0.0f);
+    }
 
     if (temporal1SPP) {
         // Real-time 1-SPP temporal driving path (MetalFX TemporalDenoisedScaler or SVGF)
