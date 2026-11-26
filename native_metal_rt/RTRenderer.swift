@@ -89,6 +89,7 @@ struct RTPhysicsProbeOutput {
     var wallDist: SIMD4<Float>       // front, rear, left, right dist (999 on miss)
     var wallNormalFront: SIMD4<Float>// xyz = front wall normal, w = valid
     var wallNormalSide: SIMD4<Float> // xyz = nearest side wall normal, w = sideSign (-1 left, +1 right, 0 none)
+    var skyProbe: SIMD4<Float>       // x = skyOcclusion (0..1), y = hitDist (999 on miss), z = 0, w = valid
 }
 
 // Locked Hour 1-3 ABI Contracts matching RayTracing.metal Buffer Slots 11, 12, 13
@@ -251,6 +252,23 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     var benchmarkNosForced: Bool = false
     var benchmarkSpeedbreakerForced: Bool = false
     var benchmarkPursuitHeat: Int? = nil
+
+    // v1.1.0 EA TRAX Soundtrack Banner & Upward Sky-Ray Acoustic Tunnel Occlusion
+    private(set) var rawSkyOcclusion: Float = 0.0
+    private(set) var skyCeilingDist: Float = 999.0
+    private(set) var smoothedSkyOcclusion: Float = 0.0
+    var musicDisabled: Bool = false
+    var forceShowMusicBanner: Bool = false
+    private var musicBannerTimer: Float = 0.0
+    private let musicBannerDuration: Float = 4.5
+    private var musicBannerArtist: String = ""
+    private var musicBannerTitle: String = ""
+    private var musicBannerTrackIndex: Int = 1
+    private var musicBannerTotalTracks: Int = 26
+    private var musicBannerIsPursuit: Bool = false
+    private var musicBannerIsMuted: Bool = false
+    private var lastPursuitAudioMode: Bool = false
+    private var explicitMusicTrackLocked: Bool = false
 
     private var raytracePSO: MTLComputePipelineState!
     private var svgfTemporalPSO: MTLComputePipelineState!
@@ -495,6 +513,10 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         }
         precondition(MemoryLayout<RTWorldLightGPU>.stride == 32, "RTWorldLightGPU stride must be 32 bytes")
         precondition(MemoryLayout<RTDynamicFXGPU>.stride == 176, "RTDynamicFXGPU stride must be 176 bytes")
+        precondition(MemoryLayout<RTPhysicsProbeOutput>.stride == 80, "RTPhysicsProbeOutput stride must be 80 bytes")
+        RTHudExtUniforms.assertLayout()
+        RTMinimapBuffer.assertLayout()
+        RTMusicBannerUniforms.assertLayout()
         self.physicsInBuffer = pin
         self.physicsOutBuffer = pout
         self.aiRoadProbeInBuffer = aiPin
@@ -559,6 +581,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             audioEngine.start(initialEngineNode: physicsEngine.spec.engineAudioNode)
             audioEngine.selectEngine(node: physicsEngine.spec.engineAudioNode, trannyWhineOverride: physicsEngine.spec.trannyWhine)
         }
+        syncMusicBannerFromAudio(triggerSlide: !headless && audioEngine.currentMusicTrack != nil)
 
         try buildAccelerationStructures()
 
@@ -718,6 +741,85 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         snapAIVehiclesToRoad()
         updateMinimapBuffer()
         updateDynamicFXBuffer()
+        if !musicDisabled && !explicitMusicTrackLocked {
+            audioEngine.setPursuitMusicMode(true)
+            lastPursuitAudioMode = true
+            syncMusicBannerFromAudio(triggerSlide: true)
+        }
+    }
+
+    // MARK: - v1.1.0 EA TRAX Soundtrack & Tunnel Reverb Controls
+
+    func syncMusicBannerFromAudio(triggerSlide: Bool) {
+        musicBannerIsMuted = musicDisabled || audioEngine.isMusicMuted
+        if let info = audioEngine.currentMusicTrack {
+            musicBannerArtist = info.artist
+            musicBannerTitle = info.title
+            musicBannerTrackIndex = info.index + 1
+            musicBannerTotalTracks = max(1, info.total)
+            musicBannerIsPursuit = info.isPursuit
+            if triggerSlide {
+                musicBannerTimer = musicBannerDuration
+            }
+        } else if forceShowMusicBanner && musicBannerTitle.isEmpty {
+            // Clean offline/synthetic fallback when --show-trax is explicitly requested without music_pack
+            musicBannerArtist = "STYLES OF BEYOND"
+            musicBannerTitle = "NINE THOU (SUPERSTARS REMIX)"
+            musicBannerTrackIndex = 16
+            musicBannerTotalTracks = 26
+            musicBannerIsPursuit = false
+            if triggerSlide {
+                musicBannerTimer = musicBannerDuration
+            }
+        }
+    }
+
+    @discardableResult
+    func nextMusicTrack() -> RTMusicTrackInfo? {
+        guard !musicDisabled else { return nil }
+        explicitMusicTrackLocked = true
+        let info = audioEngine.nextMusicTrack()
+        syncMusicBannerFromAudio(triggerSlide: true)
+        return info
+    }
+
+    @discardableResult
+    func prevMusicTrack() -> RTMusicTrackInfo? {
+        guard !musicDisabled else { return nil }
+        explicitMusicTrackLocked = true
+        let info = audioEngine.prevMusicTrack()
+        syncMusicBannerFromAudio(triggerSlide: true)
+        return info
+    }
+
+    @discardableResult
+    func selectMusicTrack(index: Int) -> RTMusicTrackInfo? {
+        explicitMusicTrackLocked = true
+        let info = audioEngine.selectMusicTrack(index: index)
+        syncMusicBannerFromAudio(triggerSlide: true)
+        return info
+    }
+
+    @discardableResult
+    func toggleMusicMute() -> Bool {
+        let muted = audioEngine.toggleMusicMute()
+        musicBannerIsMuted = muted
+        musicBannerTimer = musicBannerDuration
+        return muted
+    }
+
+    func disableMusicPlayback() {
+        musicDisabled = true
+        if !audioEngine.isMusicMuted {
+            _ = audioEngine.toggleMusicMute()
+        }
+        musicBannerIsMuted = true
+    }
+
+    func teleportToPosition(_ pos: SIMD3<Float>, yawRad: Float, label: String = "Custom") {
+        activeLandmarkName = label
+        let lm = RkptLandmark(name: label, spawnPos: pos, spawnYawRad: yawRad, regionId: 0, flags: 0)
+        applyLandmarkPose(lm)
     }
 
     func resetPlayer() {
@@ -1377,7 +1479,13 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     }
 
     private func readPhysicsProbeOutput() -> RTPhysicsProbeOutput {
-        var out = RTPhysicsProbeOutput(wheelHitY: .zero, wallDist: .zero, wallNormalFront: .zero, wallNormalSide: .zero)
+        var out = RTPhysicsProbeOutput(
+            wheelHitY: .zero,
+            wallDist: .zero,
+            wallNormalFront: .zero,
+            wallNormalSide: .zero,
+            skyProbe: SIMD4<Float>(0.0, 999.0, 0.0, 0.0)
+        )
         memcpy(&out, physicsOutBuffer.contents(), MemoryLayout<RTPhysicsProbeOutput>.stride)
         return out
     }
@@ -1448,6 +1556,10 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         cb.commit()
         cb.waitUntilCompleted()
         let probe = readPhysicsProbeOutput()
+        rawSkyOcclusion = max(0.0, min(1.0, probe.skyProbe.x))
+        skyCeilingDist = probe.skyProbe.y
+        smoothedSkyOcclusion = rawSkyOcclusion
+        audioEngine.setTunnelOcclusion(smoothedSkyOcclusion)
         let hits = [probe.wheelHitY.x, probe.wheelHitY.y, probe.wheelHitY.z, probe.wheelHitY.w].filter { $0 > -5000.0 }
         if !hits.isEmpty {
             let avgY = hits.reduce(0.0, +) / Float(hits.count)
@@ -1755,6 +1867,43 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         return ext
     }
 
+    private func makeMusicBannerUniforms() -> RTMusicBannerUniforms {
+        var banner = RTMusicBannerUniforms()
+        if forceShowMusicBanner && musicBannerTitle.isEmpty {
+            syncMusicBannerFromAudio(triggerSlide: false)
+        }
+        guard !musicBannerTitle.isEmpty || !musicBannerArtist.isEmpty else {
+            return banner
+        }
+        let alpha: Float
+        let slideT: Float
+        if forceShowMusicBanner {
+            alpha = 1.0
+            slideT = 1.0
+        } else if musicBannerTimer > 0.001 {
+            let elapsed = musicBannerDuration - musicBannerTimer
+            slideT = min(1.0, max(0.0, elapsed / 0.38))
+            let fadeIn = min(1.0, max(0.0, elapsed / 0.25))
+            let fadeOut = min(1.0, max(0.0, musicBannerTimer / 0.75))
+            alpha = min(fadeIn, fadeOut)
+        } else {
+            return banner
+        }
+
+        banner.bannerAlpha = alpha
+        banner.slideT = slideT
+        banner.trackIndex = UInt32(max(1, musicBannerTrackIndex))
+        banner.totalTracks = UInt32(max(1, musicBannerTotalTracks))
+        var mFlags: UInt32 = RTMusicBannerFlagBits.visible
+        if musicBannerIsMuted { mFlags |= RTMusicBannerFlagBits.muted }
+        if musicBannerIsPursuit { mFlags |= RTMusicBannerFlagBits.pursuitScore }
+        if smoothedSkyOcclusion > 0.35 { mFlags |= RTMusicBannerFlagBits.tunnelReverb }
+        banner.flags = mFlags
+        banner.skyOcclusion = smoothedSkyOcclusion
+        banner.setText(artist: musicBannerArtist, title: musicBannerTitle)
+        return banner
+    }
+
     private static func halton(_ index: UInt32, base: UInt32) -> Float {
         var f: Float = 1.0
         var r: Float = 0.0
@@ -1952,6 +2101,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         var srgbFlag: UInt32 = encodeSRGB ? 1 : 0
         var hudExt = makeHudExtUniforms()
         var mm = minimapBuffer
+        var musicBanner = makeMusicBannerUniforms()
         enc.setComputePipelineState(hudOverlayPSO)
         enc.setTexture(inputTexture, index: 0)
         enc.setTexture(outputTexture, index: 1)
@@ -1959,6 +2109,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.setBytes(&srgbFlag, length: MemoryLayout<UInt32>.stride, index: 1)
         enc.setBytes(&hudExt, length: RTHudExtUniforms.byteSize, index: 2)
         enc.setBytes(&mm, length: RTMinimapBuffer.byteSize, index: 3)
+        enc.setBytes(&musicBanner, length: RTMusicBannerUniforms.byteSize, index: 4)
         dispatch2D(encoder: enc, pso: hudOverlayPSO, width: outW, height: outH)
         enc.endEncoding()
     }
@@ -2179,6 +2330,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             var hudSrgbFlag: UInt32 = encodeSRGB ? 1 : 0
             var hudExt = makeHudExtUniforms()
             var mm = minimapBuffer
+            var musicBanner = makeMusicBannerUniforms()
             enc.setComputePipelineState(hudOverlayPSO)
             enc.setTexture(ldrScratch, index: 0)
             enc.setTexture(outputTexture, index: 1)
@@ -2186,6 +2338,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             enc.setBytes(&hudSrgbFlag, length: MemoryLayout<UInt32>.stride, index: 1)
             enc.setBytes(&hudExt, length: RTHudExtUniforms.byteSize, index: 2)
             enc.setBytes(&mm, length: RTMinimapBuffer.byteSize, index: 3)
+            enc.setBytes(&musicBanner, length: RTMusicBannerUniforms.byteSize, index: 4)
             dispatch2D(encoder: enc, pso: hudOverlayPSO, width: outW, height: outH)
         }
         enc.endEncoding()
@@ -2521,6 +2674,18 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             probeSample.wallDist = gpuProbe.wallDist
             probeSample.wallNormalFront = gpuProbe.wallNormalFront
             probeSample.wallNormalSide = gpuProbe.wallNormalSide
+            rawSkyOcclusion = max(0.0, min(1.0, gpuProbe.skyProbe.x))
+            skyCeilingDist = gpuProbe.skyProbe.y
+            let tau: Float = (rawSkyOcclusion > smoothedSkyOcclusion) ? 0.14 : 0.45
+            let alpha = 1.0 - exp(-max(0.001, dt) / tau)
+            smoothedSkyOcclusion = smoothedSkyOcclusion + (rawSkyOcclusion - smoothedSkyOcclusion) * alpha
+        } else {
+            rawSkyOcclusion = 0.0
+            skyCeilingDist = 999.0
+            smoothedSkyOcclusion = 0.0
+        }
+        if musicBannerTimer > 0.0 {
+            musicBannerTimer = max(0.0, musicBannerTimer - dt)
         }
 
         let prevPos = carWorldPosition
@@ -2581,7 +2746,16 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             camera.distance = max(4.35, cam.distance - 0.10)
         }
 
-        // Real-time Ginsu PSOLA engine + SFX + 3D Doppler siren audio (silent no-op in headless)
+        // Real-time Ginsu PSOLA engine + SFX + 3D Doppler siren + Tunnel Reverb audio (silent no-op in headless)
+        audioEngine.setTunnelOcclusion(smoothedSkyOcclusion)
+        if !musicDisabled && !explicitMusicTrackLocked {
+            let pursuitActive = aiEnabled && world != nil && gameWorld.heatLevel > 0
+            if pursuitActive != lastPursuitAudioMode {
+                lastPursuitAudioMode = pursuitActive
+                audioEngine.setPursuitMusicMode(pursuitActive)
+                syncMusicBannerFromAudio(triggerSlide: true)
+            }
+        }
         audioEngine.update(
             telemetry: st,
             rainIntensity: effectiveRainAmount(),

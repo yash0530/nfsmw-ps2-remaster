@@ -56,6 +56,10 @@ PROHIBITED_EXTENSIONS = frozenset(
         ".rkpt",
         ".wav",
         ".pcm",
+        ".m4a",
+        ".caf",
+        ".aac",
+        ".mp3",
         ".obj",
     }
 )

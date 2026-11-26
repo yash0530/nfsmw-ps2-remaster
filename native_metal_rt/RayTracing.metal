@@ -137,7 +137,9 @@ struct RTPhysicsProbeOutput {
     float4 wallDist;       // front, rear, left, right hit dist (999 on miss)
     float4 wallNormalFront;// xyz = front wall normal, w = valid
     float4 wallNormalSide; // xyz = nearest side wall normal, w = sideSign (-1 left, +1 right, 0 none)
+    float4 skyProbe;       // x = skyOcclusion (0 open sky -> 1 tunnel ceiling <=12m), y = hitDist (999 on miss), z = 0, w = valid
 };
+static_assert(sizeof(RTPhysicsProbeOutput) == 80, "RTPhysicsProbeOutput must match 80-byte ABI");
 
 // Locked Hour 1-3 ABI Contracts (Buffer Slots 11, 12, 13)
 struct RTWorldLight {
@@ -3680,6 +3682,22 @@ kernel void physicsProbeKernel(
         }
     }
 
+    // 1 upward sky-occlusion ray (< 0.005 ms GPU) for real-time acoustic tunnel/overpass reverb
+    float skyHitDist = 999.0f;
+    float skyOcc = 0.0f;
+    {
+        ray sr;
+        sr.origin = pos + float3(0.0f, 1.35f, 0.0f);
+        sr.direction = float3(0.0f, 1.0f, 0.0f);
+        sr.min_distance = 0.25f;
+        sr.max_distance = 42.0f;
+        auto sh = probeRT.intersect(sr, tlas, TLAS_MASK_WORLD_OPAQUE | TLAS_MASK_ROAD | TLAS_MASK_WALL);
+        if (sh.type == intersection_type::triangle) {
+            skyHitDist = sh.distance;
+            skyOcc = (skyHitDist <= 12.0f) ? 1.0f : clamp((42.0f - skyHitDist) / 30.0f, 0.0f, 1.0f);
+        }
+    }
+
     RTPhysicsProbeOutput res;
     res.wheelHitY = float4(wheelY[0], wheelY[1], wheelY[2], wheelY[3]);
     res.wallDist  = float4(wDist[0], wDist[1], wDist[2], wDist[3]);
@@ -3691,6 +3709,7 @@ kernel void physicsProbeKernel(
     } else {
         res.wallNormalSide = float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
+    res.skyProbe = float4(skyOcc, skyHitDist, 0.0f, (skyHitDist < 900.0f) ? 1.0f : 0.0f);
     outP[0] = res;
 }
 

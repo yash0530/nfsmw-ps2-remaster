@@ -111,6 +111,17 @@ final class RTShowcaseMTKView: MTKView {
             r.resetPlayer()
         case "p":
             onScreenshotRequested?()
+        case "[":
+            if let info = r.prevMusicTrack() {
+                print("EA TRAX [\(info.index + 1)/\(info.total)]: \(info.artist) — \(info.title)")
+            }
+        case "]":
+            if let info = r.nextMusicTrack() {
+                print("EA TRAX [\(info.index + 1)/\(info.total)]: \(info.artist) — \(info.title)")
+            }
+        case "u":
+            let muted = r.toggleMusicMute()
+            print("EA TRAX Music: \(muted ? "MUTED" : "ON")")
         case "\u{1b}":
             NSApp.terminate(nil)
         default:
@@ -218,6 +229,11 @@ struct RTCLIOptions {
     var speedbreaker = false
     var noAi = false
     var noAudio = false
+    var noMusic = false
+    var musicTrack: Int? = nil
+    var showTrax = false
+    var spawnPos: SIMD3<Float>? = nil
+    var spawnYawDeg: Float? = nil
     var speedKmh: Float = 145.0
     var steerDeg: Float = 12.0
     var outPath = "build/metal_rt_wave5/rt_render.png"
@@ -289,6 +305,21 @@ func parseRTArgs() -> RTCLIOptions {
             opts.noAi = true
         case "--no-audio":
             opts.noAudio = true
+        case "--no-music":
+            opts.noMusic = true
+        case "--music-track":
+            if let v = nextVal(), let idx = Int(v) { opts.musicTrack = idx }
+        case "--show-trax":
+            opts.showTrax = true
+        case "--spawn-pos":
+            if let v = nextVal() {
+                let parts = v.split(separator: ",").compactMap { Float($0.trimmingCharacters(in: .whitespaces)) }
+                if parts.count == 3 {
+                    opts.spawnPos = SIMD3<Float>(parts[0], parts[1], parts[2])
+                }
+            }
+        case "--spawn-yaw":
+            if let v = nextVal(), let f = Float(v) { opts.spawnYawDeg = f }
         case "--car":
             if let v = nextVal() { opts.carKey = v }
         case "--world":
@@ -353,11 +384,12 @@ func parseRTArgs() -> RTCLIOptions {
             print("""
             RockportMetalRT — NFSMW: Rockport 2026 Apple Silicon Hardware Ray Tracing + MetalFX Engine
             Usage:
-              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
-              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--pursuit] [--hud] [--no-ai] [--no-audio]
+              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--spawn-pos x,y,z] [--spawn-yaw <deg>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
+              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--pursuit] [--hud] [--no-ai] [--no-audio] [--no-music] [--music-track <idx>] [--show-trax]
             Interactive Controls (Canonical Keymap):
               WASD / Arrows: Drive | Space: Handbrake/Drift | Shift / Z: NOS Boost | X / Tab: Speedbreaker
               F: Instant Pursuit (Heat 1->5) | V: Cycle Landmark | G / Shift+G: Cycle Garage Car | C: Cycle Camera
+              [ / ]: Prev / Next EA TRAX Song | U: Mute/Unmute EA TRAX Music
               1/2/3/4: Presets & Live 24h | B: Rain | K: Frame-Gen | H: HUD | L: Livery | T: RT | N: Denoiser
               R: Reset Car & Pursuit | P: Save 64-SPP PNG | Mouse Drag: Orbit | Scroll: Zoom | Esc: Quit
             """)
@@ -440,15 +472,34 @@ do {
     }
     renderer.frameGenEnabled = opts.frameGen
     renderer.hudEnabled = opts.hud ?? false
+    if opts.noMusic {
+        renderer.disableMusicPlayback()
+    }
+    if let mt = opts.musicTrack {
+        _ = renderer.selectMusicTrack(index: mt)
+    }
+    if opts.showTrax {
+        renderer.forceShowMusicBanner = true
+        renderer.syncMusicBannerFromAudio(triggerSlide: true)
+    }
 
     if let lmQuery = opts.landmark {
         if let lm = renderer.teleportToLandmark(lmQuery) {
-            print(String(format: "Landmark teleport -> %@ (%.1f, %.1f, %.1f) yaw=%.1f deg | activeWorldInsts=%d",
+            print(String(format: "Landmark teleport -> %@ (%.1f, %.1f, %.1f) yaw=%.1f deg | activeWorldInsts=%d | skyOcc=%.2f",
                          lm.name, lm.spawnPos.x, lm.spawnPos.y, lm.spawnPos.z,
-                         lm.spawnYawRad * 180.0 / .pi, renderer.activeWorldInstanceCount))
+                         lm.spawnYawRad * 180.0 / .pi, renderer.activeWorldInstanceCount,
+                         renderer.smoothedSkyOcclusion))
         } else {
             fputs("Warning: landmark '\(lmQuery)' not found in loaded world\n", stderr)
         }
+    }
+    if let sp = opts.spawnPos {
+        let yawRad = (opts.spawnYawDeg ?? (renderer.carHeadingRad * 180.0 / .pi)) * .pi / 180.0
+        renderer.teleportToPosition(sp, yawRad: yawRad, label: "Custom")
+        print(String(format: "Custom spawn -> (%.1f, %.1f, %.1f) yaw=%.1f deg | activeWorldInsts=%d | skyOcc=%.2f (ceil=%.1fm)",
+                     renderer.carWorldPosition.x, renderer.carWorldPosition.y, renderer.carWorldPosition.z,
+                     yawRad * 180.0 / .pi, renderer.activeWorldInstanceCount,
+                     renderer.smoothedSkyOcclusion, renderer.skyCeilingDist))
     }
 
     if let cfgPath = opts.configPath {
@@ -495,14 +546,14 @@ do {
         let worldBytes = renderer.worldStreamer?.estimatedWorldVRAMBytes ?? worldPkg?.estimatedVRAMBytes ?? 0
         let aiBytes = renderer.aiVehicles?.estimatedVRAMBytes ?? 0
         let vramMB = Double(worldBytes + aiBytes) / (1024.0 * 1024.0)
-        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | landmark=%@ | blas=%d | activeInsts=%d | aiInsts=%d | aiTraffic=%d | aiCops=%d | heat=%d | speed=%.1fkmh | vram=%.1fMB | tris=%d | denoise=%@ | frameGen=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
+        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | landmark=%@ | blas=%d | activeInsts=%d | aiInsts=%d | aiTraffic=%d | aiCops=%d | heat=%d | speed=%.1fkmh | skyOcc=%.2f | vram=%.1fMB | tris=%d | denoise=%@ | frameGen=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
                      device.name, renderer.compiledMSLVersion, scene.carAlias,
                      worldPkg?.url.lastPathComponent ?? "procedural",
                      renderer.activeLandmarkName,
                      totalBlas, renderer.activeWorldInstanceCount,
                      renderer.activeAIInstanceCount,
                      renderer.gameWorld.activeTrafficCount, renderer.gameWorld.activeCopCount, renderer.gameWorld.heatLevel,
-                     renderer.speedKmh, vramMB, totalTris, renderer.effectiveDenoiseLabel,
+                     renderer.speedKmh, renderer.smoothedSkyOcclusion, vramMB, totalTris, renderer.effectiveDenoiseLabel,
                      renderer.effectiveFrameGenActive ? "on" : "off",
                      benchFrames, avgMs, fps, outURL.path))
     } else if opts.headless {

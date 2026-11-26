@@ -36,7 +36,8 @@ make play-rockport
 
 | Command | What It Does |
 | :--- | :--- |
-| `make export-rockport-full` | Exports full-island `build/rockport_world/rockport_full.rkpt` (`718` secs, `.rkpt` v2 BC7) + `build/gameplay_pack/` (VLT stats, Ginsu audio, 7 AI vehicle archetypes) |
+| `make export-rockport-full` | Exports full-island `build/rockport_world/rockport_full.rkpt` (`718` secs, `.rkpt` v2 BC7) + `build/gameplay_pack/` (VLT stats, Ginsu audio, 7 AI archetypes) + `build/music_pack/` (via `export-music-pack`) |
+| `make export-music-pack` | Decodes 26 licensed **EA TRAX** + 14 pursuit score tracks from `MW_MUSIC.MUS` into gitignored `build/music_pack/` (auto-called by `make export-rockport-full`) |
 | `make build-rockport` | Compiles `native_metal_rt/` into `build/metal_rt_v06/RockportMetalRT` |
 | `make play-rockport` | Ensures build & exports exist and launches full-island Rockport with `--frame-gen on --hud $(ROCKPORT_ARGS)` |
 | `make play-pursuit` | Launches straight into an active **Heat 3 Rosewood Blvd police pursuit** (`--landmark "Rosewood Blvd" --pursuit 3 --frame-gen on --hud $(ROCKPORT_ARGS)`) |
@@ -72,6 +73,8 @@ build/metal_rt_v06/RockportMetalRT \
 | `--camera-mode <mode>` | `chase` \| `hero` \| `street` \| `overhead` | Starting camera preset |
 | `--hud` / `--no-hud` | Off in static, On in drive bench | Toggle NFSMW tachometer, NOS/Speedbreaker bars, Pursuit Heat & rotating GPU minimap |
 | `--no-ai` / `--no-audio` | Enabled by default | Disable AI traffic/cops or live `AVAudioEngine` audio for isolated graphics testing |
+| `--no-music` / `--music-track <idx>` | Enabled / Track `0` | Mute EA TRAX soundtrack or start on a specific decoded `MW_MUSIC.MUS` track index |
+| `--show-trax` | Auto on track change | Keep the post-FI top-left `[EA TRAX]` + `[REVERB]` OLED banner visible (great for captures) |
 
 ---
 
@@ -96,6 +99,8 @@ Both **PS5 DualSense** and **Xbox Wireless** controllers work out of the box via
 | **Toggle Rain (`0.0` ↔ `0.88`)** | `B` | — |
 | **Toggle 120 FPS MetalFX Frame-Gen** | `K` | — |
 | **Toggle NFSMW HUD & Rotating Minimap** | `H` | — |
+| **Previous / Next EA TRAX Song** | `[` / `]` | — |
+| **Mute / Unmute EA TRAX Soundtrack** | `U` | — |
 | **Toggle BMW M3 GTR ALMS Livery** | `L` | — |
 | **Toggle Hardware Ray Tracing** | `T` | — |
 | **Cycle Denoiser (`metalfx` / `svgf` / `off`)** | `N` | — |
@@ -131,6 +136,7 @@ Press **`G`** / **`Shift+G`** in-game or launch with `--car <NAME>` to drive **a
 ### Authentic VLT Physics, Ginsu PSOLA Audio & Heat 1–5 Police Pursuits
 - **VLT Handling (`RTPhysics.swift`)**: `48` decoded `ATTRIBUTES.BIN` vehicle profiles (9-point torque curves, 6-speed auto gearbox, RWD vs AWD `TORQUE_SPLIT`, e-brake drift slip & `YAW_CONTROL`, spring-damper pitch/roll over 4-wheel GPU BVH ground probes, airborne gravity, `+65%` NOS boost with dual Mach-diamond exhaust flames & FOV kick, and `0.35×` amber Speedbreaker bullet-time).
 - **Live PS2 Engine & Siren Audio (`RTAudioEngine.swift`)**: Lock-free `AVAudioEngine` granular PSOLA engine synth decoded from `9` real EA-XAS v0 `Gnsu v20` accel/decel banks (including the **BMW M3 GTR straight-cut gearbox whine**), plus `20` Sony SPU-ADPCM SFX (turbo spool/BOV flutter, drift tire screech, NOS roar/purge, shift backfire pops, Speedbreaker LPF, rain/wind bed, and 3D stereo Doppler police sirens).
+- **EA TRAX Soundtrack & Acoustic Tunnel Reverb (`v1.1.0`)**: Streams all **26 licensed EA TRAX** + **14 interactive pursuit score tracks** decoded from `MW_MUSIC.MUS` / `MW_MUSIC.MPF` (`[`/`]` skip, `U` mute, auto-ducking during Speedbreaker & pursuits) with a post-FI sliding `[EA TRAX]` OLED banner; upward sky-occlusion rays smoothly drive **`AVAudioUnitReverb`** (4% → 42% wet + bass warmth, indicated by `[REVERB]`) inside Bayshore & Rockport tunnels and underpasses.
 - **20 Live AI Traffic & Heat 1–5 Police (`RTGameWorld.swift` + `RTAIVehicleLoader.swift`)**: Up to `16` live traffic cars + `4` pursuing Rockport PD units (`COPMIDSIZE` Heat 1–2 → `COPGTO` Heat 3–4 → `COPSPORT` Heat 5) riding real hills via `aiRoadProbeKernel`, casting blazing alternating **red/blue ray-traced roof lightbar sweeps** across wet streets and your car's clearcoat, tracked on a live post-FI rotating GPU minimap with Heat/Bounty/Evade/Busted HUD.
 
 ---

@@ -148,3 +148,111 @@ struct RTMinimapBuffer {
         }
     }
 }
+
+// MARK: - v1.1.0 Post-FrameGen EA TRAX Music Banner ABI (hudOverlayKernel buffer(4))
+
+enum RTMusicBannerFlagBits {
+    static let visible: UInt32       = 1 << 0
+    static let muted: UInt32         = 1 << 1
+    static let pursuitScore: UInt32  = 1 << 2
+    static let tunnelReverb: UInt32  = 1 << 3
+}
+
+/// 112-byte (<= 128B, 16B-aligned) sliding EA TRAX corner banner uniform block.
+/// Matches `RTMusicBannerUniforms` in `RTHud.metal` byte-for-byte.
+struct RTMusicBannerUniforms {
+    // 0..15
+    var bannerAlpha: Float = 0.0
+    var slideT: Float = 0.0
+    var trackIndex: UInt32 = 0
+    var totalTracks: UInt32 = 0
+
+    // 16..31
+    var flags: UInt32 = 0
+    var artistLen: UInt32 = 0
+    var titleLen: UInt32 = 0
+    var skyOcclusion: Float = 0.0
+
+    // 32..63: 32 packed uppercase ASCII artist bytes (8 x UInt32)
+    var artist0: UInt32 = 0
+    var artist1: UInt32 = 0
+    var artist2: UInt32 = 0
+    var artist3: UInt32 = 0
+    var artist4: UInt32 = 0
+    var artist5: UInt32 = 0
+    var artist6: UInt32 = 0
+    var artist7: UInt32 = 0
+
+    // 64..103: 40 packed uppercase ASCII title bytes (10 x UInt32)
+    var title0: UInt32 = 0
+    var title1: UInt32 = 0
+    var title2: UInt32 = 0
+    var title3: UInt32 = 0
+    var title4: UInt32 = 0
+    var title5: UInt32 = 0
+    var title6: UInt32 = 0
+    var title7: UInt32 = 0
+    var title8: UInt32 = 0
+    var title9: UInt32 = 0
+
+    // 104..111: 16B-alignment padding
+    var pad0: UInt32 = 0
+    var pad1: UInt32 = 0
+
+    static let byteSize = 112
+    static let maxArtistChars = 32
+    static let maxTitleChars = 40
+
+    static func assertLayout() {
+        precondition(MemoryLayout<RTMusicBannerUniforms>.stride == byteSize,
+                     "RTMusicBannerUniforms stride (\(MemoryLayout<RTMusicBannerUniforms>.stride)) must be \(byteSize) bytes")
+        precondition(MemoryLayout<RTMusicBannerUniforms>.stride <= 128,
+                     "RTMusicBannerUniforms must fit inside 128-byte budget")
+    }
+
+    private static func packAscii(_ text: String, maxLen: Int) -> ([UInt32], UInt32) {
+        let upper = text.uppercased()
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(maxLen)
+        for scalar in upper.unicodeScalars {
+            if bytes.count >= maxLen { break }
+            let v = scalar.value
+            if v >= 0x20 && v <= 0x5F {
+                bytes.append(UInt8(v))
+            } else if v == 0x2018 || v == 0x2019 { // curly apostrophe
+                bytes.append(0x27)
+            } else if v == 0x2013 || v == 0x2014 { // en/em dash
+                bytes.append(0x2D)
+            } else if v >= 0x61 && v <= 0x7A {
+                bytes.append(UInt8(v - 32))
+            } else {
+                bytes.append(0x20)
+            }
+        }
+        // Trim trailing spaces
+        while let last = bytes.last, last == 0x20 {
+            bytes.removeLast()
+        }
+        let count = bytes.count
+        let wordCount = maxLen / 4
+        var words = Array(repeating: UInt32(0), count: wordCount)
+        for i in 0..<count {
+            let wIdx = i >> 2
+            let shift = (i & 3) * 8
+            words[wIdx] |= UInt32(bytes[i]) << shift
+        }
+        return (words, UInt32(count))
+    }
+
+    mutating func setText(artist: String, title: String) {
+        let (aw, alen) = Self.packAscii(artist, maxLen: Self.maxArtistChars)
+        artistLen = alen
+        artist0 = aw[0]; artist1 = aw[1]; artist2 = aw[2]; artist3 = aw[3]
+        artist4 = aw[4]; artist5 = aw[5]; artist6 = aw[6]; artist7 = aw[7]
+
+        let (tw, tlen) = Self.packAscii(title, maxLen: Self.maxTitleChars)
+        titleLen = tlen
+        title0 = tw[0]; title1 = tw[1]; title2 = tw[2]; title3 = tw[3]; title4 = tw[4]
+        title5 = tw[5]; title6 = tw[6]; title7 = tw[7]; title8 = tw[8]; title9 = tw[9]
+    }
+}

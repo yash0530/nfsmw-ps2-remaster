@@ -3,11 +3,12 @@
 // Concatenated after RayTracing.metal at runtime before device.makeLibrary(source:)
 // so HUD digits & minimap NEVER warp under MTLFXFrameInterpolator (zero #include).
 //
-// Locked Buffer Slots (per #40 / #41):
-//   buffer(0) = RTFrameUniforms   (unchanged base contract)
-//   buffer(1) = uint encodeSRGB   (unchanged base contract)
-//   buffer(2) = RTHudExtUniforms  (64 bytes, 16B aligned)
-//   buffer(3) = RTMinimapBuffer   (1,936 bytes <= 2 KB, 16B aligned)
+// Locked Buffer Slots (per #40 / #41 + v1.1.0 EA TRAX extension):
+//   buffer(0) = RTFrameUniforms       (unchanged base contract)
+//   buffer(1) = uint encodeSRGB       (unchanged base contract)
+//   buffer(2) = RTHudExtUniforms      (64 bytes, 16B aligned)
+//   buffer(3) = RTMinimapBuffer       (1,936 bytes <= 2 KB, 16B aligned)
+//   buffer(4) = RTMusicBannerUniforms (112 bytes <= 128 B, 16B aligned)
 // ---------------------------------------------------------------------------
 
 struct RTHudExtUniforms {
@@ -42,6 +43,29 @@ struct RTMinimapBuffer {
     float4 blips[24];         // (x, y, typeFlags [0=traf,1=patrol,2=pursuit,3=mark], flashPhase)
 };
 static_assert(sizeof(RTMinimapBuffer) == 1936, "RTMinimapBuffer must be 1936 bytes (<= 2 KB)");
+
+struct RTMusicBannerUniforms {
+    float bannerAlpha;     // 0..1 overall opacity (0 = instant early-out)
+    float slideT;          // 0..1 horizontal slide-in progress
+    uint  trackIndex;      // 1-based track number
+    uint  totalTracks;     // total tracks in playlist
+
+    uint  flags;           // bit0=visible, bit1=muted, bit2=pursuitScore, bit3=tunnelReverb
+    uint  artistLen;       // 0..32
+    uint  titleLen;        // 0..40
+    float skyOcclusion;    // 0..1 smoothed acoustic tunnel reverb depth
+
+    uint  artistChars[8];  // 32 ASCII bytes packed LE
+    uint  titleChars[10];  // 40 ASCII bytes packed LE
+    uint  pad0;
+    uint  pad1;
+};
+static_assert(sizeof(RTMusicBannerUniforms) == 112, "RTMusicBannerUniforms must be 112 bytes (<= 128 B, 16B aligned)");
+
+static constant uint MUSIC_FLAG_VISIBLE       = 1u << 0;
+static constant uint MUSIC_FLAG_MUTED         = 1u << 1;
+static constant uint MUSIC_FLAG_PURSUIT_SCORE = 1u << 2;
+static constant uint MUSIC_FLAG_TUNNEL_REVERB = 1u << 3;
 
 static constant uint HUD_FLAG_VISIBLE        = 1u << 0;
 static constant uint HUD_FLAG_FRAMEGEN_ON    = 1u << 1;
@@ -662,6 +686,278 @@ static inline float3 compositeTopRightTelemetry(
     return mix(baseCol, bg, mask);
 }
 
+// ---------------------------------------------------------------------------
+// Widget 5: Top-Left Authentic NFSMW 2005 Sliding EA TRAX Banner (5x7 Font)
+// Covers ASCII 0x20 (' ') .. 0x5F ('_') in 448 bytes of constant ROM (O(1) lookup).
+// ---------------------------------------------------------------------------
+
+static constant uchar kFont5x7[448] = {
+    // 0x20 ' ' .. 0x27 '\''
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00, // ' '
+    0x04,0x04,0x04,0x04,0x04,0x00,0x04, // '!'
+    0x0A,0x0A,0x00,0x00,0x00,0x00,0x00, // '"'
+    0x0A,0x1F,0x0A,0x0A,0x1F,0x0A,0x00, // '#'
+    0x04,0x0F,0x14,0x0E,0x05,0x1E,0x04, // '$'
+    0x19,0x19,0x02,0x04,0x08,0x13,0x13, // '%'
+    0x0C,0x12,0x14,0x08,0x15,0x12,0x0D, // '&'
+    0x04,0x04,0x08,0x00,0x00,0x00,0x00, // '\''
+    // 0x28 '(' .. 0x2F '/'
+    0x02,0x04,0x08,0x08,0x08,0x04,0x02, // '('
+    0x08,0x04,0x02,0x02,0x02,0x04,0x08, // ')'
+    0x00,0x0A,0x04,0x1F,0x04,0x0A,0x00, // '*'
+    0x00,0x04,0x04,0x1F,0x04,0x04,0x00, // '+'
+    0x00,0x00,0x00,0x00,0x00,0x04,0x08, // ','
+    0x00,0x00,0x00,0x1F,0x00,0x00,0x00, // '-'
+    0x00,0x00,0x00,0x00,0x00,0x0C,0x0C, // '.'
+    0x01,0x02,0x02,0x04,0x08,0x08,0x10, // '/'
+    // 0x30 '0' .. 0x37 '7'
+    0x0E,0x11,0x13,0x15,0x19,0x11,0x0E, // '0'
+    0x04,0x0C,0x04,0x04,0x04,0x04,0x0E, // '1'
+    0x0E,0x11,0x01,0x06,0x08,0x10,0x1F, // '2'
+    0x1E,0x01,0x01,0x0E,0x01,0x01,0x1E, // '3'
+    0x02,0x06,0x0A,0x12,0x1F,0x02,0x02, // '4'
+    0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E, // '5'
+    0x0E,0x10,0x10,0x1E,0x11,0x11,0x0E, // '6'
+    0x1F,0x01,0x02,0x04,0x08,0x08,0x08, // '7'
+    // 0x38 '8' .. 0x3F '?'
+    0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E, // '8'
+    0x0E,0x11,0x11,0x0F,0x01,0x01,0x0E, // '9'
+    0x00,0x0C,0x0C,0x00,0x0C,0x0C,0x00, // ':'
+    0x00,0x04,0x04,0x00,0x04,0x04,0x08, // ';'
+    0x02,0x04,0x08,0x10,0x08,0x04,0x02, // '<'
+    0x00,0x00,0x1F,0x00,0x1F,0x00,0x00, // '='
+    0x08,0x04,0x02,0x01,0x02,0x04,0x08, // '>'
+    0x0E,0x11,0x01,0x06,0x04,0x00,0x04, // '?'
+    // 0x40 '@' .. 0x47 'G'
+    0x0E,0x11,0x17,0x15,0x17,0x10,0x0E, // '@'
+    0x0E,0x11,0x11,0x1F,0x11,0x11,0x11, // 'A'
+    0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E, // 'B'
+    0x0E,0x11,0x10,0x10,0x10,0x11,0x0E, // 'C'
+    0x1E,0x11,0x11,0x11,0x11,0x11,0x1E, // 'D'
+    0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F, // 'E'
+    0x1F,0x10,0x10,0x1E,0x10,0x10,0x10, // 'F'
+    0x0E,0x11,0x10,0x17,0x11,0x11,0x0F, // 'G'
+    // 0x48 'H' .. 0x4F 'O'
+    0x11,0x11,0x11,0x1F,0x11,0x11,0x11, // 'H'
+    0x0E,0x04,0x04,0x04,0x04,0x04,0x0E, // 'I'
+    0x07,0x02,0x02,0x02,0x12,0x12,0x0C, // 'J'
+    0x11,0x12,0x14,0x18,0x14,0x12,0x11, // 'K'
+    0x10,0x10,0x10,0x10,0x10,0x10,0x1F, // 'L'
+    0x11,0x1B,0x15,0x15,0x11,0x11,0x11, // 'M'
+    0x11,0x19,0x15,0x13,0x11,0x11,0x11, // 'N'
+    0x0E,0x11,0x11,0x11,0x11,0x11,0x0E, // 'O'
+    // 0x50 'P' .. 0x57 'W'
+    0x1E,0x11,0x11,0x1E,0x10,0x10,0x10, // 'P'
+    0x0E,0x11,0x11,0x11,0x15,0x12,0x0D, // 'Q'
+    0x1E,0x11,0x11,0x1E,0x14,0x12,0x11, // 'R'
+    0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E, // 'S'
+    0x1F,0x04,0x04,0x04,0x04,0x04,0x04, // 'T'
+    0x11,0x11,0x11,0x11,0x11,0x11,0x0E, // 'U'
+    0x11,0x11,0x11,0x11,0x11,0x0A,0x04, // 'V'
+    0x11,0x11,0x11,0x15,0x15,0x1B,0x11, // 'W'
+    // 0x58 'X' .. 0x5F '_'
+    0x11,0x11,0x0A,0x04,0x0A,0x11,0x11, // 'X'
+    0x11,0x11,0x0A,0x04,0x04,0x04,0x04, // 'Y'
+    0x1F,0x01,0x02,0x04,0x08,0x10,0x1F, // 'Z'
+    0x0E,0x08,0x08,0x08,0x08,0x08,0x0E, // '['
+    0x10,0x08,0x08,0x04,0x02,0x02,0x01, // '\\'
+    0x0E,0x02,0x02,0x02,0x02,0x02,0x0E, // ']'
+    0x04,0x0A,0x11,0x00,0x00,0x00,0x00, // '^'
+    0x00,0x00,0x00,0x00,0x00,0x00,0x1F  // '_'
+};
+
+static inline float sampleGlyph5x7(float2 localPx, uint asciiCode, float cellPx) {
+    if (asciiCode <= 0x20u || asciiCode > 0x5Fu) return 0.0f;
+    float2 g = localPx / cellPx;
+    if (g.x < 0.0f || g.x >= 5.0f || g.y < 0.0f || g.y >= 7.0f) return 0.0f;
+    uint col = uint(g.x);
+    uint row = uint(g.y);
+    uint idx = asciiCode - 0x20u;
+    uint bits = uint(kFont5x7[idx * 7u + row]);
+    if (((bits >> (4u - col)) & 1u) == 0u) return 0.0f;
+    // Crisp OLED subpixel smoothing inside each lit texel
+    float2 f = fract(g) - 0.5f;
+    float edge = max(abs(f.x), abs(f.y));
+    return smoothstep(0.56f, 0.34f, edge);
+}
+
+static inline uint unpackPackedChar(constant uint* words, uint charIdx) {
+    return (words[charIdx >> 2u] >> ((charIdx & 3u) * 8u)) & 0xFFu;
+}
+
+static inline float evalPackedString5x7(
+    float2 relPx,
+    float2 originPx,
+    float cellPx,
+    float charStridePx,
+    constant uint* words,
+    uint len,
+    uint maxChars
+) {
+    uint n = min(len, maxChars);
+    if (n == 0u) return 0.0f;
+    float2 p = relPx - originPx;
+    if (p.y < 0.0f || p.y >= 7.0f * cellPx || p.x < 0.0f || p.x >= float(n) * charStridePx) {
+        return 0.0f;
+    }
+    uint ci = uint(p.x / charStridePx);
+    if (ci >= n) return 0.0f;
+    float2 localP = float2(p.x - float(ci) * charStridePx, p.y);
+    uint ch = unpackPackedChar(words, ci);
+    return sampleGlyph5x7(localP, ch, cellPx);
+}
+
+static inline float evalLiteral7(float2 relPx, float2 originPx, float cellPx, float stridePx, thread const uint* codes, uint len) {
+    float2 p = relPx - originPx;
+    if (p.y < 0.0f || p.y >= 7.0f * cellPx || p.x < 0.0f || p.x >= float(len) * stridePx) {
+        return 0.0f;
+    }
+    uint ci = uint(p.x / stridePx);
+    if (ci >= len) return 0.0f;
+    return sampleGlyph5x7(float2(p.x - float(ci) * stridePx, p.y), codes[ci], cellPx);
+}
+
+static inline float3 compositeEATraxBanner(
+    float3 baseCol,
+    float2 px,
+    float2 res,
+    constant RTHudExtUniforms& ext,
+    constant RTMusicBannerUniforms& music
+) {
+    float alpha = clamp(music.bannerAlpha, 0.0f, 1.0f);
+    if (alpha <= 0.001f || (music.flags & MUSIC_FLAG_VISIBLE) == 0u) return baseCol;
+
+    float scale = res.y / 1080.0f;
+    float t = clamp(music.slideT, 0.0f, 1.0f);
+    float easeOut = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+
+    const float boxW = 378.0f;
+    const float boxH = 74.0f;
+    float2 origin = float2(28.0f - (1.0f - easeOut) * 420.0f, 26.0f);
+    float2 rel = (px / scale) - origin; // virtual 1080p px inside card [0..boxW, 0..boxH]
+
+    // Tight bounding-box early-out (< 0.01 ms GPU cost, skips > 97% of pixels)
+    if (rel.x < -12.0f || rel.x > boxW + 12.0f || rel.y < -12.0f || rel.y > boxH + 12.0f) {
+        return baseCol;
+    }
+
+    float2 boxCenter = float2(boxW * 0.5f, boxH * 0.5f);
+    float dBox = sdRoundedBoxHUD(rel - boxCenter, boxCenter, 8.0f);
+    if (dBox > 10.0f) return baseCol;
+
+    float shadow = smoothstep(10.0f, 0.0f, dBox) * 0.34f * step(0.0f, dBox) * alpha;
+    float3 outCol = baseCol * (1.0f - shadow);
+
+    float cardMask = smoothstep(1.2f, -0.8f, dBox) * alpha;
+    if (cardMask <= 0.001f) return outCol;
+
+    bool isMuted   = (music.flags & MUSIC_FLAG_MUTED) != 0u;
+    bool isPursuit = (music.flags & MUSIC_FLAG_PURSUIT_SCORE) != 0u;
+    bool isTunnel  = ((music.flags & MUSIC_FLAG_TUNNEL_REVERB) != 0u) || (music.skyOcclusion > 0.35f);
+
+    float3 accentCol = float3(1.00f, 0.72f, 0.14f); // Iconic NFSMW 2005 EA TRAX gold-amber
+    if (isMuted) {
+        accentCol = float3(0.46f, 0.50f, 0.56f);
+    } else if (isPursuit) {
+        float pulse = 0.5f + 0.5f * sin(ext.simTimeSec * 8.0f);
+        accentCol = mix(float3(0.22f, 0.72f, 1.00f), float3(1.00f, 0.44f, 0.14f), pulse);
+    }
+
+    // Smoked dark carbon-glass backing with subtle top sheen
+    float sheen = smoothstep(boxH, 0.0f, rel.y) * 0.032f;
+    float3 bg = mix(baseCol * 0.22f, float3(0.028f, 0.032f, 0.042f) + sheen, 0.84f);
+
+    // Crisp outer rim + bold left NFSMW accent bar
+    float border = smoothstep(1.5f, 0.3f, abs(dBox));
+    bg = mix(bg, mix(float3(0.38f, 0.42f, 0.48f), accentCol, 0.45f), border * 0.72f);
+    if (rel.x < 6.5f) {
+        float stripe = smoothstep(6.5f, 4.8f, rel.x);
+        bg = mix(bg, accentCol, stripe * 0.96f);
+    }
+
+    // Row 1 (y: 8..23): "EA TRAX" / "MUTED" / "SCORE" Pill Badge
+    {
+        float2 pillC = float2(52.0f, 15.5f);
+        float dPill = sdRoundedBoxHUD(rel - pillC, float2(36.0f, 7.5f), 3.5f);
+        float pMask = smoothstep(1.0f, -0.6f, dPill);
+        if (pMask > 0.001f) {
+            bg = mix(bg, accentCol, pMask * 0.96f);
+            float txt = 0.0f;
+            if (isMuted) {
+                const uint kMuted[5] = { 77u, 85u, 84u, 69u, 68u }; // MUTED
+                txt = evalLiteral7(rel, float2(31.0f, 10.7f), 1.35f, 8.2f, kMuted, 5u);
+            } else if (isPursuit) {
+                const uint kScore[5] = { 83u, 67u, 79u, 82u, 69u }; // SCORE
+                txt = evalLiteral7(rel, float2(31.0f, 10.7f), 1.35f, 8.2f, kScore, 5u);
+            } else {
+                const uint kEaTrax[7] = { 69u, 65u, 32u, 84u, 82u, 65u, 88u }; // EA TRAX
+                txt = evalLiteral7(rel, float2(23.5f, 10.7f), 1.35f, 8.2f, kEaTrax, 7u);
+            }
+            bg = mix(bg, float3(0.03f, 0.035f, 0.045f), txt * pMask);
+        }
+    }
+
+    // Optional live acoustic reverb badge ("REVERB") when driving inside tunnels/underpasses
+    if (isTunnel && !isMuted) {
+        float2 revC = float2(126.0f, 15.5f);
+        float dRev = sdRoundedBoxHUD(rel - revC, float2(30.0f, 7.5f), 3.5f);
+        float rMask = smoothstep(1.0f, -0.6f, dRev);
+        if (rMask > 0.001f) {
+            float3 revTint = float3(0.18f, 0.86f, 1.00f);
+            bg = mix(bg, float3(0.04f, 0.20f, 0.28f), rMask * 0.92f);
+            bg = mix(bg, revTint, smoothstep(1.1f, 0.2f, abs(dRev)) * 0.85f);
+            const uint kRev[6] = { 82u, 69u, 86u, 69u, 82u, 66u }; // REVERB
+            float rTxt = evalLiteral7(rel, float2(101.5f, 10.8f), 1.30f, 8.0f, kRev, 6u);
+            bg = mix(bg, revTint, rTxt * rMask);
+        }
+    }
+
+    // Right-aligned track index "01/26"
+    if (music.totalTracks > 0u) {
+        uint cur = clamp(music.trackIndex, 1u, 99u);
+        uint tot = clamp(music.totalTracks, 1u, 99u);
+        const uint kIdx[5] = {
+            48u + (cur / 10u), 48u + (cur % 10u), 47u,
+            48u + (tot / 10u), 48u + (tot % 10u)
+        };
+        float idxTxt = evalLiteral7(rel, float2(274.0f, 10.8f), 1.35f, 8.2f, kIdx, 5u);
+        bg = mix(bg, float3(0.72f, 0.76f, 0.82f), idxTxt * 0.92f);
+    }
+
+    // 5 animated mini spectrum EQ bars on top-right (x: 326..364, y: 9..22)
+    if (rel.x >= 324.0f && rel.x <= 366.0f && rel.y >= 8.0f && rel.y <= 23.0f) {
+        for (int b = 0; b < 5; ++b) {
+            float bx = 327.0f + float(b) * 7.5f;
+            float phase = ext.simTimeSec * (7.5f + float(b) * 2.1f) + float(b) * 1.4f;
+            float level = isMuted ? 0.14f : (0.28f + 0.72f * (0.5f + 0.5f * sin(phase)));
+            float barH = 12.5f * level;
+            float inBar = smoothstep(0.6f, 0.0f, abs(rel.x - (bx + 2.2f)) - 2.0f)
+                        * step(22.0f - barH, rel.y) * step(rel.y, 22.0f);
+            float3 eqCol = isTunnel ? mix(accentCol, float3(0.22f, 0.90f, 1.00f), 0.45f) : accentCol;
+            bg = mix(bg, eqCol, inBar * 0.94f);
+        }
+    }
+
+    // Row 2 (y: 30..44): Crisp White Song Title (5x7 @ 1.95px cell, max 29 visible chars)
+    {
+        float sh = evalPackedString5x7(rel - float2(1.0f, 1.0f), float2(16.0f, 30.0f), 1.95f, 11.8f, music.titleChars, music.titleLen, 29u);
+        float fg = evalPackedString5x7(rel, float2(16.0f, 30.0f), 1.95f, 11.8f, music.titleChars, music.titleLen, 29u);
+        bg = mix(bg, float3(0.01f, 0.01f, 0.015f), sh * 0.65f);
+        bg = mix(bg, float3(0.98f, 0.99f, 1.00f), fg * 0.98f);
+    }
+
+    // Row 3 (y: 51..62): Brushed Gold-Silver Artist Name (5x7 @ 1.55px cell, max 32 chars)
+    {
+        float sh = evalPackedString5x7(rel - float2(0.8f, 0.8f), float2(16.0f, 51.0f), 1.55f, 9.6f, music.artistChars, music.artistLen, 32u);
+        float fg = evalPackedString5x7(rel, float2(16.0f, 51.0f), 1.55f, 9.6f, music.artistChars, music.artistLen, 32u);
+        float3 artistCol = isMuted ? float3(0.56f, 0.60f, 0.66f) : float3(0.94f, 0.79f, 0.44f);
+        bg = mix(bg, float3(0.01f, 0.01f, 0.015f), sh * 0.55f);
+        bg = mix(bg, artistCol, fg * 0.95f);
+    }
+
+    return mix(outCol, bg, cardMask);
+}
+
 // Preserved public helper name (verified by tests/test_metal_raytracing.py)
 static inline float3 compositeDigitalDrivingHUD(
     float3 baseCol,
@@ -680,7 +976,7 @@ static inline float3 compositeDigitalDrivingHUD(
 
 // Standalone Post-FrameGen HUD + Presentation Output Kernel
 // Reads perceptual sRGB LDR input (real or MTLFXFrameInterpolator output), composites crisp
-// unwarped NFSMW 2005 SDF HUD + GPU Minimap, and writes perceptual sRGB or linear output.
+// unwarped NFSMW 2005 SDF HUD + GPU Minimap + sliding EA TRAX Banner, and writes output.
 kernel void hudOverlayKernel(
     uint2 gid [[thread_position_in_grid]],
     texture2d<float, access::read> inLdrTex [[texture(0)]],
@@ -688,16 +984,22 @@ kernel void hudOverlayKernel(
     constant RTFrameUniforms& u [[buffer(0)]],
     constant uint& encodeSRGB [[buffer(1)]],
     constant RTHudExtUniforms& ext [[buffer(2)]],
-    constant RTMinimapBuffer& minimap [[buffer(3)]]
+    constant RTMinimapBuffer& minimap [[buffer(3)]],
+    constant RTMusicBannerUniforms& music [[buffer(4)]]
 ) {
     uint w = outTex.get_width();
     uint h = outTex.get_height();
     if (gid.x >= w || gid.y >= h) return;
 
     float3 srgb = inLdrTex.read(gid).rgb;
+    float2 px = float2(gid) + 0.5f;
+    float2 res = float2(float(w), float(h));
     bool hudVisible = (u.hudParams.x > 0.5f) || ((ext.hudFlags & HUD_FLAG_VISIBLE) != 0u);
     if (hudVisible) {
-        srgb = compositeDigitalDrivingHUD(srgb, float2(gid) + 0.5f, float2(float(w), float(h)), u, ext, minimap);
+        srgb = compositeDigitalDrivingHUD(srgb, px, res, u, ext, minimap);
+    }
+    if (music.bannerAlpha > 0.001f) {
+        srgb = compositeEATraxBanner(srgb, px, res, ext, music);
     }
 
     float3 outRGB = (encodeSRGB != 0u) ? srgb : srgbToLinear(srgb);

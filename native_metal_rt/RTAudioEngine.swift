@@ -1,6 +1,38 @@
 import AVFoundation
 import Foundation
 
+// MARK: - EA TRAX Music Metadata & Public Track Info
+
+/// Public immutable descriptor of the currently active EA TRAX or Pursuit Score track.
+public struct RTMusicTrackInfo: Equatable {
+    public let index: Int
+    public let total: Int
+    public let artist: String
+    public let title: String
+    public let isPursuit: Bool
+
+    public init(index: Int, total: Int, artist: String, title: String, isPursuit: Bool) {
+        self.index = index
+        self.total = total
+        self.artist = artist
+        self.title = title
+        self.isPursuit = isPursuit
+    }
+}
+
+/// Internal parsed track record from `build/music_pack/manifest.json`.
+private struct MusicTrackRecord {
+    let globalIndex: Int
+    let streamIndex: Int
+    let artist: String
+    let title: String
+    let album: String
+    let category: String
+    let isPursuit: Bool
+    let fileURL: URL
+    let durationSec: Double
+}
+
 // MARK: - Lock-Free C-Layout Control State & Preloaded Raw PCM Buffers
 
 /// Plain-value struct shared between main thread and CoreAudio real-time render thread.
@@ -382,12 +414,20 @@ private final class DSPStateBox {
     var shiftAltToggle: Bool = false
 }
 
-// MARK: - Native Apple AVAudioEngine Controller (Ginsu PSOLA + Authentic PS2 SFX)
+// MARK: - Native Apple AVAudioEngine Controller (Ginsu PSOLA + PS2 SFX + EA TRAX + Tunnel Reverb)
 
-final class RTAudioEngine {
+public final class RTAudioEngine {
     private let audioEngine = AVAudioEngine()
     private let masterEQ = AVAudioUnitEQ(numberOfBands: 1)
+    private let musicPlayerNode = AVAudioPlayerNode()
+    private let musicMixer = AVAudioMixerNode()
+    private let acousticBusMixer = AVAudioMixerNode()
+    private let tunnelReverb = AVAudioUnitReverb()
+    private let tunnelEQ = AVAudioUnitEQ(numberOfBands: 2)
     private var sourceNode: AVAudioSourceNode?
+    private var graphAttached: Bool = false
+    private var connectedMusicSampleRate: Double = 0.0
+    private var connectedMusicChannels: AVAudioChannelCount = 0
     private let dsp = DSPStateBox()
 
     // Retained lifetime storage of decoded float PCM buffers
@@ -400,28 +440,114 @@ final class RTAudioEngine {
     private var prevNosActive: Bool = false
     private var prevSpeedbreakerActive: Bool = false
     private var currentEngineNode: String = ""
+    private let isHeadless: Bool
 
-    private(set) var isRunning: Bool = false
-    private(set) var isPackLoaded: Bool = false
-    private(set) var loadedEngineCount: Int = 0
-    private(set) var loadedSFXCount: Int = 0
+    // Thread-safe EA TRAX & Acoustic Tunnel Reverb state (NEVER locked inside CoreAudio RT callback)
+    private let musicLock = NSLock()
+    private let musicCompletionQueue = DispatchQueue(label: "rockport2026.audio.music", qos: .userInitiated)
+    private var musicTracks: [MusicTrackRecord] = []
+    private var licensedIndices: [Int] = []
+    private var pursuitIndices: [Int] = []
+    private var activeTrackGlobalIndex: Int = -1
+    private var savedLicensedGlobalIndex: Int = -1
+    private var savedPursuitGlobalIndex: Int = -1
+    private var activeAudioFile: AVAudioFile?
+    private var playbackGeneration: UInt64 = 0
+    private var pursuitModeActive: Bool = false
+    private var musicMutedFlag: Bool = false
+    private var baseMusicVolume: Float = 0.44
+    private var currentSpeedbreakerBlend: Float = 0.0
+    private var stingerDuckEndTime: CFAbsoluteTime = 0.0
+    private var stingerDuckFactor: Float = 1.0
+    private var externalStingerDuck: Float = 0.0
+    private var currentTunnelOcclusion: Float = 0.0
+    private var currentReverbWetDry: Float = 4.0
 
-    var isMuted: Bool = false {
+    public private(set) var isRunning: Bool = false
+    public private(set) var isPackLoaded: Bool = false
+    public private(set) var loadedEngineCount: Int = 0
+    public private(set) var loadedSFXCount: Int = 0
+    public private(set) var isMusicPackLoaded: Bool = false
+    public private(set) var loadedMusicTrackCount: Int = 0
+
+    public var isMuted: Bool = false {
         didSet {
             control.muted = isMuted ? 1 : 0
             publishControl()
+            musicLock.lock()
+            applyMusicVolumeLocked()
+            musicLock.unlock()
         }
     }
 
-    init(packDir: URL? = nil, headless: Bool = false) {
+    public var isMusicMuted: Bool {
+        get {
+            musicLock.lock()
+            defer { musicLock.unlock() }
+            return musicMutedFlag
+        }
+        set {
+            musicLock.lock()
+            musicMutedFlag = newValue
+            applyMusicVolumeLocked()
+            musicLock.unlock()
+        }
+    }
+
+    public var currentMusicTrack: RTMusicTrackInfo? {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        return buildTrackInfoLocked(globalIndex: activeTrackGlobalIndex)
+    }
+
+    public var isPursuitMusicMode: Bool {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        return pursuitModeActive
+    }
+
+    public var tunnelOcclusion: Float {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        return currentTunnelOcclusion
+    }
+
+    public var reverbWetDryMix: Float {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        return currentReverbWetDry
+    }
+
+    public init(packDir: URL? = nil, musicPackDir: URL? = nil, headless: Bool = false, musicEnabled: Bool = true) {
+        self.isHeadless = headless
+
+        // Load lightweight EA TRAX manifest metadata even in headless mode (zero audio hardware or AVAudioFile opens)
+        // so `--show-trax` / `--music-track` HUD metadata works cleanly while audio stays a 100% silent no-op.
+        if musicEnabled {
+            let musicCandidates: [URL] = musicPackDir.map { [$0] } ?? [
+                URL(fileURLWithPath: "build/music_pack"),
+                URL(fileURLWithPath: "../build/music_pack")
+            ]
+
+            for dir in musicCandidates {
+                let mf = dir.appendingPathComponent("manifest.json")
+                if FileManager.default.fileExists(atPath: mf.path) {
+                    if loadMusicManifest(from: dir) {
+                        isMusicPackLoaded = true
+                        break
+                    }
+                }
+            }
+        }
+
         if headless {
             return
         }
-        let candidates = [
-            packDir,
+
+        let candidates: [URL] = packDir.map { [$0] } ?? [
             URL(fileURLWithPath: "build/gameplay_pack"),
             URL(fileURLWithPath: "../build/gameplay_pack")
-        ].compactMap { $0 }
+        ]
 
         for dir in candidates {
             let mf = dir.appendingPathComponent("audio/audio_manifest.json")
@@ -438,223 +564,533 @@ final class RTAudioEngine {
         stop()
     }
 
-    /// Starts AVAudioEngine when a gameplay audio pack is loaded (silent no-op if unavailable).
-    func start(initialEngineNode: String = "tvr_cerb") {
-        guard isPackLoaded, !isRunning else { return }
+    /// Starts AVAudioEngine when a gameplay audio pack or music pack is loaded (silent no-op if unavailable or headless).
+    public func start(initialEngineNode: String = "tvr_cerb") {
+        guard !isHeadless, (isPackLoaded || isMusicPackLoaded), !isRunning else { return }
 
-        selectEngine(node: initialEngineNode)
-        bindSFXVoices()
+        if isPackLoaded {
+            selectEngine(node: initialEngineNode)
+            bindSFXVoices()
+        }
 
-        // Configure master low-pass filter band (20 kHz normal -> 1.4 kHz during Speedbreaker)
-        let band = masterEQ.bands[0]
-        band.filterType = .lowPass
-        band.frequency = 20000.0
-        band.bandwidth = 0.7
-        band.bypass = false
+        // Configure Speedbreaker low-pass filter on engine+SFX bus (20 kHz normal -> 1.4 kHz Speedbreaker)
+        let sfxBand = masterEQ.bands[0]
+        sfxBand.filterType = .lowPass
+        sfxBand.frequency = 20000.0
+        sfxBand.bandwidth = 0.7
+        sfxBand.bypass = false
+
+        // Configure Acoustic Tunnel Reverb (largeHall preset; 4% open sky -> 42% tunnel ceiling)
+        tunnelReverb.loadFactoryPreset(.largeHall)
+
+        // Configure Acoustic Tunnel EQ (band 0: subtle ceiling low-pass; band 1: tunnel bass warmth shelf)
+        let lpBand = tunnelEQ.bands[0]
+        lpBand.filterType = .lowPass
+        lpBand.frequency = 18500.0
+        lpBand.bandwidth = 0.8
+        lpBand.bypass = false
+
+        let bassBand = tunnelEQ.bands[1]
+        bassBand.filterType = .lowShelf
+        bassBand.frequency = 160.0
+        bassBand.gain = 0.0
+        bassBand.bypass = false
 
         let outSR: Double = 48000.0
         guard let format = AVAudioFormat(standardFormatWithSampleRate: outSR, channels: 2) else { return }
 
-        let dspRef = self.dsp
-        let srF = Float(outSR)
-
-        let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
-            let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            guard abl.count >= 2,
-                  let outL = abl[0].mData?.assumingMemoryBound(to: Float.self),
-                  let outR = abl[1].mData?.assumingMemoryBound(to: Float.self) else {
-                return noErr
-            }
-
-            // Lock-free snapshot of latest control block
-            let idx = dspRef.activeCtrlIndex
-            let c = (idx == 0) ? dspRef.ctrl0 : dspRef.ctrl1
-            let nFrames = Int(frameCount)
-
-            if c.muted != 0 || dspRef.engineMutedForSwap != 0 {
-                for i in 0..<nFrames {
-                    outL[i] = 0.0
-                    outR[i] = 0.0
-                }
-                return noErr
-            }
-
-            // Consume one-shot event counters (edge-triggered)
-            if c.shiftPopSeq != dspRef.lastShiftSeq {
-                dspRef.lastShiftSeq = c.shiftPopSeq
-                dspRef.shiftAltToggle.toggle()
-                if dspRef.shiftAltToggle {
-                    dspRef.shiftPop1Voice.trigger(gain: 0.42)
-                } else {
-                    dspRef.shiftPop2Voice.trigger(gain: 0.42)
-                }
-            }
-            if c.bovSeq != dspRef.lastBovSeq {
-                dspRef.lastBovSeq = c.bovSeq
-                dspRef.turboBovVoice.trigger(gain: 0.38)
-            }
-            if c.nosIgniteSeq != dspRef.lastNosIgniteSeq {
-                dspRef.lastNosIgniteSeq = c.nosIgniteSeq
-                dspRef.nosIgniteVoice.trigger(gain: 0.46)
-            }
-            if c.nosPurgeSeq != dspRef.lastNosPurgeSeq {
-                dspRef.lastNosPurgeSeq = c.nosPurgeSeq
-                dspRef.nosPurgeVoice.trigger(gain: 0.34)
-            }
-            if c.impactSeq != dspRef.lastImpactSeq {
-                dspRef.lastImpactSeq = c.impactSeq
-                if c.impactGain > 0.55 {
-                    dspRef.impactHardVoice.trigger(gain: min(0.85, 0.35 + c.impactGain * 0.55))
-                } else {
-                    dspRef.impactMedVoice.trigger(gain: min(0.70, 0.25 + c.impactGain * 0.45))
-                }
-            }
-            if c.speedbreakerSeq != dspRef.lastSBSeq {
-                dspRef.lastSBSeq = c.speedbreakerSeq
-                dspRef.speedbreakerVoice.trigger(gain: 0.50)
-            }
-            if c.radarPingSeq != dspRef.lastRadarSeq {
-                dspRef.lastRadarSeq = c.radarPingSeq
-                dspRef.radarPingVoice.trigger(gain: 0.35)
-            }
-
-            // Speedbreaker pitch bend (1.0 -> 0.58x)
-            let sbPitch = 1.0 - 0.42 * c.speedbreakerBlend
-            let speedFrac = max(0.0, min(1.0, c.speedKmh / 260.0))
-
-            // Equal-power stereo pan for nearest pursuing police siren
-            let panAngle = (max(-1.0, min(1.0, c.sirenPan)) + 1.0) * 0.25 * Float.pi
-            let sirenL = cosf(panAngle)
-            let sirenR = sinf(panAngle)
-
-            let rpmAlpha: Float = 0.0025
-            let envAlpha: Float = 0.0018
-
-            for i in 0..<nFrames {
-                dspRef.smoothRPM += (c.rpm - dspRef.smoothRPM) * rpmAlpha
-                dspRef.smoothThrottle += (c.throttle - dspRef.smoothThrottle) * envAlpha
-                dspRef.smoothNosGain += (c.nosActive - dspRef.smoothNosGain) * envAlpha
-                dspRef.smoothSkidGain += (c.driftIntensity - dspRef.smoothSkidGain) * envAlpha
-                dspRef.smoothSirenGain += (c.sirenGain - dspRef.smoothSirenGain) * envAlpha
-
-                let targetWhine = c.trannyWhineEnabled * speedFrac * (0.35 + 0.65 * dspRef.smoothThrottle)
-                dspRef.smoothWhineGain += (targetWhine - dspRef.smoothWhineGain) * envAlpha
-
-                // 1. Ginsu PSOLA Granular Engine (Accel + Decel load crossfade)
-                let accelSamp = dspRef.engineAccel.nextSample(targetRPM: dspRef.smoothRPM, outSR: srF, pitchScale: sbPitch)
-                let decelSamp = dspRef.engineDecel.nextSample(targetRPM: dspRef.smoothRPM, outSR: srF, pitchScale: sbPitch)
-                let load = max(0.0, min(1.0, dspRef.smoothThrottle * 1.15))
-                let engineMix = (accelSamp * (0.28 + 0.72 * load) * dspRef.engineAccelVol
-                               + decelSamp * (1.0 - load) * 0.65 * dspRef.engineDecelVol) * 0.52
-
-                // 2. BMW M3 GTR Straight-Cut Gearbox Whine (pitch tracks driveshaft speed!)
-                var whineMix: Float = 0.0
-                if dspRef.smoothWhineGain > 0.004 {
-                    let whinePitch = (0.52 + 1.38 * speedFrac) * sbPitch
-                    whineMix = dspRef.whineVoice.nextSample(outSR: srF, pitchRatio: whinePitch) * dspRef.smoothWhineGain * 0.28
-                }
-
-                // 3. Turbo Spool + BOV Flutter
-                var turboMix: Float = 0.0
-                if c.turboBoost > 0.05 {
-                    let turboPitch = (0.65 + 0.85 * c.turboBoost) * sbPitch
-                    turboMix += dspRef.turboSpoolVoice.nextSample(outSR: srF, pitchRatio: turboPitch) * c.turboBoost * 0.16
-                }
-                turboMix += dspRef.turboBovVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
-
-                // 4. NOS Roar + Ignite/Purge
-                var nosMix: Float = 0.0
-                if dspRef.smoothNosGain > 0.005 {
-                    nosMix += dspRef.nosLoopVoice.nextSample(outSR: srF, pitchRatio: (0.95 + 0.20 * speedFrac) * sbPitch) * dspRef.smoothNosGain * 0.42
-                }
-                nosMix += dspRef.nosIgniteVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
-                nosMix += dspRef.nosPurgeVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
-
-                // 5. Tire Screech / Drift Squeal
-                var skidMix: Float = 0.0
-                if dspRef.smoothSkidGain > 0.01 {
-                    let skidPitch = (0.86 + 0.28 * dspRef.smoothSkidGain) * sbPitch
-                    skidMix = dspRef.skidVoice.nextSample(outSR: srF, pitchRatio: skidPitch) * dspRef.smoothSkidGain * 0.34
-                }
-
-                // 6. One-shots (Gearshifts, Wall Impacts, Scrape, Speedbreaker, Radar)
-                var fxMix: Float = 0.0
-                fxMix += dspRef.shiftPop1Voice.nextSample(outSR: srF, pitchRatio: sbPitch)
-                fxMix += dspRef.shiftPop2Voice.nextSample(outSR: srF, pitchRatio: sbPitch)
-                fxMix += dspRef.impactHardVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
-                fxMix += dspRef.impactMedVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
-                fxMix += dspRef.speedbreakerVoice.nextSample(outSR: srF, pitchRatio: 1.0)
-                fxMix += dspRef.radarPingVoice.nextSample(outSR: srF, pitchRatio: 1.0)
-                if c.scrapeIntensity > 0.02 {
-                    fxMix += dspRef.scrapeVoice.nextSample(outSR: srF, pitchRatio: (0.85 + 0.35 * speedFrac) * sbPitch) * c.scrapeIntensity * 0.30
-                }
-
-                // 7. Ambient Weather & High-Speed Wind Bed
-                var envMix: Float = 0.0
-                if c.rainIntensity > 0.05 {
-                    envMix += dspRef.rainVoice.nextSample(outSR: srF, pitchRatio: sbPitch) * c.rainIntensity * 0.14
-                }
-                if speedFrac > 0.25 {
-                    let windGain = (speedFrac - 0.25) / 0.75
-                    envMix += dspRef.windVoice.nextSample(outSR: srF, pitchRatio: (0.8 + 0.45 * speedFrac) * sbPitch) * windGain * 0.18
-                }
-
-                // 8. 3D Stereo-Panned Doppler Police Siren
-                var sirenVal: Float = 0.0
-                if dspRef.smoothSirenGain > 0.005 {
-                    let sPitch = c.sirenDoppler * sbPitch
-                    switch c.sirenMode {
-                    case 1:  sirenVal = dspRef.sirenYelpVoice.nextSample(outSR: srF, pitchRatio: sPitch)
-                    case 2:  sirenVal = dspRef.sirenPhaserVoice.nextSample(outSR: srF, pitchRatio: sPitch)
-                    default: sirenVal = dspRef.sirenWailVoice.nextSample(outSR: srF, pitchRatio: sPitch)
-                    }
-                    sirenVal *= dspRef.smoothSirenGain * 0.42
-                }
-
-                let mono = engineMix + whineMix + turboMix + nosMix + skidMix + fxMix + envMix
-                let rawL = (mono + sirenVal * sirenL) * c.masterGain
-                let rawR = (mono + sirenVal * sirenR) * c.masterGain
-
-                // Soft tanh limiter: warm analog saturation, zero digital clipping
-                outL[i] = tanhf(rawL)
-                outR[i] = tanhf(rawR)
-            }
-            return noErr
+        if !graphAttached {
+            audioEngine.attach(masterEQ)
+            audioEngine.attach(musicPlayerNode)
+            audioEngine.attach(musicMixer)
+            audioEngine.attach(acousticBusMixer)
+            audioEngine.attach(tunnelReverb)
+            audioEngine.attach(tunnelEQ)
+            graphAttached = true
         }
 
-        self.sourceNode = node
-        audioEngine.attach(node)
-        audioEngine.attach(masterEQ)
-        audioEngine.connect(node, to: masterEQ, format: format)
-        audioEngine.connect(masterEQ, to: audioEngine.mainMixerNode, format: format)
+        if isPackLoaded {
+            let dspRef = self.dsp
+            let srF = Float(outSR)
+
+            let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
+                let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
+                guard abl.count >= 2,
+                      let outL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                      let outR = abl[1].mData?.assumingMemoryBound(to: Float.self) else {
+                    return noErr
+                }
+
+                // Lock-free snapshot of latest control block
+                let idx = dspRef.activeCtrlIndex
+                let c = (idx == 0) ? dspRef.ctrl0 : dspRef.ctrl1
+                let nFrames = Int(frameCount)
+
+                if c.muted != 0 || dspRef.engineMutedForSwap != 0 {
+                    for i in 0..<nFrames {
+                        outL[i] = 0.0
+                        outR[i] = 0.0
+                    }
+                    return noErr
+                }
+
+                // Consume one-shot event counters (edge-triggered)
+                if c.shiftPopSeq != dspRef.lastShiftSeq {
+                    dspRef.lastShiftSeq = c.shiftPopSeq
+                    dspRef.shiftAltToggle.toggle()
+                    if dspRef.shiftAltToggle {
+                        dspRef.shiftPop1Voice.trigger(gain: 0.42)
+                    } else {
+                        dspRef.shiftPop2Voice.trigger(gain: 0.42)
+                    }
+                }
+                if c.bovSeq != dspRef.lastBovSeq {
+                    dspRef.lastBovSeq = c.bovSeq
+                    dspRef.turboBovVoice.trigger(gain: 0.38)
+                }
+                if c.nosIgniteSeq != dspRef.lastNosIgniteSeq {
+                    dspRef.lastNosIgniteSeq = c.nosIgniteSeq
+                    dspRef.nosIgniteVoice.trigger(gain: 0.46)
+                }
+                if c.nosPurgeSeq != dspRef.lastNosPurgeSeq {
+                    dspRef.lastNosPurgeSeq = c.nosPurgeSeq
+                    dspRef.nosPurgeVoice.trigger(gain: 0.34)
+                }
+                if c.impactSeq != dspRef.lastImpactSeq {
+                    dspRef.lastImpactSeq = c.impactSeq
+                    if c.impactGain > 0.55 {
+                        dspRef.impactHardVoice.trigger(gain: min(0.85, 0.35 + c.impactGain * 0.55))
+                    } else {
+                        dspRef.impactMedVoice.trigger(gain: min(0.70, 0.25 + c.impactGain * 0.45))
+                    }
+                }
+                if c.speedbreakerSeq != dspRef.lastSBSeq {
+                    dspRef.lastSBSeq = c.speedbreakerSeq
+                    dspRef.speedbreakerVoice.trigger(gain: 0.50)
+                }
+                if c.radarPingSeq != dspRef.lastRadarSeq {
+                    dspRef.lastRadarSeq = c.radarPingSeq
+                    dspRef.radarPingVoice.trigger(gain: 0.35)
+                }
+
+                // Speedbreaker pitch bend (1.0 -> 0.58x)
+                let sbPitch = 1.0 - 0.42 * c.speedbreakerBlend
+                let speedFrac = max(0.0, min(1.0, c.speedKmh / 260.0))
+
+                // Equal-power stereo pan for nearest pursuing police siren
+                let panAngle = (max(-1.0, min(1.0, c.sirenPan)) + 1.0) * 0.25 * Float.pi
+                let sirenL = cosf(panAngle)
+                let sirenR = sinf(panAngle)
+
+                let rpmAlpha: Float = 0.0025
+                let envAlpha: Float = 0.0018
+
+                for i in 0..<nFrames {
+                    dspRef.smoothRPM += (c.rpm - dspRef.smoothRPM) * rpmAlpha
+                    dspRef.smoothThrottle += (c.throttle - dspRef.smoothThrottle) * envAlpha
+                    dspRef.smoothNosGain += (c.nosActive - dspRef.smoothNosGain) * envAlpha
+                    dspRef.smoothSkidGain += (c.driftIntensity - dspRef.smoothSkidGain) * envAlpha
+                    dspRef.smoothSirenGain += (c.sirenGain - dspRef.smoothSirenGain) * envAlpha
+
+                    let targetWhine = c.trannyWhineEnabled * speedFrac * (0.35 + 0.65 * dspRef.smoothThrottle)
+                    dspRef.smoothWhineGain += (targetWhine - dspRef.smoothWhineGain) * envAlpha
+
+                    // 1. Ginsu PSOLA Granular Engine (Accel + Decel load crossfade)
+                    let accelSamp = dspRef.engineAccel.nextSample(targetRPM: dspRef.smoothRPM, outSR: srF, pitchScale: sbPitch)
+                    let decelSamp = dspRef.engineDecel.nextSample(targetRPM: dspRef.smoothRPM, outSR: srF, pitchScale: sbPitch)
+                    let load = max(0.0, min(1.0, dspRef.smoothThrottle * 1.15))
+                    let engineMix = (accelSamp * (0.28 + 0.72 * load) * dspRef.engineAccelVol
+                                   + decelSamp * (1.0 - load) * 0.65 * dspRef.engineDecelVol) * 0.52
+
+                    // 2. BMW M3 GTR Straight-Cut Gearbox Whine (pitch tracks driveshaft speed!)
+                    var whineMix: Float = 0.0
+                    if dspRef.smoothWhineGain > 0.004 {
+                        let whinePitch = (0.52 + 1.38 * speedFrac) * sbPitch
+                        whineMix = dspRef.whineVoice.nextSample(outSR: srF, pitchRatio: whinePitch) * dspRef.smoothWhineGain * 0.28
+                    }
+
+                    // 3. Turbo Spool + BOV Flutter
+                    var turboMix: Float = 0.0
+                    if c.turboBoost > 0.05 {
+                        let turboPitch = (0.65 + 0.85 * c.turboBoost) * sbPitch
+                        turboMix += dspRef.turboSpoolVoice.nextSample(outSR: srF, pitchRatio: turboPitch) * c.turboBoost * 0.16
+                    }
+                    turboMix += dspRef.turboBovVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
+
+                    // 4. NOS Roar + Ignite/Purge
+                    var nosMix: Float = 0.0
+                    if dspRef.smoothNosGain > 0.005 {
+                        nosMix += dspRef.nosLoopVoice.nextSample(outSR: srF, pitchRatio: (0.95 + 0.20 * speedFrac) * sbPitch) * dspRef.smoothNosGain * 0.42
+                    }
+                    nosMix += dspRef.nosIgniteVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
+                    nosMix += dspRef.nosPurgeVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
+
+                    // 5. Tire Screech / Drift Squeal
+                    var skidMix: Float = 0.0
+                    if dspRef.smoothSkidGain > 0.01 {
+                        let skidPitch = (0.86 + 0.28 * dspRef.smoothSkidGain) * sbPitch
+                        skidMix = dspRef.skidVoice.nextSample(outSR: srF, pitchRatio: skidPitch) * dspRef.smoothSkidGain * 0.34
+                    }
+
+                    // 6. One-shots (Gearshifts, Wall Impacts, Scrape, Speedbreaker, Radar)
+                    var fxMix: Float = 0.0
+                    fxMix += dspRef.shiftPop1Voice.nextSample(outSR: srF, pitchRatio: sbPitch)
+                    fxMix += dspRef.shiftPop2Voice.nextSample(outSR: srF, pitchRatio: sbPitch)
+                    fxMix += dspRef.impactHardVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
+                    fxMix += dspRef.impactMedVoice.nextSample(outSR: srF, pitchRatio: sbPitch)
+                    fxMix += dspRef.speedbreakerVoice.nextSample(outSR: srF, pitchRatio: 1.0)
+                    fxMix += dspRef.radarPingVoice.nextSample(outSR: srF, pitchRatio: 1.0)
+                    if c.scrapeIntensity > 0.02 {
+                        fxMix += dspRef.scrapeVoice.nextSample(outSR: srF, pitchRatio: (0.85 + 0.35 * speedFrac) * sbPitch) * c.scrapeIntensity * 0.30
+                    }
+
+                    // 7. Ambient Weather & High-Speed Wind Bed
+                    var envMix: Float = 0.0
+                    if c.rainIntensity > 0.05 {
+                        envMix += dspRef.rainVoice.nextSample(outSR: srF, pitchRatio: sbPitch) * c.rainIntensity * 0.14
+                    }
+                    if speedFrac > 0.25 {
+                        let windGain = (speedFrac - 0.25) / 0.75
+                        envMix += dspRef.windVoice.nextSample(outSR: srF, pitchRatio: (0.8 + 0.45 * speedFrac) * sbPitch) * windGain * 0.18
+                    }
+
+                    // 8. 3D Stereo-Panned Doppler Police Siren
+                    var sirenVal: Float = 0.0
+                    if dspRef.smoothSirenGain > 0.005 {
+                        let sPitch = c.sirenDoppler * sbPitch
+                        switch c.sirenMode {
+                        case 1:  sirenVal = dspRef.sirenYelpVoice.nextSample(outSR: srF, pitchRatio: sPitch)
+                        case 2:  sirenVal = dspRef.sirenPhaserVoice.nextSample(outSR: srF, pitchRatio: sPitch)
+                        default: sirenVal = dspRef.sirenWailVoice.nextSample(outSR: srF, pitchRatio: sPitch)
+                        }
+                        sirenVal *= dspRef.smoothSirenGain * 0.42
+                    }
+
+                    let mono = engineMix + whineMix + turboMix + nosMix + skidMix + fxMix + envMix
+                    let rawL = (mono + sirenVal * sirenL) * c.masterGain
+                    let rawR = (mono + sirenVal * sirenR) * c.masterGain
+
+                    // Soft tanh limiter: warm analog saturation, zero digital clipping
+                    outL[i] = tanhf(rawL)
+                    outR[i] = tanhf(rawR)
+                }
+                return noErr
+            }
+
+            self.sourceNode = node
+            audioEngine.attach(node)
+            audioEngine.connect(node, to: masterEQ, format: format)
+            audioEngine.connect(masterEQ, to: acousticBusMixer, format: format)
+        }
+
+        // Probe preferred EA TRAX .m4a format (32 kHz stereo) so AVAudioPlayerNode matches file.processingFormat
+        let musicFormat = probeInitialMusicFormat() ?? AVAudioFormat(standardFormatWithSampleRate: 32000.0, channels: 2) ?? format
+        connectedMusicSampleRate = musicFormat.sampleRate
+        connectedMusicChannels = musicFormat.channelCount
+
+        audioEngine.connect(musicPlayerNode, to: musicMixer, format: musicFormat)
+        audioEngine.connect(musicMixer, to: acousticBusMixer, format: format)
+        audioEngine.connect(acousticBusMixer, to: tunnelReverb, format: format)
+        audioEngine.connect(tunnelReverb, to: tunnelEQ, format: format)
+        audioEngine.connect(tunnelEQ, to: audioEngine.mainMixerNode, format: format)
+
+        musicLock.lock()
+        applyTunnelAcousticsLocked(occlusion: currentTunnelOcclusion)
+        applyMusicVolumeLocked()
+        musicLock.unlock()
 
         do {
             try audioEngine.start()
             isRunning = true
+
+            // Kick off background EA TRAX streaming if music pack is present
+            musicLock.lock()
+            if !musicTracks.isEmpty && activeTrackGlobalIndex >= 0 {
+                scheduleAndPlayTrackLocked(globalIndex: activeTrackGlobalIndex)
+            }
+            musicLock.unlock()
         } catch {
             // Graceful silent fallback when audio hardware is unavailable (e.g. headless CI)
             isRunning = false
         }
     }
 
-    func stop() {
+    public func stop() {
+        musicLock.lock()
+        playbackGeneration &+= 1
+        if isRunning {
+            musicPlayerNode.stop()
+        }
+        activeAudioFile = nil
+        musicLock.unlock()
+
         guard isRunning else { return }
         audioEngine.stop()
         if let n = sourceNode {
             audioEngine.detach(n)
             sourceNode = nil
         }
+        if graphAttached {
+            audioEngine.detach(masterEQ)
+            audioEngine.detach(musicPlayerNode)
+            audioEngine.detach(musicMixer)
+            audioEngine.detach(acousticBusMixer)
+            audioEngine.detach(tunnelReverb)
+            audioEngine.detach(tunnelEQ)
+            graphAttached = false
+        }
         isRunning = false
     }
 
+    // MARK: - EA TRAX Music Playback & Acoustic Tunnel Reverb API
+
+    @discardableResult
+    public func nextMusicTrack() -> RTMusicTrackInfo? {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        return stepMusicTrackLocked(delta: 1)
+    }
+
+    @discardableResult
+    public func prevMusicTrack() -> RTMusicTrackInfo? {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        return stepMusicTrackLocked(delta: -1)
+    }
+
+    @discardableResult
+    public func toggleMusicMute() -> Bool {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        musicMutedFlag.toggle()
+        applyMusicVolumeLocked()
+        return musicMutedFlag
+    }
+
+    @discardableResult
+    public func selectMusicTrack(index: Int) -> RTMusicTrackInfo? {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        guard !musicTracks.isEmpty else { return nil }
+        let count = musicTracks.count
+        let wrapped = ((index % count) + count) % count
+        let rec = musicTracks[wrapped]
+        activeTrackGlobalIndex = wrapped
+        if rec.isPursuit {
+            pursuitModeActive = true
+            savedPursuitGlobalIndex = wrapped
+        } else {
+            pursuitModeActive = false
+            savedLicensedGlobalIndex = wrapped
+        }
+        if isRunning && !isHeadless {
+            scheduleAndPlayTrackLocked(globalIndex: wrapped)
+        }
+        return buildTrackInfoLocked(globalIndex: wrapped)
+    }
+
+    /// Smoothly modulates tunnel/overpass acoustic reverb (4% open sky -> 42% tunnel)
+    /// and subtle ceiling low-pass + bass warmth EQ.
+    public func setTunnelOcclusion(_ occlusion: Float) {
+        let clamped = max(0.0, min(1.0, occlusion.isFinite ? occlusion : 0.0))
+        musicLock.lock()
+        currentTunnelOcclusion = clamped
+        applyTunnelAcousticsLocked(occlusion: clamped)
+        musicLock.unlock()
+    }
+
+    /// Switches between licensed EA TRAX (free-roam/race) and Paul Linford & Chris Vrenna
+    /// interactive pursuit score tracks when entering or escaping a police pursuit.
+    public func setPursuitMusicMode(_ active: Bool) {
+        musicLock.lock()
+        defer { musicLock.unlock() }
+        guard active != pursuitModeActive else { return }
+        pursuitModeActive = active
+        guard !musicTracks.isEmpty else { return }
+
+        let targetPool = active ? pursuitIndices : licensedIndices
+        guard !targetPool.isEmpty else { return }
+
+        let chosenGlobal: Int
+        if active {
+            if savedPursuitGlobalIndex >= 0 && targetPool.contains(savedPursuitGlobalIndex) {
+                chosenGlobal = savedPursuitGlobalIndex
+            } else {
+                chosenGlobal = targetPool[0]
+            }
+            savedPursuitGlobalIndex = chosenGlobal
+        } else {
+            if savedLicensedGlobalIndex >= 0 && targetPool.contains(savedLicensedGlobalIndex) {
+                chosenGlobal = savedLicensedGlobalIndex
+            } else {
+                chosenGlobal = targetPool[0]
+            }
+            savedLicensedGlobalIndex = chosenGlobal
+        }
+
+        if activeTrackGlobalIndex != chosenGlobal {
+            activeTrackGlobalIndex = chosenGlobal
+            if isRunning && !isHeadless {
+                scheduleAndPlayTrackLocked(globalIndex: chosenGlobal)
+            }
+        }
+    }
+
+    /// Temporarily ducks background EA TRAX during Busted/Evaded/Event finish stingers.
+    public func triggerStingerDuck(durationSeconds: Float = 3.5, duckFactor: Float = 0.25) {
+        musicLock.lock()
+        let dur = Double(max(0.1, min(15.0, durationSeconds)))
+        stingerDuckFactor = max(0.05, min(1.0, duckFactor))
+        stingerDuckEndTime = CFAbsoluteTimeGetCurrent() + dur
+        applyMusicVolumeLocked()
+        musicLock.unlock()
+    }
+
+    private func activePoolLocked() -> [Int] {
+        if pursuitModeActive && !pursuitIndices.isEmpty {
+            return pursuitIndices
+        }
+        if !licensedIndices.isEmpty {
+            return licensedIndices
+        }
+        return Array(0..<musicTracks.count)
+    }
+
+    private func buildTrackInfoLocked(globalIndex: Int) -> RTMusicTrackInfo? {
+        guard globalIndex >= 0 && globalIndex < musicTracks.count else { return nil }
+        let rec = musicTracks[globalIndex]
+        let pool = rec.isPursuit ? (pursuitIndices.isEmpty ? Array(0..<musicTracks.count) : pursuitIndices)
+                                 : (licensedIndices.isEmpty ? Array(0..<musicTracks.count) : licensedIndices)
+        let poolPos = pool.firstIndex(of: globalIndex) ?? globalIndex
+        return RTMusicTrackInfo(
+            index: poolPos,
+            total: pool.count,
+            artist: rec.artist,
+            title: rec.title,
+            isPursuit: rec.isPursuit
+        )
+    }
+
+    private func stepMusicTrackLocked(delta: Int) -> RTMusicTrackInfo? {
+        let pool = activePoolLocked()
+        guard !pool.isEmpty else { return nil }
+        let curPos = pool.firstIndex(of: activeTrackGlobalIndex) ?? 0
+        let nextPos = ((curPos + delta) % pool.count + pool.count) % pool.count
+        let nextGlobal = pool[nextPos]
+        activeTrackGlobalIndex = nextGlobal
+        if pursuitModeActive {
+            savedPursuitGlobalIndex = nextGlobal
+        } else {
+            savedLicensedGlobalIndex = nextGlobal
+        }
+        if isRunning && !isHeadless {
+            scheduleAndPlayTrackLocked(globalIndex: nextGlobal)
+        }
+        return buildTrackInfoLocked(globalIndex: nextGlobal)
+    }
+
+    private func applyTunnelAcousticsLocked(occlusion: Float) {
+        let clamped = max(0.0, min(1.0, occlusion))
+        let wetDry: Float = 4.0 + 38.0 * clamped        // 4% open sky -> 42% inside tunnel/overpass
+        let lpFreq: Float = 18500.0 - 14000.0 * clamped // 18.5 kHz -> 4.5 kHz ceiling dampening
+        let bassGainDb: Float = 3.5 * clamped           // 0 dB -> +3.5 dB tunnel bass warmth @ 160 Hz
+        currentReverbWetDry = wetDry
+
+        if !isHeadless {
+            tunnelReverb.wetDryMix = wetDry
+            if tunnelEQ.bands.count >= 2 {
+                tunnelEQ.bands[0].frequency = max(2500.0, min(20000.0, lpFreq))
+                tunnelEQ.bands[1].gain = bassGainDb
+            }
+        }
+    }
+
+    private func applyMusicVolumeLocked() {
+        guard !isHeadless else { return }
+        if isMuted || musicMutedFlag {
+            musicMixer.outputVolume = 0.0
+            return
+        }
+        // Auto-duck to 0.45x during Speedbreaker
+        let sbDuck: Float = 1.0 - 0.55 * max(0.0, min(1.0, currentSpeedbreakerBlend))
+
+        // Auto-duck during Busted/Evaded stingers (timed or frame-driven)
+        let now = CFAbsoluteTimeGetCurrent()
+        var timedDuck: Float = 1.0
+        if now < stingerDuckEndTime {
+            let rem = Float(stingerDuckEndTime - now)
+            if rem < 0.6 {
+                let t = max(0.0, min(1.0, rem / 0.6))
+                timedDuck = 1.0 - (1.0 - stingerDuckFactor) * t
+            } else {
+                timedDuck = stingerDuckFactor
+            }
+        }
+        let extDuck: Float = 1.0 - 0.75 * max(0.0, min(1.0, externalStingerDuck))
+        let effectiveDuck = min(sbDuck, min(timedDuck, extDuck))
+        musicMixer.outputVolume = max(0.0, min(1.0, baseMusicVolume * effectiveDuck))
+    }
+
+    private func probeInitialMusicFormat() -> AVAudioFormat? {
+        musicLock.lock()
+        let firstURL = (activeTrackGlobalIndex >= 0 && activeTrackGlobalIndex < musicTracks.count)
+            ? musicTracks[activeTrackGlobalIndex].fileURL
+            : musicTracks.first?.fileURL
+        musicLock.unlock()
+
+        guard let url = firstURL, let file = try? AVAudioFile(forReading: url) else {
+            return nil
+        }
+        return file.processingFormat
+    }
+
+    /// Must be called while holding `musicLock` and only when `isRunning && !isHeadless`.
+    private func scheduleAndPlayTrackLocked(globalIndex: Int) {
+        guard isRunning, !isHeadless, globalIndex >= 0, globalIndex < musicTracks.count else { return }
+        let rec = musicTracks[globalIndex]
+        guard FileManager.default.fileExists(atPath: rec.fileURL.path),
+              let audioFile = try? AVAudioFile(forReading: rec.fileURL) else {
+            return
+        }
+
+        playbackGeneration &+= 1
+        let expectedGen = playbackGeneration
+
+        musicPlayerNode.stop()
+
+        // Ensure player node connection format matches file.processingFormat (handles any non-32kHz files safely)
+        let fileFmt = audioFile.processingFormat
+        if abs(fileFmt.sampleRate - connectedMusicSampleRate) > 1.0 || fileFmt.channelCount != connectedMusicChannels {
+            audioEngine.disconnectNodeOutput(musicPlayerNode)
+            audioEngine.connect(musicPlayerNode, to: musicMixer, format: fileFmt)
+            connectedMusicSampleRate = fileFmt.sampleRate
+            connectedMusicChannels = fileFmt.channelCount
+        }
+
+        activeAudioFile = audioFile
+        applyMusicVolumeLocked()
+
+        musicPlayerNode.scheduleFile(audioFile, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            guard let self = self else { return }
+            self.musicCompletionQueue.async {
+                self.musicLock.lock()
+                defer { self.musicLock.unlock() }
+                guard self.isRunning, !self.isHeadless, self.playbackGeneration == expectedGen else { return }
+                _ = self.stepMusicTrackLocked(delta: 1)
+            }
+        }
+        musicPlayerNode.play()
+    }
+
+    // MARK: - Engine Bank Selection & Frame Telemetry Update
+
     /// Hot-swaps the active Ginsu engine accel/decel bank for a newly selected garage car.
-    func selectEngine(node rawNode: String, trannyWhineOverride: Bool? = nil) {
+    public func selectEngine(node rawNode: String, trannyWhineOverride: Bool? = nil) {
         let key = engineAccelBanks[rawNode] != nil ? rawNode : fallbackEngineNode(for: rawNode)
         guard key != currentEngineNode || dsp.engineAccel.sampleCount == 0 else { return }
         currentEngineNode = key
 
         dsp.engineMutedForSwap = 1
-        // Brief fence to let in-flight callback exit clean
         let acc = engineAccelBanks[key]
         let dec = engineDecelBanks[key] ?? acc
         let meta = engineMeta[key] ?? (trannyWhine: false, volAccel: 0.80, volDecel: 0.65)
@@ -667,7 +1103,7 @@ final class RTAudioEngine {
         dsp.engineMutedForSwap = 0
     }
 
-    /// Updates real-time engine, SFX, weather & 3D police siren parameters once per display frame.
+    /// Updates real-time engine, SFX, weather, 3D police siren, and music auto-ducking once per display frame.
     func update(
         telemetry: RTDriveTelemetry,
         rainIntensity: Float = 0.0,
@@ -675,7 +1111,8 @@ final class RTAudioEngine {
         sirenPan: Float = 0.0,
         sirenDoppler: Float = 1.0,
         sirenMode: Int32 = 0,
-        radarPing: Bool = false
+        radarPing: Bool = false,
+        stingerDuck: Float = 0.0
     ) {
         guard isRunning else { return }
 
@@ -709,9 +1146,16 @@ final class RTAudioEngine {
         prevNosActive = telemetry.nosActive
         prevSpeedbreakerActive = telemetry.speedbreakerActive
 
-        // Sweep master Speedbreaker low-pass filter on main thread (20 kHz -> 1.4 kHz)
+        // Sweep engine/SFX Speedbreaker low-pass filter on main thread (20 kHz -> 1.4 kHz)
         let targetCutoff = 20000.0 - 18600.0 * telemetry.speedbreakerBlend
         masterEQ.bands[0].frequency = max(1200.0, min(20000.0, targetCutoff))
+
+        // Update Speedbreaker (0.45x) + Busted/Evaded stinger music ducking smoothly
+        musicLock.lock()
+        currentSpeedbreakerBlend = telemetry.speedbreakerBlend
+        externalStingerDuck = stingerDuck
+        applyMusicVolumeLocked()
+        musicLock.unlock()
 
         publishControl()
     }
@@ -761,6 +1205,79 @@ final class RTAudioEngine {
         dsp.impactMedVoice.bind(sfxBuffers["impact_med"], loopedOverride: false)
         dsp.speedbreakerVoice.bind(sfxBuffers["speedbreaker_fx"], loopedOverride: false)
         dsp.radarPingVoice.bind(sfxBuffers["radar_ping"], loopedOverride: false)
+    }
+
+    // MARK: - EA TRAX Music Pack Manifest Loading
+
+    private func loadMusicManifest(from musicDir: URL) -> Bool {
+        let mfURL = musicDir.appendingPathComponent("manifest.json")
+        guard let data = try? Data(contentsOf: mfURL),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tracksArr = root["tracks"] as? [[String: Any]] else {
+            return false
+        }
+
+        var loaded: [MusicTrackRecord] = []
+        var licIdx: [Int] = []
+        var purIdx: [Int] = []
+
+        for item in tracksArr {
+            guard let relFile = item["file"] as? String else { continue }
+            let fileURL = musicDir.appendingPathComponent(relFile)
+            // Keep tracks whose .m4a exists on disk (or accept metadata entries if manifest is synthetic in headless)
+            if !isHeadless && !FileManager.default.fileExists(atPath: fileURL.path) {
+                continue
+            }
+            let artist = (item["artist"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Unknown Artist"
+            let title = (item["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Unknown Track"
+            let album = (item["album"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let category = (item["category"] as? String) ?? "ea_trax"
+            let isPursuit = (item["is_pursuit"] as? Bool) ?? (category == "pursuit" || category == "score")
+            let streamIndex = (item["stream_index"] as? NSNumber)?.intValue ?? loaded.count
+            let durationSec = (item["duration_sec"] as? NSNumber)?.doubleValue ?? 0.0
+
+            let globalIdx = loaded.count
+            loaded.append(
+                MusicTrackRecord(
+                    globalIndex: globalIdx,
+                    streamIndex: streamIndex,
+                    artist: artist,
+                    title: title,
+                    album: album,
+                    category: category,
+                    isPursuit: isPursuit,
+                    fileURL: fileURL,
+                    durationSec: durationSec
+                )
+            )
+            if isPursuit {
+                purIdx.append(globalIdx)
+            } else {
+                licIdx.append(globalIdx)
+            }
+        }
+
+        guard !loaded.isEmpty else { return false }
+
+        musicLock.lock()
+        musicTracks = loaded
+        licensedIndices = licIdx
+        pursuitIndices = purIdx
+        loadedMusicTrackCount = loaded.count
+        if let firstLic = licIdx.first {
+            activeTrackGlobalIndex = firstLic
+            savedLicensedGlobalIndex = firstLic
+            pursuitModeActive = false
+        } else {
+            activeTrackGlobalIndex = 0
+            savedPursuitGlobalIndex = 0
+            pursuitModeActive = loaded[0].isPursuit
+        }
+        if let firstPur = purIdx.first {
+            savedPursuitGlobalIndex = firstPur
+        }
+        musicLock.unlock()
+        return true
     }
 
     // MARK: - Pack & WAV Loading (Runs Once on Main Thread)
