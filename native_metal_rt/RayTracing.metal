@@ -3279,11 +3279,12 @@ kernel void raytraceKernel(
                 float roadAtten = (s.matID == MAT_WET_ASPHALT) ? 0.35f : 1.0f;
                 float giBoost = (s.matID == MAT_WET_ASPHALT) ? 1.06f : 1.36f;
                 giIrrad = giIrrad * giBoost + skyFill * roadAtten * (0.55f + 0.45f * max(s.N.y, 0.0f));
-                // Keep subtle under-car bounce fill on road near car while preserving tight tire contact shadow
+                // Keep subtle under-car bounce fill on road near car while softening wet-road shadow-footprint edges (P2-1)
                 float2 dCarXZ = s.worldPos.xz - u.carWorldPos.xz;
-                float carNear = smoothstep(3.8f, 1.4f, length(dCarXZ));
+                float carDistXZ = length(dCarXZ);
+                float carNear = smoothstep(4.6f, 1.5f, carDistXZ);
                 float contactTight = smoothstep(0.06f, 0.28f, s.worldPos.y - u.carWorldPos.y + 0.22f);
-                giIrrad = max(giIrrad, skyFill * (0.14f * carNear * contactTight));
+                giIrrad = max(giIrrad, skyFill * (0.16f * carNear * contactTight));
             } else if (isDynamicCar) {
                 // Physically grounded ambient bounce floor under lower bumper, wheel wells & tires (>= 0.14 * skyFill)
                 float tireContactKeep = smoothstep(0.02f, 0.16f, s.worldPos.y - u.carWorldPos.y);
@@ -3331,9 +3332,13 @@ kernel void raytraceKernel(
             bool wheelPart = (s.matID == MAT_RUBBER_TIRE || s.matID == MAT_ALLOY_RIM);
             bool chromeTrimPart = (isDynamicCar && (s.matID == MAT_CAR_MISC_CHROME || s.matID == MAT_LICENSE_PLATE));
             float puddleReactive = (isWorldGeom && s.puddleMask > 0.18f) ? clamp(s.puddleMask * 0.58f, 0.0f, 0.58f) : 0.0f;
+            float carShadowReactive = (temporal1SPP && isWorldGeom && s.matID == MAT_WET_ASPHALT && u.driveParams.x > 6.0f)
+                ? (smoothstep(4.4f, 1.6f, length(s.worldPos.xz - u.carWorldPos.xz)) * 0.62f)
+                : 0.0f;
+            float roadReactive = max(puddleReactive, carShadowReactive);
             gReactiveVal = highReactivePart
                 ? 0.94f
-                : (wheelPart ? 0.38f : ((length(gEmissive) > 0.5f) ? 0.86f : (isAIVehicle ? 0.52f : (chromeTrimPart ? 0.58f : (isDynamicCar ? 0.42f : puddleReactive)))));
+                : (wheelPart ? 0.38f : ((length(gEmissive) > 0.5f) ? 0.86f : (isAIVehicle ? 0.52f : (chromeTrimPart ? 0.58f : (isDynamicCar ? 0.42f : roadReactive)))));
         }
     }
 
