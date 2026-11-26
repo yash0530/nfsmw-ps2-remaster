@@ -302,6 +302,7 @@ struct RTAIInstanceState {
     var cruiseSpeedMs: Float = 16.0
     var laneOffsetM: Float = 2.1
     var stuckTimer: Float = 0.0
+    var hasRoadProbeY: Bool = false
 }
 
 /// Nearest active police lightbar light ready for RTDynamicFX[13].copLightPos/Col.
@@ -430,7 +431,12 @@ final class RTGameWorld {
     }
 
     /// Instant-thrill pursuit trigger (`F` key): starts Heat 1 or escalates Heat 1->2->3->4->5!
-    func triggerInstantPursuit(near playerPos: SIMD3<Float>, playerYaw: Float, setHeat explicitHeat: Int? = nil) {
+    func triggerInstantPursuit(
+        near playerPos: SIMD3<Float>,
+        playerYaw: Float,
+        setHeat explicitHeat: Int? = nil,
+        showcaseFraming: Bool = false
+    ) {
         if let h = explicitHeat {
             heatLevel = max(1, min(5, h))
         } else if pursuitPhase == .pursuing || pursuitPhase == .cooldown {
@@ -441,6 +447,9 @@ final class RTGameWorld {
             pursuitDurationSec = 0.0
             infractionsCount += 1
         }
+        if bounty < 1500.0 {
+            bounty = Float(heatLevel) * 2500.0
+        }
         pursuitPhase = .pursuing
         evadeProgress = 0.0
         bustedProgress = 0.0
@@ -448,45 +457,155 @@ final class RTGameWorld {
         outcomeBannerTimer = 0.0
         sirenAudio.radarPing = true
 
-        // Immediately upgrade & spawn pursuing units behind/ahead of player
+        // Immediately upgrade & spawn pursuing units (including close ahead/flank interceptors for instant action!)
         let cfg = heatConfigs[heatLevel] ?? heatConfigs[1]!
-        let tactics: [RTCopTactic] = [.rearRam, .pitLeft, .pitRight, .boxInFront]
+        let tactics: [RTCopTactic] = [.boxInFront, .pitLeft, .pitRight, .rearRam]
+        let pFwd = SIMD3<Float>(sin(playerYaw), 0.0, cos(playerYaw))
+        let pRight = SIMD3<Float>(-cos(playerYaw), 0.0, sin(playerYaw))
+
         for slotIdx in 0..<Self.maxActiveCopsCap {
             let activeWanted = slotIdx < cfg.maxActiveCops
             if !activeWanted {
                 aiSlots[slotIdx].active = false
                 continue
             }
-            if !aiSlots[slotIdx].active || aiSlots[slotIdx].archetype != cfg.copArchetype {
-                let spawnDist: Float = 52.0 + Float(slotIdx) * 26.0
-                if let placed = spawnUnitOnRoad(
-                    near: playerPos,
-                    playerYaw: playerYaw,
-                    minDist: spawnDist * 0.75,
-                    maxDist: spawnDist * 1.45,
-                    preferBehind: (slotIdx < 3)
-                ) {
+            if showcaseFraming || !aiSlots[slotIdx].active || aiSlots[slotIdx].archetype != cfg.copArchetype {
+                var placedPos: SIMD3<Float>? = nil
+                var placedYaw: Float = playerYaw
+                var placedSeg: Int = -1
+                var placedT: Float = 0.5
+                var placedFwd: Bool = true
+
+                if showcaseFraming {
+                    // Place lead & flanking units directly along the road corridor ahead/beside player
+                    // so chase-cam pursuit shots visibly show active cop cars + flashing RT lightbars!
+                    let forwardOffsets: [Float] = [34.0, 21.0, -14.0, 56.0]
+                    let lateralOffsets: [Float] = [-2.8, 3.2, -2.5, 2.2]
+                    let desired = playerPos + pFwd * forwardOffsets[slotIdx] + pRight * lateralOffsets[slotIdx]
+                    if let near = roadGraph.nearestSegment(to: desired, searchRadius: 90.0) {
+                        let seg = roadGraph.segments[near.segIdx]
+                        let a = roadGraph.nodes[Int(seg.node0)].pos
+                        let b = roadGraph.nodes[Int(seg.node1)].pos
+                        let segDir = simd_normalize(b - a)
+                        let align = segDir.x * pFwd.x + segDir.z * pFwd.z
+                        let useFwd = (align >= 0.0)
+                        let travel = useFwd ? segDir : -segDir
+                        let segYaw = atan2(travel.x, travel.z)
+                        let segRight = SIMD3<Float>(-cos(segYaw), 0.0, sin(segYaw))
+                        let safeHalfW = max(1.45, min(seg.halfWidthM - 1.35, seg.halfWidthM * 0.62))
+                        let laneBias: Float = ((slotIdx % 2 == 0) ? 1.0 : -1.0) * min(1.85, safeHalfW * 0.85)
+                        placedPos = SIMD3<Float>(near.point.x + segRight.x * laneBias,
+                                                 near.point.y,
+                                                 near.point.z + segRight.z * laneBias)
+                        placedYaw = segYaw
+                        placedSeg = near.segIdx
+                        placedT = near.t
+                        placedFwd = useFwd
+                    } else {
+                        placedPos = desired
+                        placedYaw = playerYaw
+                    }
+                }
+
+                if placedPos == nil {
+                    let preferAhead = (slotIdx == 0)
+                    let spawnDist: Float = 38.0 + Float(slotIdx) * 24.0
+                    if let placed = spawnUnitOnRoad(
+                        near: playerPos,
+                        playerYaw: playerYaw,
+                        minDist: spawnDist * 0.70,
+                        maxDist: spawnDist * 1.45,
+                        preferBehind: !preferAhead,
+                        preferAhead: preferAhead
+                    ) {
+                        placedPos = placed.pos
+                        placedYaw = placed.yaw
+                        placedSeg = placed.segIdx
+                        placedT = placed.t
+                        placedFwd = placed.forward
+                    }
+                }
+
+                if let pos = placedPos {
                     var u = aiSlots[slotIdx]
                     u.active = true
                     u.isCop = true
                     u.archetype = cfg.copArchetype
-                    u.worldPosition = placed.pos
-                    u.prevWorldPosition = placed.pos
-                    u.yawRad = placed.yaw
-                    u.prevYawRad = placed.yaw
-                    u.segIdx = placed.segIdx
-                    u.segT = placed.t
-                    u.segForward = placed.forward
-                    u.speedMs = 24.0
+                    u.worldPosition = pos
+                    u.prevWorldPosition = pos
+                    u.yawRad = placedYaw
+                    u.prevYawRad = placedYaw
+                    u.segIdx = placedSeg
+                    u.segT = placedT
+                    u.segForward = placedFwd
+                    u.speedMs = showcaseFraming ? 36.0 : 26.0
                     u.sirenOn = true
                     u.lightbarPhase = Float(slotIdx) * 1.57
                     u.tactic = tactics[slotIdx % tactics.count]
+                    u.hasRoadProbeY = false
                     aiSlots[slotIdx] = u
                 }
             } else {
                 aiSlots[slotIdx].sirenOn = true
                 aiSlots[slotIdx].tactic = tactics[slotIdx % tactics.count]
             }
+        }
+    }
+
+    /// Resets distant traffic & police units around a newly teleported landmark and seeds nearby ahead traffic.
+    func resetNearPlayer(playerPos: SIMD3<Float>, playerYaw: Float, keepPursuit: Bool = false) {
+        if !keepPursuit {
+            clearPursuit()
+        }
+        for i in 0..<aiSlots.count {
+            aiSlots[i].active = false
+            aiSlots[i].segIdx = -1
+        }
+        guard !roadGraph.isEmpty else { return }
+
+        // Seed 3 nearby ahead traffic units so Rockport streets immediately feel alive on frame 0
+        let trafficStart = Self.maxActiveCopsCap
+        let trafficArchetypes: [RTAIVehicleArchetype] = [.trafTaxi, .trafSedan, .trafSUV, .trafMinivan]
+        let pFwd = SIMD3<Float>(sin(playerYaw), 0.0, cos(playerYaw))
+        for k in 0..<3 {
+            let slot = trafficStart + k
+            let probePt = playerPos + pFwd * (32.0 + Float(k) * 34.0)
+            if let near = roadGraph.nearestSegment(to: probePt, searchRadius: 70.0) {
+                let seg = roadGraph.segments[near.segIdx]
+                let a = roadGraph.nodes[Int(seg.node0)].pos
+                let b = roadGraph.nodes[Int(seg.node1)].pos
+                let segDir = simd_normalize(b - a)
+                let useFwd = (k != 1) ? ((segDir.x * pFwd.x + segDir.z * pFwd.z) >= 0.0) : ((segDir.x * pFwd.x + segDir.z * pFwd.z) < 0.0)
+                let travel = useFwd ? segDir : -segDir
+                let segYaw = atan2(travel.x, travel.z)
+                let right = SIMD3<Float>(-cos(segYaw), 0.0, sin(segYaw))
+                let safeHalfW = max(1.30, min(seg.halfWidthM - 1.35, seg.halfWidthM * 0.55))
+                let laneOff = min(1.95, safeHalfW)
+                let pos = near.point + right * laneOff
+                if simd_distance(SIMD2<Float>(pos.x, pos.z), SIMD2<Float>(playerPos.x, playerPos.z)) >= 16.0 {
+                    var u = aiSlots[slot]
+                    u.active = true
+                    u.isCop = false
+                    u.sirenOn = false
+                    u.archetype = trafficArchetypes[k % trafficArchetypes.count]
+                    u.worldPosition = pos
+                    u.prevWorldPosition = pos
+                    u.yawRad = segYaw
+                    u.prevYawRad = segYaw
+                    u.segIdx = near.segIdx
+                    u.segT = near.t
+                    u.segForward = useFwd
+                    u.cruiseSpeedMs = 15.5 + Float(k) * 2.5
+                    u.speedMs = u.cruiseSpeedMs
+                    u.laneOffsetM = laneOff
+                    u.hasRoadProbeY = false
+                    aiSlots[slot] = u
+                }
+            }
+        }
+        maintainTrafficPopulation(playerPos: playerPos, playerYaw: playerYaw)
+        if keepPursuit && heatLevel > 0 {
+            triggerInstantPursuit(near: playerPos, playerYaw: playerYaw, setHeat: heatLevel, showcaseFraming: false)
         }
     }
 
@@ -504,13 +623,19 @@ final class RTGameWorld {
     }
 
     /// Ingests GPU road-height probe hits (`heights[i]` corresponds to `aiSlots[i]`, `-9999` on miss).
-    func applyRoadProbeHeights(_ heights: [Float], dt: Float) {
+    func applyRoadProbeHeights(_ heights: [Float], dt: Float, snapImmediate: Bool = false) {
         let count = min(heights.count, aiSlots.count)
-        let alpha = min(1.0, max(0.05, dt * 16.0))
+        let alpha: Float = snapImmediate ? 1.0 : min(1.0, max(0.15, dt * 36.0))
         for i in 0..<count where aiSlots[i].active {
             let hy = heights[i]
-            if hy > -5000.0 && abs(hy - aiSlots[i].worldPosition.y) < 12.0 {
+            if hy > -5000.0 && abs(hy - aiSlots[i].worldPosition.y) < 18.0 {
                 aiSlots[i].worldPosition.y += (hy - aiSlots[i].worldPosition.y) * alpha
+                if !snapImmediate {
+                    aiSlots[i].worldPosition.y = max(hy - 0.02, min(hy + 0.02, aiSlots[i].worldPosition.y))
+                } else {
+                    aiSlots[i].prevWorldPosition.y = aiSlots[i].worldPosition.y
+                }
+                aiSlots[i].hasRoadProbeY = true
             }
         }
     }
@@ -627,7 +752,9 @@ final class RTGameWorld {
                         u.segForward = placed.forward
                         u.cruiseSpeedMs = spdKmh / 3.6
                         u.speedMs = u.cruiseSpeedMs
-                        u.laneOffsetM = min(2.3, max(1.4, seg.halfWidthM * 0.45))
+                        let safeHalfW = max(1.30, min(seg.halfWidthM - 1.35, seg.halfWidthM * 0.55))
+                        u.laneOffsetM = min(1.95, safeHalfW)
+                        u.hasRoadProbeY = false
                         aiSlots[slot] = u
                     }
                 }
@@ -714,7 +841,8 @@ final class RTGameWorld {
                 u.segForward = bestForward
                 u.segT = bestForward ? 0.02 : 0.98
                 let ns = roadGraph.segments[bestNextSeg]
-                u.laneOffsetM = min(2.3, max(1.4, ns.halfWidthM * 0.45))
+                let safeHalfW = max(1.30, min(ns.halfWidthM - 1.35, ns.halfWidthM * 0.55))
+                u.laneOffsetM = min(1.95, safeHalfW)
             } else {
                 // Dead-end road: smooth U-turn back along segment
                 u.segForward.toggle()
@@ -734,15 +862,70 @@ final class RTGameWorld {
         u.steerAngleRad = max(-0.45, min(0.45, yawDiff * 1.4))
         u.yawRad = normalizeAngle(u.yawRad + yawDiff * min(1.0, dt * 8.0))
 
-        // Right-hand lane offset perpendicular to travel direction: right = (cos(yaw), 0, -sin(yaw))
-        let right = SIMD3<Float>(cos(targetYaw), 0, -sin(targetYaw))
-        let targetPos = centerPos + right * u.laneOffsetM
+        // Right-hand US lane offset clamped strictly inside legal asphalt half-width (zero sidewalk clipping!)
+        let safeHalfW = max(1.30, min(curSeg.halfWidthM - 1.35, curSeg.halfWidthM * 0.62))
+        let clampedLane = max(-safeHalfW, min(safeHalfW, u.laneOffsetM))
+        let right = SIMD3<Float>(-cos(targetYaw), 0, sin(targetYaw))
+        let targetPos = centerPos + right * clampedLane
         let oldPos = u.worldPosition
-        u.worldPosition.x += (targetPos.x - u.worldPosition.x) * min(1.0, dt * 10.0)
-        u.worldPosition.z += (targetPos.z - u.worldPosition.z) * min(1.0, dt * 10.0)
-        // Baseline Y follows road node elevation smoothly until GPU BVH probe refines it
-        u.worldPosition.y += (centerPos.y - u.worldPosition.y) * min(1.0, dt * 8.0)
+        u.worldPosition.x += (targetPos.x - u.worldPosition.x) * min(1.0, dt * 12.0)
+        u.worldPosition.z += (targetPos.z - u.worldPosition.z) * min(1.0, dt * 12.0)
+        // Baseline Y follows road node elevation only before GPU BVH aiRoadProbeKernel locks onto exact asphalt!
+        if !u.hasRoadProbeY {
+            u.worldPosition.y += (centerPos.y - u.worldPosition.y) * min(1.0, dt * 8.0)
+        }
+        clampToRoadCorridor(&u, dt: dt, alignYaw: true)
         u.velocityWorld = (u.worldPosition - oldPos) / max(1e-4, dt)
+    }
+
+    /// Enforces P1-2b legal asphalt corridor clamping + soft curb-repulsion yaw alignment so
+    /// neither civilian traffic nor pursuing cops ever climb sidewalks or wedge into retaining walls.
+    private func clampToRoadCorridor(_ u: inout RTAIInstanceState, dt: Float, alignYaw: Bool) {
+        guard let near = roadGraph.nearestSegment(to: u.worldPosition, searchRadius: 48.0) else { return }
+        let seg = roadGraph.segments[near.segIdx]
+        let a = roadGraph.nodes[Int(seg.node0)].pos
+        let b = roadGraph.nodes[Int(seg.node1)].pos
+        let abXZ = SIMD2<Float>(b.x - a.x, b.z - a.z)
+        let abLen = simd_length(abXZ)
+        guard abLen > 0.25 else { return }
+        var segDir = abXZ / abLen
+
+        // Orient road tangent to match vehicle's travel hemisphere
+        let carFwd = SIMD2<Float>(sin(u.yawRad), cos(u.yawRad))
+        if simd_dot(carFwd, segDir) < 0.0 {
+            segDir = -segDir
+        }
+        let segYaw = atan2(segDir.x, segDir.y)
+        let segRight = SIMD2<Float>(-segDir.y, segDir.x) // screen right (-cosY, +sinY)
+
+        let deltaXZ = SIMD2<Float>(u.worldPosition.x - near.point.x, u.worldPosition.z - near.point.z)
+        let lat = simd_dot(deltaXZ, segRight)
+        let safeHalfW = max(1.50, min(seg.halfWidthM - 1.25, seg.halfWidthM * 0.68))
+
+        if abs(lat) > safeHalfW {
+            let clampedLat = max(-safeHalfW, min(safeHalfW, lat))
+            let corr = clampedLat - lat
+            u.worldPosition.x += segRight.x * corr
+            u.worldPosition.z += segRight.y * corr
+            // Steer cleanly back parallel to road tangent when grazing curb
+            let yawErr = normalizeAngle(segYaw - u.yawRad)
+            u.yawRad = normalizeAngle(u.yawRad + yawErr * min(1.0, dt * 14.0))
+        } else if alignYaw && abs(lat) > safeHalfW * 0.72 {
+            // Soft curb-repulsion steering near road edge
+            let edgeFrac = (abs(lat) - safeHalfW * 0.72) / max(0.25, safeHalfW * 0.28)
+            let yawErr = normalizeAngle(segYaw - u.yawRad)
+            u.yawRad = normalizeAngle(u.yawRad + yawErr * min(1.0, dt * (5.0 + 7.0 * edgeFrac)))
+        }
+
+        // Prevent sideways wall-wedging at pursuit speeds: keep heading within +-36 deg of road corridor tangent
+        if alignYaw && u.speedMs > 10.0 {
+            let errFromRoad = normalizeAngle(u.yawRad - segYaw)
+            let maxDev: Float = 0.62 // ~35.5 deg
+            if abs(errFromRoad) > maxDev {
+                let clampedYaw = normalizeAngle(segYaw + max(-maxDev, min(maxDev, errFromRoad)))
+                u.yawRad = normalizeAngle(u.yawRad + normalizeAngle(clampedYaw - u.yawRad) * min(1.0, dt * 16.0))
+            }
+        }
     }
 
     // MARK: - Heat 1-5 Police AI & Pursuit State Machine
@@ -830,7 +1013,7 @@ final class RTGameWorld {
             return
         }
 
-        // Active Pursuit Intercept / PIT / Box-In Steering!
+        // Active Pursuit Intercept / Rolling Box-In / PIT Steering (strictly inside legal asphalt corridor!)
         let cfg = heatConfigs[max(1, heatLevel)] ?? heatConfigs[1]!
         let toPlayerXZ = SIMD2<Float>(playerPos.x - u.worldPosition.x, playerPos.z - u.worldPosition.z)
         let dist = max(0.1, simd_length(toPlayerXZ))
@@ -838,49 +1021,105 @@ final class RTGameWorld {
         let pFwd = (playerSpeedMs > 2.0)
             ? simd_normalize(SIMD3<Float>(playerVel.x, 0, playerVel.z))
             : SIMD3<Float>(sin(u.yawRad), 0, cos(u.yawRad))
-        let pRight = SIMD3<Float>(pFwd.z, 0, -pFwd.x)
+        let pRight = SIMD3<Float>(-pFwd.z, 0, pFwd.x)
+        let copFwd = SIMD3<Float>(sin(u.yawRad), 0, cos(u.yawRad))
 
-        // Lead target + tactic offset (rear ram, left/right PIT flank, front box-in)
-        let leadSec = min(1.4, dist / max(20.0, u.speedMs))
-        var targetWorld = playerPos + playerVel * (leadSec * 0.55)
-        switch u.tactic {
-        case .pitLeft:
-            targetWorld += -pRight * 2.8 - pFwd * 1.5
-        case .pitRight:
-            targetWorld += pRight * 2.8 - pFwd * 1.5
-        case .boxInFront:
-            targetWorld += pFwd * 7.5
-        case .rearRam, .patrol:
-            targetWorld += -pFwd * 1.0
-        }
+        // Check whether cop is ahead of the player (rolling roadblock / box-in formation) vs chasing from behind
+        let aheadOfPlayer = (u.worldPosition.x - playerPos.x) * pFwd.x + (u.worldPosition.z - playerPos.z) * pFwd.z
+        let sameHeading = (copFwd.x * pFwd.x + copFwd.z * pFwd.z) > 0.25
+        let isRollingLead = (aheadOfPlayer > -2.0 && dist < 85.0 && sameHeading)
 
-        // Gentle road attraction when far so cops hug Rockport avenues rather than cutting through buildings
-        if dist > 40.0, let nearRoad = roadGraph.nearestSegment(to: u.worldPosition + SIMD3<Float>(sin(u.yawRad), 0, cos(u.yawRad)) * 18.0, searchRadius: 80.0) {
-            let roadBlend: Float = min(0.45, (dist - 40.0) / 140.0)
-            targetWorld.x = targetWorld.x * (1.0 - roadBlend) + nearRoad.point.x * roadBlend
-            targetWorld.z = targetWorld.z * (1.0 - roadBlend) + nearRoad.point.z * roadBlend
-            u.worldPosition.y += (nearRoad.point.y - u.worldPosition.y) * min(1.0, dt * 6.0)
+        var targetWorld: SIMD3<Float>
+        var desiredSpeed: Float
+
+        if isRollingLead {
+            // Rolling Box-In / Lead Pace Interceptor: race down the road corridor ahead of player in crisp formation
+            // (never perform suicidal 180-deg U-turns into sidewalks or retaining walls!)
+            let lookAheadPos = u.worldPosition + copFwd * 22.0
+            let laneSign: Float = (u.tactic == .pitLeft) ? -1.0 : ((u.tactic == .pitRight) ? 1.0 : ((index % 2 == 0) ? 0.65 : -0.65))
+            if let nearRoad = roadGraph.nearestSegment(to: lookAheadPos, searchRadius: 60.0) {
+                let seg = roadGraph.segments[nearRoad.segIdx]
+                let a = roadGraph.nodes[Int(seg.node0)].pos
+                let b = roadGraph.nodes[Int(seg.node1)].pos
+                var sDir = simd_normalize(SIMD3<Float>(b.x - a.x, 0, b.z - a.z))
+                if (sDir.x * pFwd.x + sDir.z * pFwd.z) < 0.0 { sDir = -sDir }
+                let sRight = SIMD3<Float>(-sDir.z, 0, sDir.x)
+                let safeHalfW = max(1.45, min(seg.halfWidthM - 1.35, seg.halfWidthM * 0.62))
+                let targetLat = max(-safeHalfW * 0.80, min(safeHalfW * 0.80, laneSign * min(2.0, safeHalfW * 0.78)))
+                targetWorld = nearRoad.point + sDir * 18.0 + sRight * targetLat
+                if !u.hasRoadProbeY {
+                    u.worldPosition.y += (nearRoad.point.y - u.worldPosition.y) * min(1.0, dt * 6.0)
+                }
+            } else {
+                targetWorld = u.worldPosition + pFwd * 24.0 + pRight * (laneSign * 1.6)
+            }
+            // Pace slightly slower when far ahead so player closes into a dramatic rolling box-in!
+            let paceDelta: Float = (aheadOfPlayer > 26.0) ? -3.5 : ((aheadOfPlayer < 12.0) ? 2.5 : -0.8)
+            desiredSpeed = min(cfg.maxCopSpeedMs, max(20.0, playerSpeedMs + paceDelta))
         } else {
-            u.worldPosition.y += (playerPos.y - u.worldPosition.y) * min(1.0, dt * 6.0)
+            // Trailing Pursuit / PIT Maneuver: chase player while clamping lateral flank offset inside legal asphalt
+            let leadSec = min(1.2, dist / max(20.0, u.speedMs))
+            targetWorld = playerPos + playerVel * (leadSec * 0.50)
+            switch u.tactic {
+            case .pitLeft:
+                targetWorld += -pRight * 2.1 - pFwd * 1.2
+            case .pitRight:
+                targetWorld += pRight * 2.1 - pFwd * 1.2
+            case .boxInFront:
+                targetWorld += pFwd * 10.0
+            case .rearRam, .patrol:
+                targetWorld += -pFwd * 1.0
+            }
+
+            // Road corridor attraction so trailing cops hug Rockport avenues rather than cutting corners across curbs
+            if let nearRoad = roadGraph.nearestSegment(to: targetWorld, searchRadius: 64.0) {
+                let seg = roadGraph.segments[nearRoad.segIdx]
+                let a = roadGraph.nodes[Int(seg.node0)].pos
+                let b = roadGraph.nodes[Int(seg.node1)].pos
+                let abXZ = SIMD2<Float>(b.x - a.x, b.z - a.z)
+                let abLen = max(0.25, simd_length(abXZ))
+                let sDir = abXZ / abLen
+                let sRight = SIMD2<Float>(-sDir.y, sDir.x)
+                let tDelta = SIMD2<Float>(targetWorld.x - nearRoad.point.x, targetWorld.z - nearRoad.point.z)
+                let tLat = simd_dot(tDelta, sRight)
+                let safeHalfW = max(1.45, min(seg.halfWidthM - 1.35, seg.halfWidthM * 0.64))
+                if abs(tLat) > safeHalfW {
+                    let cLat = max(-safeHalfW, min(safeHalfW, tLat))
+                    targetWorld.x = nearRoad.point.x + sRight.x * cLat
+                    targetWorld.z = nearRoad.point.z + sRight.y * cLat
+                }
+                if dist > 40.0 {
+                    let roadBlend: Float = min(0.55, (dist - 40.0) / 120.0)
+                    targetWorld.x = targetWorld.x * (1.0 - roadBlend) + nearRoad.point.x * roadBlend
+                    targetWorld.z = targetWorld.z * (1.0 - roadBlend) + nearRoad.point.z * roadBlend
+                }
+                if !u.hasRoadProbeY {
+                    u.worldPosition.y += (nearRoad.point.y - u.worldPosition.y) * min(1.0, dt * 6.0)
+                }
+            } else if !u.hasRoadProbeY {
+                u.worldPosition.y += (playerPos.y - u.worldPosition.y) * min(1.0, dt * 6.0)
+            }
+
+            let rubberBandBonus: Float = (dist > 45.0) ? min(18.0, (dist - 45.0) * 0.18) : 0.0
+            desiredSpeed = min(cfg.maxCopSpeedMs + rubberBandBonus, max(18.0, playerSpeedMs + 8.0 + rubberBandBonus))
         }
 
         let desiredYaw = atan2(targetWorld.x - u.worldPosition.x, targetWorld.z - u.worldPosition.z)
         let yawErr = normalizeAngle(desiredYaw - u.yawRad)
-        u.steerAngleRad = max(-0.52, min(0.52, yawErr * 1.5))
-        let maxTurnRate: Float = 2.6
-        u.yawRad = normalizeAngle(u.yawRad + max(-maxTurnRate * dt, min(maxTurnRate * dt, yawErr * 4.8 * dt)))
+        u.steerAngleRad = max(-0.48, min(0.48, yawErr * 1.4))
+        let maxTurnRate: Float = isRollingLead ? 1.85 : 2.35
+        u.yawRad = normalizeAngle(u.yawRad + max(-maxTurnRate * dt, min(maxTurnRate * dt, yawErr * 4.5 * dt)))
 
-        // NFSMW authentic pursuit catch-up rubber-band: pushes harder when >45m behind, matches pace in close box-in
-        let rubberBandBonus: Float = (dist > 45.0) ? min(18.0, (dist - 45.0) * 0.18) : 0.0
-        let cornerSlowdown: Float = 1.0 - min(0.45, abs(yawErr) * 0.35)
-        let desiredSpeed = min(cfg.maxCopSpeedMs + rubberBandBonus, max(16.0, (playerSpeedMs + 8.0 + rubberBandBonus) * cornerSlowdown))
-        let accelRate: Float = (desiredSpeed > u.speedMs) ? 14.0 : 18.0
-        u.speedMs = max(0.0, u.speedMs + max(-accelRate * dt, min(accelRate * dt, desiredSpeed - u.speedMs)))
+        let cornerSlowdown: Float = 1.0 - min(0.42, abs(yawErr) * 0.35)
+        let targetSpeed = max(16.0, desiredSpeed * cornerSlowdown)
+        let accelRate: Float = (targetSpeed > u.speedMs) ? 14.0 : 18.0
+        u.speedMs = max(0.0, u.speedMs + max(-accelRate * dt, min(accelRate * dt, targetSpeed - u.speedMs)))
 
         let fwd = SIMD3<Float>(sin(u.yawRad), 0, cos(u.yawRad))
-        let vel = fwd * u.speedMs
-        u.velocityWorld = vel
-        u.worldPosition += vel * dt
+        let oldPos = u.worldPosition
+        u.worldPosition += fwd * (u.speedMs * dt)
+        clampToRoadCorridor(&u, dt: dt, alignYaw: true)
+        u.velocityWorld = (u.worldPosition - oldPos) / max(1e-4, dt)
         u.wheelSpinRad += (u.speedMs / 0.34) * dt
         aiSlots[index] = u
     }
@@ -988,10 +1227,11 @@ final class RTGameWorld {
         let relVelXZ = SIMD2<Float>(playerVel.x - u.velocityWorld.x, playerVel.z - u.velocityWorld.z)
         let closing = -(relVelXZ.x * normalXZ.x + relVelXZ.y * normalXZ.y)
 
-        // Separate AI unit slightly and accumulate player bounce impulse
+        // Separate AI unit slightly (clamped inside legal asphalt corridor!) and accumulate player bounce impulse
         u.worldPosition.x -= normalXZ.x * overlap * 0.65
         u.worldPosition.z -= normalXZ.y * overlap * 0.65
         u.speedMs *= 0.72
+        clampToRoadCorridor(&u, dt: 0.016, alignYaw: true)
         aiSlots[slotIdx] = u
 
         let push = max(overlap * 4.0, max(0.0, closing) * 0.55)
@@ -1020,21 +1260,22 @@ final class RTGameWorld {
         }
         activeCops.sort { $0.dist < $1.dist }
 
-        // Fill up to 4 nearest cop RT lightbars (alternating vivid HDR crimson/cobalt strobes!)
+        // Fill up to 4 nearest cop RT lightbars (alternating vivid crimson/cobalt strobes calibrated for RayTracing.metal *22.0 HDR scale!)
         for k in 0..<4 {
             if k < activeCops.count {
                 let u = aiSlots[activeCops[k].idx]
                 let cy = cos(u.yawRad), sy = sin(u.yawRad)
                 let loc = u.archetype.localLightbarOffset
-                let worldBar = u.worldPosition + SIMD3<Float>(loc.x * cy + loc.z * sy, loc.y, -loc.x * sy + loc.z * cy)
-                let strobe = sin(u.lightbarPhase)
+                let worldBar = u.worldPosition + SIMD3<Float>(loc.x * cy + loc.z * sy, loc.y + 0.12, -loc.x * sy + loc.z * cy)
+                let strobe = sin(u.lightbarPhase + Float(k) * 1.57)
                 let isRed = strobe >= 0.0
-                let pulse = 0.65 + 0.35 * abs(strobe)
+                // Normalized 0..1 strobe duty & unit RGB color (RayTracing.metal applies *22.0 radiance & volumetric halo!)
+                let strobeDuty = Float(0.42 + 0.58 * abs(strobe))
                 copLights[k] = RTCopLightbarLight(
                     worldPos: worldBar,
-                    strobePhase: u.lightbarPhase + 0.1,
-                    colorHDR: isRed ? SIMD3<Float>(10.5, 0.28, 0.12) : SIMD3<Float>(0.16, 0.58, 12.5),
-                    intensity: pulse * 1.35
+                    strobePhase: strobeDuty,
+                    colorHDR: isRed ? SIMD3<Float>(1.00, 0.07, 0.04) : SIMD3<Float>(0.06, 0.28, 1.00),
+                    intensity: 0.78
                 )
             } else {
                 copLights[k] = RTCopLightbarLight()
@@ -1047,7 +1288,7 @@ final class RTGameWorld {
             let dist = max(1.0, nearest.dist)
             let gain = max(0.0, min(1.0, 1.0 - (dist - 8.0) / 165.0))
             let toCop = (u.worldPosition - playerPos) / dist
-            let playerRight = SIMD3<Float>(cos(playerYaw), 0, -sin(playerYaw))
+            let playerRight = SIMD3<Float>(-cos(playerYaw), 0, sin(playerYaw))
             let pan = max(-1.0, min(1.0, simd_dot(toCop, playerRight)))
 
             // Radial relative velocity -> acoustic Doppler shift (speed of sound = 343 m/s)
@@ -1079,15 +1320,15 @@ final class RTGameWorld {
         let cy = cos(playerYaw)
         let sy = sin(playerYaw)
 
-        // Transform world XZ delta -> heading-up normalized [-1..+1]:
-        //   +x = car right  =  dx * cos(yaw) - dz * sin(yaw)
-        //   +y = car forward = dx * sin(yaw) + dz * cos(yaw)
+        // Transform world XZ delta -> heading-up normalized [-1..+1] (matching RTRenderer screen-right basis):
+        //   +x = screen right = -dx * cos(yaw) + dz * sin(yaw)
+        //   +y = car forward  =  dx * sin(yaw) + dz * cos(yaw)
         @inline(__always)
         func toMinimap(_ worldPos: SIMD3<Float>) -> SIMD2<Float> {
             let dx = worldPos.x - playerPos.x
             let dz = worldPos.z - playerPos.z
-            let rx = (dx * cy - dz * sy) * invR
-            let ry = (dx * sy + dz * cy) * invR
+            let rx = (-dx * cy + dz * sy) * invR
+            let ry = ( dx * sy + dz * cy) * invR
             return SIMD2<Float>(rx, ry)
         }
 
@@ -1169,7 +1410,8 @@ final class RTGameWorld {
         playerYaw: Float,
         minDist: Float,
         maxDist: Float,
-        preferBehind: Bool
+        preferBehind: Bool,
+        preferAhead: Bool = false
     ) -> (pos: SIMD3<Float>, yaw: Float, segIdx: Int, t: Float, forward: Bool)? {
         let cands = roadGraph.querySegments(near: SIMD2<Float>(playerPos.x, playerPos.z), radius: maxDist)
         guard !cands.isEmpty else { return nil }
@@ -1191,14 +1433,21 @@ final class RTGameWorld {
             let fwdFlag = (nextRand() & 1) == 0
             let tv = fwdFlag ? (p1 - p0) : (p0 - p1)
             let yaw = atan2(tv.x, tv.z)
-            let right = SIMD3<Float>(cos(yaw), 0, -sin(yaw))
-            let laneOff = min(2.2, max(1.4, seg.halfWidthM * 0.45))
+            let right = SIMD3<Float>(-cos(yaw), 0, sin(yaw))
+            let safeHalfW = max(1.30, min(seg.halfWidthM - 1.35, seg.halfWidthM * 0.55))
+            let laneOff = min(1.95, safeHalfW)
             let pos = center + right * laneOff
             let rec = (pos, yaw, sIdx, t, fwdFlag)
 
             if preferBehind {
                 let dotFwd = (delta.x * pFwd.x + delta.y * pFwd.y) / max(1.0, d)
                 if dotFwd < 0.25 {
+                    return rec
+                }
+                bestFallback = rec
+            } else if preferAhead {
+                let dotFwd = (delta.x * pFwd.x + delta.y * pFwd.y) / max(1.0, d)
+                if dotFwd > 0.35 {
                     return rec
                 }
                 bestFallback = rec

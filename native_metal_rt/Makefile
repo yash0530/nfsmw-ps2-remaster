@@ -18,6 +18,7 @@ SWIFT_SRCS = \
 	RTPhysics.swift \
 	RTAudioEngine.swift \
 	RTGameWorld.swift \
+	RTAIVehicleLoader.swift \
 	RTRenderer.swift \
 	main.swift
 
@@ -30,7 +31,9 @@ FRAMEWORKS = \
 	-framework ImageIO \
 	-framework UniformTypeIdentifiers \
 	-framework AudioToolbox \
-	-framework CoreAudio
+	-framework CoreAudio \
+	-framework AVFoundation \
+	-framework GameController
 
 .PHONY: all clean metallib
 

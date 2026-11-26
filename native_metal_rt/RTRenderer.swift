@@ -224,13 +224,33 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     private(set) var activeLandmarkIndex: Int = 0
     private(set) var activeLandmarkName: String = "Spawn"
     private(set) var activeWorldInstanceCount: Int = 0
+    private(set) var activeAIInstanceCount: Int = 0
     private var maxInstanceCapacity: Int = 0
+    private var aiBlasBase: Int = 0
     private var worldBlasBase: Int = 0
+    private let aiSlotCount: Int = RTGameWorld.maxAISlots
+    private var aiSlotBase: Int { scene.meshes.count }
+    private var worldSlotBase: Int { scene.meshes.count + aiSlotCount }
     private var carBlasList: [MTLAccelerationStructure] = []
+    private(set) var aiVehicles: RTAIVehiclePack?
+    private var aiSceneDataFallbackBuffer: MTLBuffer!
+    private var aiRoadProbePSO: MTLComputePipelineState?
+    private var aiRoadProbeInBuffer: MTLBuffer!
+    private var aiRoadProbeOutBuffer: MTLBuffer!
+    private var aiRoadPitches: [Float] = Array(repeating: 0.0, count: RTGameWorld.maxAISlots)
     private var minimapBuffer = RTMinimapBuffer()
     private var smoothedFps: Float = 60.0
     private var smoothedFrameSec: Double = 1.0 / 60.0
     var forceSyntheticMode: Bool = false
+
+    // Authentic NFSMW 2005 Gameplay Subsystems (VLT Physics + Ginsu/ABKC Audio + Traffic/Pursuit AI)
+    let physicsEngine: RTPhysicsEngine
+    let audioEngine: RTAudioEngine
+    let gameWorld: RTGameWorld
+    var aiEnabled: Bool = true
+    var benchmarkNosForced: Bool = false
+    var benchmarkSpeedbreakerForced: Bool = false
+    var benchmarkPursuitHeat: Int? = nil
 
     private var raytracePSO: MTLComputePipelineState!
     private var svgfTemporalPSO: MTLComputePipelineState!
@@ -383,6 +403,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     var brakeHeld: Bool = false
     var steerLeftHeld: Bool = false
     var steerRightHeld: Bool = false
+    var handbrakeHeld: Bool = false
+    var nosKeyHeld: Bool = false
+    var nosShiftHeld: Bool = false
+    var speedbreakerHeld: Bool = false
+    var nosHeld: Bool { nosKeyHeld || nosShiftHeld || benchmarkNosForced }
+    var speedbreakerInputHeld: Bool { speedbreakerHeld || benchmarkSpeedbreakerForced }
     var roadScrollZ: Float = 0.0
     var wheelSpinRad: Float = 0.0
     var carYawRad: Float = 0.0
@@ -420,7 +446,15 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    init(device: MTLDevice, commandQueue: MTLCommandQueue, scene: RTScenePackage, world: RTWorldPackage? = nil, metalFileURL: URL?) throws {
+    init(
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue,
+        scene: RTScenePackage,
+        world: RTWorldPackage? = nil,
+        metalFileURL: URL?,
+        headless: Bool = false,
+        aiEnabled: Bool = true
+    ) throws {
         guard device.supportsRaytracing else {
             throw NSError(domain: "RTRenderer", code: 100, userInfo: [
                 NSLocalizedDescriptionKey: "Metal hardware ray tracing is not supported on \(device.name)"
@@ -430,6 +464,10 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         self.commandQueue = commandQueue
         self.scene = scene
         self.world = world
+        self.aiEnabled = aiEnabled
+        self.physicsEngine = RTPhysicsEngine(carKey: scene.canonicalCarName)
+        self.audioEngine = RTAudioEngine(headless: headless)
+        self.gameWorld = RTGameWorld()
         let dummies = RTWorldLoader.makeDummyWorldBuffers(device: device)
         self.dummyWorldVB = dummies.0
         self.dummyWorldIB = dummies.1
@@ -448,6 +486,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
 
         guard let pin = device.makeBuffer(length: MemoryLayout<RTPhysicsProbeInput>.stride, options: .storageModeShared),
               let pout = device.makeBuffer(length: MemoryLayout<RTPhysicsProbeOutput>.stride, options: .storageModeShared),
+              let aiPin = device.makeBuffer(length: RTGameWorld.maxAISlots * MemoryLayout<RTAIRoadProbeInput>.stride, options: .storageModeShared),
+              let aiPout = device.makeBuffer(length: RTGameWorld.maxAISlots * MemoryLayout<RTAIRoadProbeOutput>.stride, options: .storageModeShared),
               let wlBuf = device.makeBuffer(length: MemoryLayout<RTWorldLightGPU>.stride, options: .storageModeShared),
               let wlgBuf = device.makeBuffer(length: 256, options: .storageModeShared),
               let dfxBuf = device.makeBuffer(length: MemoryLayout<RTDynamicFXGPU>.stride, options: .storageModeShared) else {
@@ -457,9 +497,17 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         precondition(MemoryLayout<RTDynamicFXGPU>.stride == 176, "RTDynamicFXGPU stride must be 176 bytes")
         self.physicsInBuffer = pin
         self.physicsOutBuffer = pout
+        self.aiRoadProbeInBuffer = aiPin
+        self.aiRoadProbeOutBuffer = aiPout
+        self.aiSceneDataFallbackBuffer = RTAIVehicleLoader.makeEmptySceneDataBuffer(device: device)
         self.worldLightsBuffer = wlBuf
         self.worldLightGridBuffer = wlgBuf
         self.dynamicFXBuffer = dfxBuf
+        memset(aiPin.contents(), 0, RTGameWorld.maxAISlots * MemoryLayout<RTAIRoadProbeInput>.stride)
+        let aiOutInit = aiPout.contents().bindMemory(to: RTAIRoadProbeOutput.self, capacity: RTGameWorld.maxAISlots)
+        for i in 0..<RTGameWorld.maxAISlots {
+            aiOutInit[i] = RTAIRoadProbeOutput(roadY: -9999.0, pitchRad: 0.0, frontY: -9999.0, rearY: -9999.0)
+        }
         memset(wlBuf.contents(), 0, MemoryLayout<RTWorldLightGPU>.stride)
         memset(wlgBuf.contents(), 0, 256)
         var initFX = RTDynamicFXGPU.zeroed()
@@ -467,6 +515,10 @@ final class RTRenderer: NSObject, MTKViewDelegate {
 
         try buildPipelines(metalFileURL: metalFileURL)
         buildSamplers()
+
+        if aiEnabled && world != nil {
+            self.aiVehicles = try? RTAIVehicleLoader.load(device: device, commandQueue: commandQueue)
+        }
 
         if let w = world {
             self.carWorldPosition = w.spawnPos
@@ -477,12 +529,47 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             if w.instances.count > 4500 || !w.worldLights.isEmpty || w.panoramaSectionCount > 0 {
                 self.worldStreamer = try? RTWorldStreamer(world: w, device: device)
             }
+            if !w.roadNodes.isEmpty && !w.roadSegments.isEmpty {
+                let nodes: [RTRoadNodeSpec] = w.roadNodes.map { n in
+                    RTRoadNodeSpec(
+                        pos: n.pos,
+                        nodeIdx: n.nodeIndex,
+                        flags: n.flags,
+                        degree: n.degree,
+                        adjSegs: n.adjacentSegmentIndices.map { UInt16($0) }
+                    )
+                }
+                let segs: [RTRoadSegmentSpec] = w.roadSegments.map { s in
+                    RTRoadSegmentSpec(
+                        node0: s.node0,
+                        node1: s.node1,
+                        laneFlags: s.laneFlags,
+                        dirFlags: s.dirFlags,
+                        roadId: s.roadId,
+                        lengthM: max(0.5, s.lengthMeters),
+                        halfWidthM: max(2.5, s.halfWidthMeters)
+                    )
+                }
+                self.gameWorld.setRoadGraph(nodes: nodes, segments: segs)
+            }
         }
+        self.physicsEngine.reset(position: carWorldPosition, headingRad: carHeadingRad)
+
+        if !headless && audioEngine.isPackLoaded {
+            audioEngine.start(initialEngineNode: physicsEngine.spec.engineAudioNode)
+            audioEngine.selectEngine(node: physicsEngine.spec.engineAudioNode, trannyWhineOverride: physicsEngine.spec.trannyWhine)
+        }
+
         try buildAccelerationStructures()
 
         if world != nil {
             // Snap car tires cleanly onto the exact .rkpt asphalt height via GPU BVH probe
             snapCarToWorldRoad()
+            if aiEnabled && !gameWorld.roadGraph.isEmpty {
+                gameWorld.resetNearPlayer(playerPos: carWorldPosition, playerYaw: carHeadingRad, keepPursuit: false)
+                gameWorld.step(dt: 1.0 / 60.0, playerPos: carWorldPosition, playerVel: .zero, playerYaw: carHeadingRad)
+                snapAIVehiclesToRoad()
+            }
             updateMinimapBuffer()
             applyCameraMode(cameraMode)
         }
@@ -566,6 +653,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         self.carPitchRad = -0.008 * speedFrac
         self.wheelSpinRad = (self.speedKmh / 3.6) * 0.45 / 0.33
         self.roadScrollZ = 14.5
+        physicsEngine.configurePose(
+            speedKmh: self.speedKmh,
+            steerDeg: self.steerDeg,
+            position: carWorldPosition,
+            headingRad: carHeadingRad
+        )
         if useChaseCam {
             applyCameraMode(.chase)
         }
@@ -588,6 +681,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             skipProceduralWorld: (world != nil)
         )
         self.scene = newScene
+        physicsEngine.setCar(newScene.canonicalCarName)
+        audioEngine.selectEngine(node: physicsEngine.spec.engineAudioNode, trannyWhineOverride: physicsEngine.spec.trannyWhine)
         self.camera = RTOrbitCamera(
             target: newScene.cameraTarget,
             distance: newScene.cameraDistance,
@@ -604,6 +699,57 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         frameGenHistoryValid = false
         resetAccumulation()
         return newScene
+    }
+
+    func triggerInstantPursuit(setHeat explicitHeat: Int? = nil, showcaseFraming: Bool = false) {
+        guard aiEnabled && world != nil && !gameWorld.roadGraph.isEmpty else { return }
+        gameWorld.triggerInstantPursuit(
+            near: carWorldPosition,
+            playerYaw: carHeadingRad,
+            setHeat: explicitHeat,
+            showcaseFraming: showcaseFraming
+        )
+        gameWorld.step(
+            dt: 1.0 / 60.0,
+            playerPos: carWorldPosition,
+            playerVel: physicsEngine.state.velocityWorld,
+            playerYaw: carHeadingRad
+        )
+        snapAIVehiclesToRoad()
+        updateMinimapBuffer()
+        updateDynamicFXBuffer()
+    }
+
+    func resetPlayer() {
+        speedKmh = 0.0
+        steerDeg = 0.0
+        carYawRad = 0.0
+        carRollRad = 0.0
+        carPitchRad = 0.0
+        terrainPitchRad = 0.0
+        terrainRollRad = 0.0
+        nosActiveStrength = 0.0
+        speedbreakerStrength = 0.0
+        if let w = world {
+            carWorldPosition = w.spawnPos
+            carHeadingRad = w.spawnYawRad
+            physicsEngine.reset(position: carWorldPosition, headingRad: carHeadingRad)
+            try? rebuildTLAS(commandBuffer: nil, forceWorldStream: true)
+            snapCarToWorldRoad()
+            if aiEnabled && !gameWorld.roadGraph.isEmpty {
+                gameWorld.resetNearPlayer(playerPos: carWorldPosition, playerYaw: carHeadingRad, keepPursuit: false)
+                gameWorld.step(dt: 1.0 / 60.0, playerPos: carWorldPosition, playerVel: .zero, playerYaw: carHeadingRad)
+                snapAIVehiclesToRoad()
+            }
+            updateMinimapBuffer()
+        } else {
+            carWorldPosition = .zero
+            carHeadingRad = 0.0
+            physicsEngine.reset(position: .zero, headingRad: 0.0)
+            try? rebuildTLAS(commandBuffer: nil)
+        }
+        applyCameraMode(.hero)
+        resetAccumulation()
     }
 
     @discardableResult
@@ -657,8 +803,17 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         carPitchRad = 0.0
         terrainPitchRad = 0.0
         terrainRollRad = 0.0
+        nosActiveStrength = 0.0
+        speedbreakerStrength = 0.0
+        physicsEngine.reset(position: carWorldPosition, headingRad: carHeadingRad)
         try? rebuildTLAS(commandBuffer: nil, forceWorldStream: true)
         snapCarToWorldRoad()
+        if aiEnabled && !gameWorld.roadGraph.isEmpty {
+            let hadPursuit = (gameWorld.heatLevel > 0)
+            gameWorld.resetNearPlayer(playerPos: carWorldPosition, playerYaw: carHeadingRad, keepPursuit: hadPursuit)
+            gameWorld.step(dt: 1.0 / 60.0, playerPos: carWorldPosition, playerVel: .zero, playerYaw: carHeadingRad)
+            snapAIVehiclesToRoad()
+        }
         updateMinimapBuffer()
         applyCameraMode(cameraMode)
         historyResetPending = true
@@ -787,6 +942,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         compositePSO = try makeCompute("compositeKernel")
         hudOverlayPSO = try makeCompute("hudOverlayKernel")
         physicsProbePSO = try makeCompute("physicsProbeKernel")
+        aiRoadProbePSO = try? makeCompute("aiRoadProbeKernel")
     }
 
     private func buildSamplers() {
@@ -937,6 +1093,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         cmdBuf.waitUntilCompleted()
         if let err = cmdBuf.error { throw err }
 
+        // Append deduplicated AI vehicle archetype BLASes (7 BLASes) before world BLASes
+        aiBlasBase = blasList.count
+        if let ai = aiVehicles {
+            blasList.append(contentsOf: ai.blasList)
+        }
+
         // Append deduplicated .rkpt world BLASes into unified TLAS BLAS array
         worldBlasBase = blasList.count
         var initialWorldInstances: [RkptInstance] = []
@@ -957,9 +1119,9 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         }
 
         let maxWorldSlots = (worldStreamer != nil) ? 8192 : initialWorldInstances.count
-        maxInstanceCapacity = max(1, scene.meshes.count + maxWorldSlots)
+        maxInstanceCapacity = max(1, worldSlotBase + maxWorldSlots)
         activeWorldInstanceCount = min(initialWorldInstances.count, maxWorldSlots)
-        instanceCount = scene.meshes.count + activeWorldInstanceCount
+        instanceCount = worldSlotBase + activeWorldInstanceCount
         prevCarBodyXform = currentCarBodyXform()
         prevCarModelMatrices = scene.meshes.map { dynamicModelMatrix(for: $0) }
 
@@ -969,9 +1131,12 @@ final class RTRenderer: NSObject, MTKViewDelegate {
               let iMetaBuf = device.makeBuffer(length: metaByteCount, options: .storageModeShared) else {
             throw NSError(domain: "RTRenderer", code: 106, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate TLAS instance buffers"])
         }
+        memset(iDescBuf.contents(), 0, descByteCount)
+        memset(iMetaBuf.contents(), 0, metaByteCount)
         instanceDescBuffer = iDescBuf
         instanceMetaBuffer = iMetaBuf
 
+        clearAIInstanceSlots()
         writeWorldInstancesToTLASBuffers(initialWorldInstances)
 
         let tlasDesc = MTLInstanceAccelerationStructureDescriptor()
@@ -991,13 +1156,35 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         try rebuildTLAS(commandBuffer: nil)
     }
 
+    private func clearAIInstanceSlots() {
+        let descPtr = instanceDescBuffer.contents().bindMemory(to: MTLAccelerationStructureInstanceDescriptor.self, capacity: maxInstanceCapacity)
+        let metaPtr = instanceMetaBuffer.contents().bindMemory(to: RTInstanceMeta.self, capacity: maxInstanceCapacity)
+        for i in 0..<aiSlotCount {
+            let slot = aiSlotBase + i
+            guard slot < maxInstanceCapacity else { break }
+            var instDesc = MTLAccelerationStructureInstanceDescriptor()
+            instDesc.mask = 0
+            instDesc.accelerationStructureIndex = 0
+            descPtr[slot] = instDesc
+            metaPtr[slot] = RTInstanceMeta(
+                vertexOffset: 0,
+                indexOffset: 0,
+                triOffset: UInt32(i),
+                flags: 0,
+                modelMatrix: matrix_identity_float4x4,
+                invTransposeMatrix: matrix_identity_float4x4,
+                prevModelMatrix: matrix_identity_float4x4
+            )
+        }
+    }
+
     private func writeWorldInstancesToTLASBuffers(_ activeWorldInstances: [RkptInstance]) {
         guard let w = world else {
             activeWorldInstanceCount = 0
-            instanceCount = scene.meshes.count
+            instanceCount = worldSlotBase
             return
         }
-        let baseSlot = scene.meshes.count
+        let baseSlot = worldSlotBase
         let maxWorld = max(0, maxInstanceCapacity - baseSlot)
         let writeCount = min(activeWorldInstances.count, maxWorld)
         let descPtr = instanceDescBuffer.contents().bindMemory(to: MTLAccelerationStructureInstanceDescriptor.self, capacity: maxInstanceCapacity)
@@ -1096,6 +1283,25 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         prevCarBodyXform = bodyNow
     }
 
+    private func updateAIInstanceBuffers() {
+        guard aiEnabled, world != nil, let ai = aiVehicles else {
+            clearAIInstanceSlots()
+            activeAIInstanceCount = 0
+            return
+        }
+        let descPtr = instanceDescBuffer.contents().bindMemory(to: MTLAccelerationStructureInstanceDescriptor.self, capacity: maxInstanceCapacity)
+        let metaPtr = instanceMetaBuffer.contents().bindMemory(to: RTInstanceMeta.self, capacity: maxInstanceCapacity)
+        activeAIInstanceCount = ai.writeAITLASInstances(
+            states: gameWorld.aiSlots,
+            baseSlot: aiSlotBase,
+            maxSlots: aiSlotCount,
+            descriptors: descPtr,
+            meta: metaPtr,
+            blasBaseIndex: aiBlasBase,
+            roadPitches: aiRoadPitches
+        )
+    }
+
     func rebuildTLAS(commandBuffer externalCmd: MTLCommandBuffer?, forceWorldStream: Bool = false) throws {
         if let streamer = worldStreamer {
             let res = streamer.update(playerPos: carWorldPosition, forceRebuild: forceWorldStream)
@@ -1104,6 +1310,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             }
         }
         updateCarInstanceBuffers()
+        updateAIInstanceBuffers()
 
         let tlasDesc = MTLInstanceAccelerationStructureDescriptor()
         tlasDesc.instancedAccelerationStructures = blasList
@@ -1142,10 +1349,15 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     }
 
     private func predictedNextStep(dt: Float) -> SIMD3<Float> {
-        let nextKmh = throttleHeld ? min(310.0, speedKmh + 68.0 * dt) : speedKmh
-        let nextMs = nextKmh / 3.6
+        let simDt = dt * physicsEngine.state.effectiveTimeScale
+        let vel = physicsEngine.state.velocityWorld
+        let vXZ = SIMD3<Float>(vel.x, 0.0, vel.z)
+        if simd_length(vXZ) > 0.25 {
+            return vXZ * simDt
+        }
+        let nextMs = speedKmh / 3.6
         let fwd = SIMD3<Float>(sin(carHeadingRad), 0.0, cos(carHeadingRad))
-        return fwd * (nextMs * dt)
+        return fwd * (nextMs * simDt)
     }
 
     func encodePhysicsProbe(commandBuffer: MTLCommandBuffer, predictedStep: SIMD3<Float> = .zero) {
@@ -1168,6 +1380,66 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         var out = RTPhysicsProbeOutput(wheelHitY: .zero, wallDist: .zero, wallNormalFront: .zero, wallNormalSide: .zero)
         memcpy(&out, physicsOutBuffer.contents(), MemoryLayout<RTPhysicsProbeOutput>.stride)
         return out
+    }
+
+    // MARK: - 32-Slot GPU BVH AI Road Elevation & Slope Probe (aiRoadProbeKernel)
+
+    func encodeAIRoadProbe(commandBuffer: MTLCommandBuffer) {
+        guard aiEnabled, world != nil, let pso = aiRoadProbePSO,
+              let enc = commandBuffer.makeComputeCommandEncoder() else { return }
+        let inPtr = aiRoadProbeInBuffer.contents().bindMemory(to: RTAIRoadProbeInput.self, capacity: RTGameWorld.maxAISlots)
+        let slots = gameWorld.aiSlots
+        let n = min(slots.count, RTGameWorld.maxAISlots)
+        for i in 0..<n {
+            let u = slots[i]
+            let fwd = SIMD3<Float>(sin(u.yawRad), 0.0, cos(u.yawRad))
+            inPtr[i] = RTAIRoadProbeInput(
+                posActive: SIMD4<Float>(u.worldPosition, u.active ? 1.0 : 0.0),
+                fwdHalfWB: SIMD4<Float>(fwd, max(1.0, u.archetype.halfLength * 0.62))
+            )
+        }
+        var countU32 = UInt32(n)
+        enc.setComputePipelineState(pso)
+        enc.setAccelerationStructure(tlas, bufferIndex: 0)
+        enc.setBuffer(aiRoadProbeInBuffer, offset: 0, index: 1)
+        enc.setBuffer(aiRoadProbeOutBuffer, offset: 0, index: 2)
+        enc.setBytes(&countU32, length: MemoryLayout<UInt32>.stride, index: 3)
+        if world?.hasResidentBLASes == true {
+            enc.useResources(carBlasList, usage: .read)
+            aiVehicles?.useResources(on: enc)
+        } else {
+            enc.useResources(blasList, usage: .read)
+        }
+        let tg = min(pso.maxTotalThreadsPerThreadgroup, max(1, n))
+        enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: tg, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+
+    private func ingestAIRoadProbeOutput(dt: Float, snapImmediate: Bool = false) {
+        guard aiEnabled, world != nil else { return }
+        let outPtr = aiRoadProbeOutBuffer.contents().bindMemory(to: RTAIRoadProbeOutput.self, capacity: RTGameWorld.maxAISlots)
+        var heights = [Float](repeating: -9999.0, count: RTGameWorld.maxAISlots)
+        let alpha: Float = snapImmediate ? 1.0 : min(1.0, max(0.05, dt * 14.0))
+        for i in 0..<RTGameWorld.maxAISlots {
+            let o = outPtr[i]
+            heights[i] = o.roadY
+            if o.roadY > -5000.0 {
+                aiRoadPitches[i] += (o.pitchRad - aiRoadPitches[i]) * alpha
+            } else if snapImmediate {
+                aiRoadPitches[i] = 0.0
+            }
+        }
+        gameWorld.applyRoadProbeHeights(heights, dt: dt, snapImmediate: snapImmediate)
+    }
+
+    func snapAIVehiclesToRoad() {
+        guard aiEnabled, world != nil, aiRoadProbePSO != nil,
+              let cb = commandQueue.makeCommandBuffer() else { return }
+        encodeAIRoadProbe(commandBuffer: cb)
+        cb.commit()
+        cb.waitUntilCompleted()
+        ingestAIRoadProbeOutput(dt: 1.0, snapImmediate: true)
+        try? rebuildTLAS(commandBuffer: nil)
     }
 
     func snapCarToWorldRoad() {
@@ -1193,6 +1465,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                 // rotationZ(+r) lifts local +X (right wheel) upward by +x*sin(r)
                 terrainRollRad  = max(-0.18, min(0.18, atan2(rightY - leftY, trackWidth)))
             }
+            physicsEngine.snapGround(y: carWorldPosition.y, terrainPitch: terrainPitchRad, terrainRoll: terrainRollRad)
             try? rebuildTLAS(commandBuffer: nil)
         }
     }
@@ -1423,62 +1696,60 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         var fx = RTDynamicFXGPU.zeroed()
         fx.timeWeather = SIMD4<Float>(simTimeSec, explicitTimeOfDay ?? timeOfDayHours, effRain, lookdevConfig.puddle_wetness ?? p.wetness)
         fx.carMetrics = SIMD4<Float>(wb.frontAxleZ, wb.rearAxleZ, wb.wheelRadiusF, wb.wheelRadiusR)
-        fx.nosParams = SIMD4<Float>(nosActiveStrength, 1.05, speedbreakerStrength, lightCount)
+        fx.nosParams = SIMD4<Float>(nosActiveStrength, 1.05 + 0.35 * nosActiveStrength, speedbreakerStrength, lightCount)
+        if aiEnabled && world != nil {
+            let cl = gameWorld.copLights
+            if cl.count >= 4 {
+                fx.copLightPos = (
+                    SIMD4<Float>(cl[0].worldPos, cl[0].strobePhase),
+                    SIMD4<Float>(cl[1].worldPos, cl[1].strobePhase),
+                    SIMD4<Float>(cl[2].worldPos, cl[2].strobePhase),
+                    SIMD4<Float>(cl[3].worldPos, cl[3].strobePhase)
+                )
+                fx.copLightCol = (
+                    SIMD4<Float>(cl[0].colorHDR, cl[0].intensity),
+                    SIMD4<Float>(cl[1].colorHDR, cl[1].intensity),
+                    SIMD4<Float>(cl[2].colorHDR, cl[2].intensity),
+                    SIMD4<Float>(cl[3].colorHDR, cl[3].intensity)
+                )
+            }
+        }
         memcpy(dynamicFXBuffer.contents(), &fx, MemoryLayout<RTDynamicFXGPU>.stride)
     }
 
     private func updateMinimapBuffer() {
+        if world != nil && !gameWorld.roadGraph.isEmpty {
+            minimapBuffer = gameWorld.packMinimap(
+                playerPos: carWorldPosition,
+                playerYaw: carHeadingRad,
+                mapRangeM: 175.0
+            )
+            return
+        }
         minimapBuffer.clear()
         minimapBuffer.mapRangeM = 175.0
         minimapBuffer.playerYawRad = carHeadingRad
-        guard let w = world, !w.roadNodes.isEmpty, !w.roadSegments.isEmpty else { return }
-
-        let px = carWorldPosition.x
-        let pz = carWorldPosition.z
-        let range = minimapBuffer.mapRangeM
-        let rangeSq = (range * 1.18) * (range * 1.18)
-        let invRange = 1.0 / range
-        let sinY = sin(carHeadingRad)
-        let cosY = cos(carHeadingRad)
-        // Heading-up basis: forward = (sinY, cosY) -> +Y; screen-right = (-cosY, sinY) -> +X
-        var count = 0
-        for seg in w.roadSegments {
-            if count >= RTMinimapBuffer.maxSegments { break }
-            let i0 = Int(seg.node0)
-            let i1 = Int(seg.node1)
-            guard i0 < w.roadNodes.count && i1 < w.roadNodes.count else { continue }
-            let n0 = w.roadNodes[i0].pos
-            let n1 = w.roadNodes[i1].pos
-            let mx = 0.5 * (n0.x + n1.x) - px
-            let mz = 0.5 * (n0.z + n1.z) - pz
-            if mx * mx + mz * mz > rangeSq { continue }
-            let dx0 = n0.x - px, dz0 = n0.z - pz
-            let dx1 = n1.x - px, dz1 = n1.z - pz
-            let x0 = (-dx0 * cosY + dz0 * sinY) * invRange
-            let y0 = ( dx0 * sinY + dz0 * cosY) * invRange
-            let x1 = (-dx1 * cosY + dz1 * sinY) * invRange
-            let y1 = ( dx1 * sinY + dz1 * cosY) * invRange
-            minimapBuffer.setSegment(count, SIMD4<Float>(x0, y0, x1, y1))
-            count += 1
-        }
-        minimapBuffer.segCount = UInt32(count)
     }
 
     private func makeHudExtUniforms() -> RTHudExtUniforms {
-        let (_, rpmNorm) = computeGearAndRPM(speedKmh: speedKmh)
+        let st = physicsEngine.state
         var ext = RTHudExtUniforms()
-        ext.rpmNorm = rpmNorm
-        ext.nosNorm = 1.0
-        ext.sbNorm = 1.0
+        ext.rpmNorm = st.rpmNorm
+        ext.nosNorm = st.nosCharge
+        ext.sbNorm = st.speedbreakerCharge
         ext.fps = smoothedFps
         ext.timeOfDayHours = explicitTimeOfDay ?? timeOfDayHours
         ext.simTimeSec = simTimeSec
         var flags: UInt32 = 0
         if hudEnabled { flags |= RTHudFlagBits.visible }
         if effectiveFrameGenActive { flags |= RTHudFlagBits.frameGenOn }
-        if nosActiveStrength > 0.05 { flags |= RTHudFlagBits.nosActive }
-        if speedbreakerStrength > 0.05 { flags |= RTHudFlagBits.sbActive }
+        if st.nosActive || nosActiveStrength > 0.12 { flags |= RTHudFlagBits.nosActive }
+        if st.speedbreakerActive || speedbreakerStrength > 0.12 { flags |= RTHudFlagBits.sbActive }
         ext.hudFlags = flags
+        if aiEnabled && world != nil {
+            gameWorld.fillHudExt(&ext)
+        }
+        ext.simTimeSec = simTimeSec
         ext.districtIndex = UInt32(activeLandmarkIndex)
         ext.carIndex = scene.carID
         return ext
@@ -1524,7 +1795,8 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         let saturation = lookdevConfig.saturation ?? 1.08
         let denoisePasses = Float(denoiserEnabled ? (lookdevConfig.denoise_passes ?? (temporal1SPP ? 3 : 4)) : 0)
 
-        let (gearVal, rpmNorm) = computeGearAndRPM(speedKmh: speedKmh)
+        let gearVal = Float(physicsEngine.state.gear)
+        let rpmNorm = physicsEngine.state.rpmNorm
         let worldTexCount = Float(world?.textures.count ?? 1)
         let yawForLights = (world != nil) ? carHeadingRad : carYawRad
 
@@ -1638,10 +1910,13 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         enc.setBuffer(worldStreamer?.worldLightsBuffer ?? worldLightsBuffer, offset: 0, index: 11)
         enc.setBuffer(worldStreamer?.lightGridBuffer ?? worldLightGridBuffer, offset: 0, index: 12)
         enc.setBuffer(dynamicFXBuffer, offset: 0, index: 13)
+        enc.setBuffer(aiVehicles?.sceneDataBuffer ?? aiSceneDataFallbackBuffer, offset: 0, index: 14)
         if world?.hasResidentBLASes == true {
             enc.useResources(carBlasList, usage: .read)
+            aiVehicles?.useResources(on: enc)
         } else {
             enc.useResources(blasList, usage: .read)
+            aiVehicles?.useResources(on: enc)
         }
         if let wHeap = world?.textureHeap {
             enc.useHeap(wHeap)
@@ -2042,7 +2317,17 @@ final class RTRenderer: NSObject, MTKViewDelegate {
         }
 
         throttleHeld = true
-        speedKmh = max(speedKmh, 110.0)
+        let initialSpeed = max(speedKmh, benchmarkNosForced ? 165.0 : 115.0)
+        physicsEngine.configurePose(
+            speedKmh: initialSpeed,
+            steerDeg: 0.0,
+            position: carWorldPosition,
+            headingRad: carHeadingRad
+        )
+        speedKmh = initialSpeed
+        if let pHeat = benchmarkPursuitHeat {
+            triggerInstantPursuit(setHeat: pHeat, showcaseFraming: true)
+        }
         if cameraMode == .hero {
             applyCameraMode(.chase)
         }
@@ -2070,7 +2355,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                 //   f even: Present R_k directly via post-FI hudOverlayKernel (t = k)
                 if f == 0 || (f % 2 == 1) {
                     _ = stepDrivePhysics(dt: dt)
-                    simTimeSec += dt
+                    simTimeSec += dt * physicsEngine.state.effectiveTimeScale
                     if timeCycleEnabled {
                         timeOfDayHours = (timeOfDayHours + dt * 0.25).truncatingRemainder(dividingBy: 24.0)
                     }
@@ -2078,6 +2363,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                     try rebuildTLAS(commandBuffer: cb)
                     if world != nil {
                         encodePhysicsProbe(commandBuffer: cb, predictedStep: predictedNextStep(dt: dt))
+                        encodeAIRoadProbe(commandBuffer: cb)
                     }
 
                     let jIdx = UInt32((realFrameIdx % 16) + 1)
@@ -2154,7 +2440,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                 }
             } else {
                 _ = stepDrivePhysics(dt: dt)
-                simTimeSec += dt
+                simTimeSec += dt * physicsEngine.state.effectiveTimeScale
                 if timeCycleEnabled {
                     timeOfDayHours = (timeOfDayHours + dt * 0.25).truncatingRemainder(dividingBy: 24.0)
                 }
@@ -2163,6 +2449,7 @@ final class RTRenderer: NSObject, MTKViewDelegate {
                 try rebuildTLAS(commandBuffer: cb)
                 if world != nil {
                     encodePhysicsProbe(commandBuffer: cb, predictedStep: predictedNextStep(dt: dt))
+                    encodeAIRoadProbe(commandBuffer: cb)
                 }
 
                 let jIdx = UInt32((f % 16) + 1)
@@ -2216,130 +2503,105 @@ final class RTRenderer: NSObject, MTKViewDelegate {
     }
 
     func stepDrivePhysics(dt: Float) -> Bool {
-        var moved = false
-        let targetPitch: Float
-        if throttleHeld {
-            speedKmh = min(310.0, speedKmh + 68.0 * dt)
-            targetPitch = -0.011
-        } else if brakeHeld {
-            speedKmh = max(0.0, speedKmh - 120.0 * dt)
-            targetPitch = speedKmh > 2.0 ? 0.014 : 0.0
-        } else {
-            if speedKmh > 0.1 {
-                speedKmh = max(0.0, speedKmh - 14.0 * dt)
+        let steerInput: Float = (steerLeftHeld ? 1.0 : 0.0) + (steerRightHeld ? -1.0 : 0.0)
+        let input = RTDriveInput(
+            throttle: throttleHeld ? 1.0 : 0.0,
+            brake: brakeHeld ? 1.0 : 0.0,
+            steer: steerInput,
+            handbrake: handbrakeHeld,
+            nos: nosHeld,
+            speedbreaker: speedbreakerInputHeld
+        )
+
+        var probeSample = RTRoadProbeSample()
+        probeSample.hasWorld = (world != nil)
+        if world != nil {
+            let gpuProbe = readPhysicsProbeOutput()
+            probeSample.wheelHitY = gpuProbe.wheelHitY
+            probeSample.wallDist = gpuProbe.wallDist
+            probeSample.wallNormalFront = gpuProbe.wallNormalFront
+            probeSample.wallNormalSide = gpuProbe.wallNormalSide
+        }
+
+        let prevPos = carWorldPosition
+        let prevHead = carHeadingRad
+        let prevSteer = steerDeg
+        let prevPitch = carPitchRad
+        let prevRoll = carRollRad
+
+        _ = physicsEngine.step(realDt: dt, input: input, probe: probeSample)
+        let simDt = dt * physicsEngine.state.effectiveTimeScale
+
+        // Step live AI traffic + Heat 1-5 police pursuit along Rockport's 4,385-node road network
+        if aiEnabled && world != nil && !gameWorld.roadGraph.isEmpty {
+            gameWorld.step(
+                dt: simDt,
+                playerPos: physicsEngine.state.worldPosition,
+                playerVel: physicsEngine.state.velocityWorld,
+                playerYaw: physicsEngine.state.headingRad
+            )
+            ingestAIRoadProbeOutput(dt: simDt)
+            if gameWorld.playerCollisionIntensity > 0.01 {
+                physicsEngine.applyExternalImpulse(
+                    gameWorld.playerBumpImpulse,
+                    impactIntensity: gameWorld.playerCollisionIntensity
+                )
             }
-            targetPitch = 0.0
-        }
-        if abs(targetPitch - carPitchRad) > 0.0004 {
-            carPitchRad += (targetPitch - carPitchRad) * min(1.0, dt * 7.0)
-            moved = true
         }
 
-        let targetSteer: Float = (steerLeftHeld ? 22.0 : 0.0) + (steerRightHeld ? -22.0 : 0.0)
-        if abs(targetSteer - steerDeg) > 0.05 {
-            steerDeg += (targetSteer - steerDeg) * min(1.0, dt * 8.5)
-            moved = true
-        } else if abs(steerDeg) > 0.05 {
-            steerDeg *= max(0.0, 1.0 - dt * 6.0)
-            moved = true
-        }
+        let st = physicsEngine.state
+        carWorldPosition = st.worldPosition
+        carHeadingRad = st.headingRad
+        carYawRad = (world != nil) ? 0.0 : st.visualYawRad
+        carPitchRad = st.pitchRad
+        carRollRad = st.rollRad
+        terrainPitchRad = st.terrainPitchRad
+        terrainRollRad = st.terrainRollRad
+        steerDeg = st.steerDeg
+        wheelSpinRad = st.wheelSpinRad
+        roadScrollZ = st.roadScrollZ
+        speedKmh = st.speedKmh
+        nosActiveStrength = st.nosFlameIntensity
+        speedbreakerStrength = st.speedbreakerBlend
 
-        if speedKmh > 0.2 {
-            let speedMs = speedKmh / 3.6
-            wheelSpinRad += (speedMs / 0.33) * dt
-            let steerRad = steerDeg * .pi / 180.0
-            let speedFrac = min(speedKmh / 180.0, 1.0)
-            carRollRad = -steerRad * 0.14 * speedFrac
-
-            if world != nil {
-                // Real 3D Rockport City driving using GPU BVH road/wall physics probe!
-                let probe = readPhysicsProbeOutput()
-                let turnRate = steerRad * min(speedMs / 10.0, 1.8) * 0.65
-                carHeadingRad += turnRate * dt
-                let fwd = SIMD3<Float>(sin(carHeadingRad), 0.0, cos(carHeadingRad))
-                var step = fwd * (speedMs * dt)
-
-                // Wall collision projection (smooth NFSMW barrier sliding!)
-                if probe.wallDist.x < 2.35 && probe.wallNormalFront.w > 0.5 {
-                    let wn = simd_normalize(SIMD3<Float>(probe.wallNormalFront.x, 0, probe.wallNormalFront.z))
-                    let intoWall = simd_dot(step, wn)
-                    if intoWall < 0.0 {
-                        step -= wn * intoWall
-                        speedKmh *= 0.85
-                    }
-                }
-                if probe.wallNormalSide.w != 0.0 {
-                    let sideDist = (probe.wallNormalSide.w < 0) ? probe.wallDist.z : probe.wallDist.w
-                    if sideDist < 1.15 {
-                        let sn = simd_normalize(SIMD3<Float>(probe.wallNormalSide.x, 0, probe.wallNormalSide.z))
-                        carWorldPosition += sn * (1.15 - sideDist) * 0.5
-                    }
-                }
-
-                carWorldPosition += step
-
-                // Tightly plant car Y + slope pitch/roll onto 4 wheel drop ray hits (zero crest levitation, zero sinking!)
-                let hits = [probe.wheelHitY.x, probe.wheelHitY.y, probe.wheelHitY.z, probe.wheelHitY.w].filter { $0 > -5000.0 }
-                if !hits.isEmpty {
-                    let avgY = hits.reduce(0.0, +) / Float(hits.count)
-                    let targetY = avgY
-                    let deltaY = targetY - carWorldPosition.y
-                    if abs(deltaY) < 3.5 {
-                        if deltaY < 0.0 {
-                            // Downhill / crest drop: stiff ground-hugging clamp (max 1.5 cm above road at any speed!)
-                            carWorldPosition.y += deltaY * min(1.0, dt * 52.0)
-                            carWorldPosition.y = min(carWorldPosition.y, targetY + 0.015)
-                        } else {
-                            carWorldPosition.y += deltaY * min(1.0, dt * 42.0)
-                            carWorldPosition.y = max(carWorldPosition.y, targetY - 0.025)
-                        }
-                    } else {
-                        carWorldPosition.y = targetY
-                    }
-                    if probe.wheelHitY.x > -5000.0 && probe.wheelHitY.y > -5000.0 &&
-                       probe.wheelHitY.z > -5000.0 && probe.wheelHitY.w > -5000.0 {
-                        let wb = scene.wheelBounds
-                        let wheelbase = max(1.8, wb.frontAxleZ - wb.rearAxleZ)
-                        let trackWidth = max(1.2, wb.halfTrackF + wb.halfTrackR)
-                        let frontY = 0.5 * (probe.wheelHitY.x + probe.wheelHitY.y)
-                        let rearY  = 0.5 * (probe.wheelHitY.z + probe.wheelHitY.w)
-                        let leftY  = 0.5 * (probe.wheelHitY.x + probe.wheelHitY.z)
-                        let rightY = 0.5 * (probe.wheelHitY.y + probe.wheelHitY.w)
-                        let targetTPitch = max(-0.26, min(0.26, -atan2(frontY - rearY, wheelbase)))
-                        let targetTRoll  = max(-0.20, min(0.20, atan2(rightY - leftY, trackWidth)))
-                        terrainPitchRad += (targetTPitch - terrainPitchRad) * min(1.0, dt * 36.0)
-                        terrainRollRad  += (targetTRoll - terrainRollRad) * min(1.0, dt * 36.0)
-                    }
-                }
-
-                // Follow car cleanly with current camera mode
-                let headingDeg = carHeadingRad * 180.0 / .pi
-                let fovFrac = min(speedKmh / 240.0, 1.0)
-                if cameraMode == .chase || chaseCamEnabled {
-                    camera.target = SIMD3<Float>(carWorldPosition.x, carWorldPosition.y + 0.72, carWorldPosition.z)
-                    camera.azimuthDeg = headingDeg + 180.0 + steerDeg * 0.42
-                    camera.fovDeg = 44.0 + 18.0 * fovFrac
-                    camera.distance = 4.55 + 0.35 * fovFrac
-                } else {
-                    camera.target = SIMD3<Float>(carWorldPosition.x, carWorldPosition.y + 0.52, carWorldPosition.z)
-                }
+        // Authentic NFSMW chase camera with drift slip lag, NOS FOV kick & Speedbreaker zoom
+        if world != nil {
+            if cameraMode == .chase || chaseCamEnabled {
+                let cam = physicsEngine.chaseCameraTarget()
+                camera.target = cam.target
+                camera.azimuthDeg = cam.azimuthDeg
+                camera.distance = cam.distance
+                camera.fovDeg = cam.fovDeg
             } else {
-                // Procedural overpass scroll mode
-                roadScrollZ += speedMs * dt
-                carYawRad = steerRad * 0.20 * speedFrac
-                if chaseCamEnabled {
-                    let fovFrac = min(speedKmh / 240.0, 1.0)
-                    camera.fovDeg = 44.0 + 18.0 * fovFrac
-                    camera.distance = 4.45 + 0.35 * fovFrac
-                }
+                camera.target = SIMD3<Float>(carWorldPosition.x, carWorldPosition.y + 0.52, carWorldPosition.z)
             }
-            moved = true
-        } else if abs(carRollRad) > 0.001 || abs(carYawRad) > 0.001 {
-            carRollRad *= max(0.0, 1.0 - dt * 6.0)
-            carYawRad *= max(0.0, 1.0 - dt * 6.0)
-            moved = true
+        } else if chaseCamEnabled {
+            let cam = physicsEngine.chaseCameraTarget()
+            camera.fovDeg = cam.fovDeg
+            camera.distance = max(4.35, cam.distance - 0.10)
         }
-        return moved
+
+        // Real-time Ginsu PSOLA engine + SFX + 3D Doppler siren audio (silent no-op in headless)
+        audioEngine.update(
+            telemetry: st,
+            rainIntensity: effectiveRainAmount(),
+            sirenGain: gameWorld.sirenAudio.gain,
+            sirenPan: gameWorld.sirenAudio.pan,
+            sirenDoppler: gameWorld.sirenAudio.doppler,
+            sirenMode: gameWorld.sirenAudio.mode,
+            radarPing: gameWorld.sirenAudio.radarPing
+        )
+
+        let playerMoved = simd_distance(carWorldPosition, prevPos) > 1e-4
+            || abs(carHeadingRad - prevHead) > 1e-4
+            || abs(steerDeg - prevSteer) > 0.03
+            || abs(carPitchRad - prevPitch) > 0.0003
+            || abs(carRollRad - prevRoll) > 0.0005
+            || st.speedKmh > 0.2
+            || st.nosFlameIntensity > 0.01
+            || st.speedbreakerBlend > 0.01
+        let aiActive = aiEnabled && world != nil && (gameWorld.activeTrafficCount > 0 || gameWorld.activeCopCount > 0)
+        return playerMoved || aiActive
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
@@ -2391,16 +2653,16 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             let realDt = Float(min(0.05, max(0.002, now - lastRealFrameTime)))
             lastRealFrameTime = now
             lastRealFrameDelta = realDt
-            simTimeSec += realDt
+            let moved = stepDrivePhysics(dt: realDt)
+            simTimeSec += realDt * physicsEngine.state.effectiveTimeScale
             if timeCycleEnabled {
                 timeOfDayHours = (timeOfDayHours + realDt * 0.25).truncatingRemainder(dividingBy: 24.0)
             }
-
-            let moved = stepDrivePhysics(dt: realDt)
             if moved {
                 try? rebuildTLAS(commandBuffer: cmdBuf)
                 if world != nil {
                     encodePhysicsProbe(commandBuffer: cmdBuf, predictedStep: predictedNextStep(dt: realDt))
+                    encodeAIRoadProbe(commandBuffer: cmdBuf)
                 }
             }
 
@@ -2465,15 +2727,16 @@ final class RTRenderer: NSObject, MTKViewDelegate {
             return
         }
 
-        simTimeSec += dt
+        let moved = stepDrivePhysics(dt: dt)
+        simTimeSec += dt * physicsEngine.state.effectiveTimeScale
         if timeCycleEnabled {
             timeOfDayHours = (timeOfDayHours + dt * 0.25).truncatingRemainder(dividingBy: 24.0)
         }
-        let moved = stepDrivePhysics(dt: dt)
         if moved {
             try? rebuildTLAS(commandBuffer: cmdBuf)
             if world != nil {
                 encodePhysicsProbe(commandBuffer: cmdBuf, predictedStep: predictedNextStep(dt: dt))
+                encodeAIRoadProbe(commandBuffer: cmdBuf)
             }
         }
 

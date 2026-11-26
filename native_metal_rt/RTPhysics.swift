@@ -439,7 +439,34 @@ final class RTPhysicsEngine {
         state.speedMs = velForward
         state.speedKmh = velForward * 3.6
         state.steerDeg = max(-28.0, min(28.0, steerDeg))
+        let fwd = SIMD3<Float>(sin(state.headingRad), 0.0, cos(state.headingRad))
+        state.velocityWorld = fwd * velForward
         updateGearAndRPMFromSpeed(throttle: velForward > 1.0 ? 0.8 : 0.0, dt: 0.016)
+    }
+
+    /// Snaps vertical position and terrain slope directly to GPU BVH ground probe (e.g. spawn / teleport).
+    func snapGround(y: Float, terrainPitch: Float, terrainRoll: Float) {
+        state.worldPosition.y = y
+        state.terrainPitchRad = terrainPitch
+        state.terrainRollRad = terrainRoll
+        state.isAirborne = false
+        velVertical = 0.0
+        wasAirborne = false
+    }
+
+    /// Applies arcade bumper-collision impulse from live AI traffic / police cars.
+    func applyExternalImpulse(_ impulseWorld: SIMD3<Float>, impactIntensity: Float) {
+        let fwd = SIMD3<Float>(sin(state.headingRad), 0.0, cos(state.headingRad))
+        let localX = SIMD3<Float>(cos(state.headingRad), 0.0, -sin(state.headingRad))
+        let dFwd = simd_dot(impulseWorld, fwd)
+        let dLat = simd_dot(impulseWorld, localX)
+        velForward = max(-18.0, min(98.0, velForward + dFwd * 0.45))
+        velLateral = max(-14.0, min(14.0, velLateral + dLat * 0.45))
+        state.worldPosition.x += impulseWorld.x * 0.04
+        state.worldPosition.z += impulseWorld.z * 0.04
+        state.impactIntensity = max(state.impactIntensity, clamp01(impactIntensity))
+        pitchVel += clamp01(impactIntensity) * 0.14
+        rollVel += (dLat >= 0 ? 1.0 : -1.0) * clamp01(impactIntensity) * 0.18
     }
 
     /// Advances NFSMW VLT vehicle physics for one frame and returns updated telemetry.
@@ -741,14 +768,14 @@ final class RTPhysicsEngine {
 
             state.worldPosition += step
 
-            // 4-Wheel GPU BVH Elevation & Airborne Physics
+            // 4-Wheel GPU BVH Elevation & Crest-Hugging Ground Contact (matches #54 P1-1)
             let wY = probe.wheelHitY
             let hits = [wY.x, wY.y, wY.z, wY.w].filter { $0 > -5000.0 }
             if !hits.isEmpty {
                 let avgY = hits.reduce(0.0, +) / Float(hits.count)
                 let heightAboveGround = state.worldPosition.y - avgY
-                if heightAboveGround > 0.35 && velVertical > -1.0 {
-                    // Airborne over crest/jump!
+                if heightAboveGround > 0.65 && velVertical > -1.0 {
+                    // Genuine ramp/ledge jump airtime
                     state.isAirborne = true
                     velVertical -= 9.81 * dt
                     state.worldPosition.y += velVertical * dt
@@ -766,7 +793,19 @@ final class RTPhysicsEngine {
                     }
                     state.isAirborne = false
                     velVertical = 0.0
-                    state.worldPosition.y += (avgY - state.worldPosition.y) * min(1.0, dt * 20.0)
+                    let deltaY = avgY - state.worldPosition.y
+                    if abs(deltaY) < 3.5 {
+                        if deltaY < 0.0 {
+                            // Downhill / convex crest: stiff ground-hugging clamp (max 1.5 cm above asphalt!)
+                            state.worldPosition.y += deltaY * min(1.0, dt * 52.0)
+                            state.worldPosition.y = min(state.worldPosition.y, avgY + 0.015)
+                        } else {
+                            state.worldPosition.y += deltaY * min(1.0, dt * 42.0)
+                            state.worldPosition.y = max(state.worldPosition.y, avgY - 0.025)
+                        }
+                    } else {
+                        state.worldPosition.y = avgY
+                    }
                 }
 
                 if wY.x > -5000.0 && wY.y > -5000.0 && wY.z > -5000.0 && wY.w > -5000.0 {
@@ -774,10 +813,11 @@ final class RTPhysicsEngine {
                     let rearY = 0.5 * (wY.z + wY.w)
                     let leftY = 0.5 * (wY.x + wY.z)
                     let rightY = 0.5 * (wY.y + wY.w)
-                    let targetTPitch = max(-0.24, min(0.24, -atan2(frontY - rearY, max(2.2, spec.wheelBase))))
-                    let targetTRoll = max(-0.20, min(0.20, atan2(leftY - rightY, max(1.4, spec.trackWidthFront))))
-                    state.terrainPitchRad += (targetTPitch - state.terrainPitchRad) * min(1.0, dt * 13.0)
-                    state.terrainRollRad += (targetTRoll - state.terrainRollRad) * min(1.0, dt * 13.0)
+                    let targetTPitch = max(-0.26, min(0.26, -atan2(frontY - rearY, max(1.8, spec.wheelBase))))
+                    // rotationZ(+r) lifts local +X (right wheel) upward by +x*sin(r)
+                    let targetTRoll = max(-0.20, min(0.20, atan2(rightY - leftY, max(1.2, spec.trackWidthFront))))
+                    state.terrainPitchRad += (targetTPitch - state.terrainPitchRad) * min(1.0, dt * 36.0)
+                    state.terrainRollRad += (targetTRoll - state.terrainRollRad) * min(1.0, dt * 36.0)
                 }
             } else {
                 // No road hit underneath: gentle gravity without falling infinitely

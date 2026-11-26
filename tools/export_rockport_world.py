@@ -175,8 +175,8 @@ ROCKPORT_LANDMARK_SPECS: Tuple[Tuple[str, Tuple[float, float], int], ...] = (
     ("Rosewood Blvd", (1380.0, 2340.0), 0),
     ("Downtown East Park", (2120.0, 120.0), 1),
     ("Camden Beach", (3840.0, 845.0), 2),
-    ("Highway 99", (2450.0, 1750.0), 3),
-    ("Rosewood College", (1684.0, 3968.0), 0),
+    ("Highway 99", (2246.0, 1400.0), 3),
+    ("Rosewood College", (1969.0, 3566.0), 0),
     ("Rockport Waterfront", (1070.0, -700.0), 1),
 )
 
@@ -1634,8 +1634,10 @@ def classify_world_material(
         )
     )
 
-    # 1. Drivable Road Asphalt (EA uses PAVEMENT* for almost all drivable streets!)
-    if any(k in tn for k in ("PAVEMENT", "ASPHALT", "ROAD", "HWY", "HIGHWAY", "INTERSECT", "CROSSWALK", "DRIVEWAY", "PARKINGLOT")):
+    # 1. Drivable Road Asphalt (EA uses PAVEMENT* & RO_* such as RO_GENFILL_CRK / RO_DETAILSPACER for streets!)
+    if tn.startswith("RO_") or any(
+        k in tn for k in ("PAVEMENT", "ASPHALT", "ROAD", "HWY", "HIGHWAY", "INTERSECT", "CROSSWALK", "DRIVEWAY", "PARKINGLOT")
+    ):
         return RkptMaterialSpec(
             diffuse_tex_index=diffuse_tex_index,
             surface_class=SURFACE_ROAD_ASPHALT,
@@ -1809,10 +1811,15 @@ def classify_world_material(
 
 
 def is_excluded_world_solid(solid_name: str, debug_name: str = "", allow_panorama: bool = False) -> Optional[str]:
-    """Return exclusion reason if solid is a Free-Roam-invisible event barrier, shadow card, or proxy."""
+    """Return exclusion reason if solid is a Free-Roam-invisible event barrier, shadow card, or proxy.
+
+    For distant panorama ring sections (80..99, only active >250m away), skip redundant close-up
+    alpha-cutout `XT_*` bush/tree props (keeping all `PAN_*`, `TRN_*`, `XB_*`, `PANORAMA_*`, and
+    `STADIUMLOD` horizon landmarks) to avoid 575+ non-opaque any-hit horizon rays per frame.
+    """
     up_s = solid_name.upper()
     up_d = debug_name.upper()
-    prefixes = ("SHD_", "RFL_", "__TEMP") if allow_panorama else EXCLUDED_SOLID_PREFIXES
+    prefixes = ("SHD_", "RFL_", "__TEMP", "XT_") if allow_panorama else EXCLUDED_SOLID_PREFIXES
     if up_s.startswith(prefixes):
         return "shd_pan_rfl_temp"
     for sub in EXCLUDED_EVENT_SOLID_SUBSTRINGS:
@@ -2049,6 +2056,7 @@ def find_verified_road_spawn(
     focus_metal_xz: Tuple[float, float],
     min_clearance_m: float = 6.0,
     max_focus_dist_m: Optional[float] = None,
+    max_candidate_dist_m: Optional[float] = None,
 ) -> Tuple[Tuple[float, float, float], float, Dict[str, Any]]:
     """Find a verified unobstructed ROAD_ASPHALT spawnPos (+Y normal, >= 6m clearance) & street yaw.
 
@@ -2219,7 +2227,16 @@ def find_verified_road_spawn(
     best_meta: Dict[str, Any] = {}
 
     angles = [math.radians(deg) for deg in range(0, 360, 10)]
-    for cx, cz in road_keys[:2000]:
+    cand_keys = road_keys[:2000]
+    if max_candidate_dist_m is not None:
+        max_cd_sq = max_candidate_dist_m ** 2
+        tight_keys = [
+            k for k in cand_keys
+            if ((k[0] + 0.5) * cell_sz - fx) ** 2 + ((k[1] + 0.5) * cell_sz - fz) ** 2 <= max_cd_sq
+        ]
+        if tight_keys:
+            cand_keys = tight_keys
+    for cx, cz in cand_keys:
         ry = road_y[(cx, cz)]
         # Verify circular obstacle-free clearance >= min_clearance_m AND solid wide road footing
         blocked = False
@@ -3571,6 +3588,7 @@ def export_rockport_district(
         spawn_meta: Dict[str, Any] = {}
         for lm_idx, (lm_name, (lx_ps2, ly_ps2), reg_id) in enumerate(ROCKPORT_LANDMARK_SPECS):
             fm = ps2_point_to_metal(lx_ps2, ly_ps2, 0.0, ps2_origin)
+            tight_cand = 75.0 if lm_name in ("Highway 99", "Rosewood College") else None
             sp, syaw, smeta = find_verified_road_spawn(
                 meshes=meshes_list,
                 mesh_vert_mats=mesh_vert_mats,
@@ -3579,6 +3597,7 @@ def export_rockport_district(
                 focus_metal_xz=(fm[0], fm[2]),
                 min_clearance_m=6.0,
                 max_focus_dist_m=450.0,
+                max_candidate_dist_m=tight_cand,
             )
             landmarks_list.append(RkptLandmark(name=lm_name, spawn_pos=sp, spawn_yaw_rad=syaw, region_id=reg_id))
             if lm_idx == 0:

@@ -155,6 +155,39 @@ struct RTDynamicFX {
 };
 static_assert(sizeof(RTDynamicFX) == 176, "RTDynamicFX must match locked 176-byte contract");
 
+// Locked Hour 3 AI Vehicle RT ABI (Buffer Slot 14 + aiRoadProbeKernel)
+struct RTAIVertex {
+    packed_float3 position;
+    packed_float3 normal;
+    packed_float2 uv;
+    ushort partFlags;      // bits 0..3: matClass (0=body,1=tire,2=glass,3=interior,4=headlight,5=taillight,6=lightbar), bit4: isLightbar, bit5: isLeftSide
+    ushort archetypeIdx;   // 0..6
+};
+static_assert(sizeof(RTAIVertex) == 36, "RTAIVertex must match 36-byte Swift contract");
+
+struct RTAISceneData {
+    device const RTAIVertex* vertices;
+    device const uint* indices;
+    texture2d<float> skinTex[7];
+    uint archetypeCount;
+    uint flags;
+};
+static_assert(sizeof(RTAISceneData) == 80, "RTAISceneData must match 80-byte Swift contract");
+
+struct RTAIRoadProbeInput {
+    float4 posActive;      // xyz = AI world pos, w = active (> 0.5)
+    float4 fwdHalfWB;      // xyz = forward dir, w = halfWheelbase (m)
+};
+static_assert(sizeof(RTAIRoadProbeInput) == 32, "RTAIRoadProbeInput must match 32-byte Swift contract");
+
+struct RTAIRoadProbeOutput {
+    float roadY;
+    float pitchRad;
+    float frontY;
+    float rearY;
+};
+static_assert(sizeof(RTAIRoadProbeOutput) == 16, "RTAIRoadProbeOutput must match 16-byte Swift contract");
+
 // ---------------------------------------------------------------------------
 // Deterministic PRNG & Low-Discrepancy Samplers
 // ---------------------------------------------------------------------------
@@ -1241,9 +1274,10 @@ static HitSurface resolveWorldSurface(
                 s.emissive = min(texCol * wmat.emissiveHint * mix(0.20f, 0.85f, isNight), float3(1.25f));
             }
             // Refined mullioned Downtown night windows on recessed dark panes of vertical CONCRETE_WALL facades (TRUE NIGHT ONLY!)
+            // Start at relY > 3.6m so matte street-level retaining walls & highway parapets never sprout glowing square windows!
             if (u.carWorldPos.w > 0.5f && isNight > 0.05f && abs(worldN.y) < 0.35f) {
                 float relY = s.worldPos.y - u.carWorldPos.y;
-                if (relY > 1.4f && relY < 48.0f) {
+                if (relY > 3.6f && relY < 48.0f) {
                     float horizCoord = (abs(worldN.x) > abs(worldN.z)) ? s.worldPos.z : s.worldPos.x;
                     float2 bayGrid = float2(horizCoord * 0.82f, relY * 0.40f);
                     float2 cell = floor(bayGrid);
@@ -1251,7 +1285,7 @@ static HitSurface resolveWorldSurface(
                     float paneFrame = smoothstep(0.12f, 0.22f, f.x) * smoothstep(0.88f, 0.78f, f.x)
                                     * smoothstep(0.18f, 0.28f, f.y) * smoothstep(0.82f, 0.72f, f.y);
                     // Strict dark recessed pane texture gate so solid concrete/brick walls never light up
-                    float darkWindowTex = smoothstep(0.18f, 0.07f, lum) * smoothstep(0.85f, 1.08f, (texCol.b + 0.015f) / (texCol.r + 0.020f));
+                    float darkWindowTex = smoothstep(0.13f, 0.05f, lum) * smoothstep(0.88f, 1.08f, (texCol.b + 0.015f) / (texCol.r + 0.020f));
                     float3 rnd = hash33(float3(cell, floor(dot(worldN.xz, float2(3.1f, 7.7f)) * 4.0f)));
                     float litChance = step(0.58f, rnd.x); // ~42% of dark recessed panes lit
                     float isGroundStore = smoothstep(5.2f, 2.2f, relY);
@@ -1277,6 +1311,220 @@ static HitSurface resolveWorldSurface(
     return s;
 }
 
+static HitSurface resolveAIVehicleSurface(
+    float3 rayOrigin,
+    float3 rayDir,
+    float dist,
+    RTInstanceMeta inst,
+    uint primitiveID,
+    float2 bary,
+    constant RTAISceneData& aiScene,
+    constant RTFrameUniforms& u,
+    constant RTDynamicFX& dynFX,
+    sampler repeatSamp
+) {
+    HitSurface s;
+    s.worldPos = rayOrigin + rayDir * dist;
+    s.N = float3(0.0f, 1.0f, 0.0f);
+    s.clearcoatN = s.N;
+    s.geomN = s.N;
+    s.uv = float2(0.0f);
+    s.modelPos = float3(0.0f);
+    s.matID = MAT_CAR_PAINT;
+    s.baseAlbedo = float3(0.18f, 0.20f, 0.24f);
+    s.metallic = 0.45f;
+    s.roughness = 0.22f;
+    s.clearcoat = 0.90f;
+    s.ccRoughness = 0.022f;
+    s.ior = 1.54f;
+    s.emissive = float3(0.0f);
+    s.puddleMask = 0.0f;
+    s.alpha = 1.0f;
+
+    if (aiScene.archetypeCount == 0u || aiScene.vertices == nullptr || aiScene.indices == nullptr) {
+        return s;
+    }
+
+    uint i0 = aiScene.indices[inst.indexOffset + primitiveID * 3u + 0u];
+    uint i1 = aiScene.indices[inst.indexOffset + primitiveID * 3u + 1u];
+    uint i2 = aiScene.indices[inst.indexOffset + primitiveID * 3u + 2u];
+    RTAIVertex v0 = aiScene.vertices[inst.vertexOffset + i0];
+    RTAIVertex v1 = aiScene.vertices[inst.vertexOffset + i1];
+    RTAIVertex v2 = aiScene.vertices[inst.vertexOffset + i2];
+
+    float w0 = 1.0f - bary.x - bary.y;
+    float w1 = bary.x;
+    float w2 = bary.y;
+
+    float3 localPos = float3(v0.position) * w0 + float3(v1.position) * w1 + float3(v2.position) * w2;
+    float3 localN   = normalize(float3(v0.normal) * w0 + float3(v1.normal) * w1 + float3(v2.normal) * w2);
+    float3 worldN   = normalize((inst.invTransposeMatrix * float4(localN, 0.0f)).xyz);
+
+    float3 p0 = (inst.modelMatrix * float4(float3(v0.position), 1.0f)).xyz;
+    float3 p1 = (inst.modelMatrix * float4(float3(v1.position), 1.0f)).xyz;
+    float3 p2 = (inst.modelMatrix * float4(float3(v2.position), 1.0f)).xyz;
+    float3 gN = normalize(cross(p1 - p0, p2 - p0));
+    if (dot(gN, rayDir) > 0.0f) gN = -gN;
+    if (dot(worldN, rayDir) > 0.0f) worldN = -worldN;
+
+    s.N = worldN;
+    s.clearcoatN = worldN;
+    s.geomN = gN;
+    s.uv = float2(v0.uv) * w0 + float2(v1.uv) * w1 + float2(v2.uv) * w2;
+    s.modelPos = localPos;
+
+    uint matClass   = uint(v0.partFlags & 0x0Fu);
+    bool isLightbar = ((v0.partFlags & 0x10u) != 0u) || (matClass == 6u);
+    uint archIdx    = min((inst.flags >> 8u) & 0x0Fu, min(aiScene.archetypeCount - 1u, 6u));
+    bool isCop      = ((inst.flags & (1u << 12u)) != 0u) || (archIdx <= 2u);
+    bool sirenOn    = ((inst.flags & (1u << 13u)) != 0u);
+    float headOn    = u.skyGround.w;
+
+    float2 skinUV = float2(s.uv.x, 1.0f - s.uv.y);
+    float lod = clamp(log2(max(dist * 0.12f, 1.0f)), 0.0f, 4.0f);
+    float3 skinCol = aiScene.skinTex[archIdx].sample(repeatSamp, skinUV, level(lod)).rgb;
+
+    if (isLightbar) {
+        // Authentic alternating Red (left: x < 0) / Blue (right: x > 0) HDR police roof/deck lightbar!
+        s.matID = MAT_STREETLAMP_LED;
+        s.roughness = 0.04f;
+        s.metallic = 0.10f;
+        s.clearcoat = 1.0f;
+        s.ccRoughness = 0.015f;
+        bool isLeft = (localPos.x < -0.055f);
+        bool isCenter = (abs(localPos.x) <= 0.055f);
+        float3 redCol   = float3(1.00f, 0.05f, 0.03f);
+        float3 blueCol  = float3(0.05f, 0.24f, 1.00f);
+        float3 whiteCol = float3(1.00f, 0.96f, 0.90f);
+        float3 lensBase = isCenter ? float3(0.82f, 0.85f, 0.90f) : (isLeft ? float3(0.55f, 0.02f, 0.015f) : float3(0.02f, 0.12f, 0.62f));
+        s.baseAlbedo = lensBase;
+
+        if (sirenOn) {
+            float phaseOff = float((inst.flags >> 16u) & 0xFFu) * (2.0f * PI / 255.0f);
+            float t = dynFX.timeWeather.x * 11.5f + phaseOff;
+            // Realistic double-flash wig-wag strobe (alternates red left <-> blue right + quick white takedown burst)
+            float alt = sin(t);
+            float dbl = 0.58f + 0.42f * sin(t * 3.0f);
+            float redFlash   = smoothstep(-0.15f, 0.25f,  alt) * dbl;
+            float blueFlash  = smoothstep(-0.15f, 0.25f, -alt) * dbl;
+            float whiteFlash = smoothstep(0.80f, 0.98f, abs(sin(t * 1.5f)));
+            if (isCenter) {
+                s.emissive = whiteCol * (1.8f + 7.5f * whiteFlash);
+            } else if (isLeft) {
+                s.emissive = redCol * (0.95f + 13.5f * redFlash);
+            } else {
+                s.emissive = blueCol * (0.95f + 14.5f * blueFlash);
+            }
+        } else {
+            // Parked/patrol standby polycarbonate lenses with subtle pilot glow
+            s.emissive = lensBase * (0.18f + 0.35f * headOn);
+        }
+    } else if (matClass == 1u) {
+        // Pure vulcanized carbon-black 3D rubber tire (ZERO PS2 checkered skin bleed!)
+        s.matID = MAT_RUBBER_TIRE;
+        s.baseAlbedo = float3(0.030f, 0.032f, 0.036f);
+        s.metallic   = 0.0f;
+        s.roughness  = 0.64f;
+        s.clearcoat  = 0.0f;
+    } else if (matClass == 7u) {
+        // Crisp 3D recessed alloy / police interceptor metallic wheel rim (UVs encode radial (dx, dy) in [-1..1])
+        s.matID = MAT_ALLOY_RIM;
+        float r = length(s.uv);
+        float theta = atan2(s.uv.y, s.uv.x);
+        float hubCap = smoothstep(0.26f, 0.18f, r);
+        float outerLip = smoothstep(0.84f, 0.93f, r);
+        float spokeWave = abs(cos(theta * 2.5f)); // crisp 5-spoke star
+        float spokeMask = max(max(hubCap, outerLip), smoothstep(0.56f, 0.72f, spokeWave) * smoothstep(0.95f, 0.78f, r));
+        float3 rimBright = isCop ? float3(0.76f, 0.78f, 0.82f) : float3(0.82f, 0.84f, 0.88f);
+        float3 brakeVoid = float3(0.045f, 0.048f, 0.055f);
+        s.baseAlbedo = mix(brakeVoid, rimBright, spokeMask);
+        s.metallic   = mix(0.25f, 0.88f, spokeMask);
+        s.roughness  = mix(0.52f, 0.20f, spokeMask);
+        s.clearcoat  = 0.55f * spokeMask;
+        s.ccRoughness = 0.028f;
+    } else if (matClass == 2u) {
+        // Dark automotive tinted glass (reflective clearcoat)
+        s.matID = MAT_URBAN_GLASS;
+        s.baseAlbedo = float3(0.018f, 0.022f, 0.028f);
+        s.metallic   = 0.14f;
+        s.roughness  = 0.045f;
+        s.clearcoat  = 0.96f;
+        s.ccRoughness = 0.014f;
+        s.ior        = 1.52f;
+    } else if (matClass == 3u) {
+        // Matte dark cabin interior
+        s.matID = MAT_INTERIOR_DARK;
+        s.baseAlbedo = float3(0.035f, 0.038f, 0.042f);
+        s.metallic   = 0.02f;
+        s.roughness  = 0.76f;
+        s.clearcoat  = 0.0f;
+    } else if (matClass == 4u) {
+        // Police / traffic xenon headlights
+        s.matID = MAT_HEADLIGHT_EMIT;
+        s.baseAlbedo = float3(0.76f, 0.80f, 0.86f);
+        s.metallic   = 0.55f;
+        s.roughness  = 0.12f;
+        s.clearcoat  = 0.85f;
+        float hlPow = isCop ? (sirenOn ? 1.15f : (0.55f + 0.65f * headOn)) : (0.30f + 0.80f * headOn);
+        s.emissive = float3(5.6f, 6.2f, 7.8f) * hlPow * smoothstep(-0.20f, 0.25f, localN.z);
+    } else if (matClass == 5u) {
+        // Police / traffic crimson LED brake & taillights
+        s.matID = MAT_TAILLIGHT_EMIT;
+        s.baseAlbedo = float3(0.24f, 0.012f, 0.010f);
+        s.metallic   = 0.10f;
+        s.roughness  = 0.06f;
+        s.clearcoat  = 1.0f;
+        s.emissive   = float3(4.8f, 0.06f, 0.028f) * (0.72f + 0.50f * headOn);
+    } else {
+        // Clearcoat automotive body paint driven by authentic extracted PS2 skin.png!
+        s.matID = MAT_CAR_PAINT;
+        float3 col = skinCol;
+        if (!isCop && archIdx != 3u) {
+            // Subtle deterministic per-slot OEM paint palette variation for civilian sedans/SUVs/minivans (keep traftaxi authentic yellow!)
+            const float3 fleetTints[8] = {
+                float3(1.00f, 1.00f, 1.00f), // Factory neutral
+                float3(0.78f, 0.82f, 0.88f), // Cool Titanium Silver
+                float3(0.38f, 0.46f, 0.62f), // Deep Steel Blue
+                float3(0.68f, 0.24f, 0.22f), // Garnet Burgundy
+                float3(0.40f, 0.42f, 0.45f), // Graphite Charcoal
+                float3(0.32f, 0.48f, 0.36f), // Forest Pine
+                float3(0.86f, 0.80f, 0.68f), // Champagne Beige
+                float3(0.92f, 0.94f, 0.96f)  // Pearl White
+            };
+            uint vIdx = ((inst.flags >> 24u) & 0x0Fu) & 7u;
+            float luma = dot(col, float3(0.2126f, 0.7152f, 0.0722f));
+            float paintable = smoothstep(0.10f, 0.32f, luma);
+            col = mix(col, col * fleetTints[vIdx] * 1.15f, paintable * 0.55f);
+        }
+        s.baseAlbedo = clamp(col, float3(0.02f), float3(0.96f));
+        s.metallic   = isCop ? 0.42f : 0.52f;
+        s.roughness  = isCop ? 0.17f : 0.21f;
+        s.clearcoat  = 0.94f;
+        s.ccRoughness = 0.020f;
+        s.ior        = 1.56f;
+
+        // Traffic archetypes have baked skin textures without separate headlight/taillight submeshes:
+        // ignite authentic front headlights & rear ruby taillights at night/rain!
+        if (!isCop) {
+            float halfLen = (archIdx >= 5u) ? 2.35f : 2.15f;
+            float frontLight = smoothstep(halfLen * 0.88f, halfLen * 0.98f, localPos.z)
+                             * smoothstep(0.32f, 0.46f, localPos.y) * smoothstep(0.88f, 0.70f, localPos.y)
+                             * smoothstep(0.32f, 0.50f, abs(localPos.x)) * smoothstep(0.45f, 0.78f, localN.z);
+            float rearLight  = smoothstep(-halfLen * 0.88f, -halfLen * 0.98f, localPos.z)
+                             * smoothstep(0.40f, 0.56f, localPos.y) * smoothstep(0.98f, 0.78f, localPos.y)
+                             * smoothstep(0.36f, 0.52f, abs(localPos.x)) * smoothstep(0.45f, 0.78f, -localN.z);
+            if (frontLight > 0.05f && headOn > 0.15f) {
+                s.emissive += float3(4.5f, 4.8f, 5.8f) * frontLight * headOn;
+            }
+            if (rearLight > 0.05f) {
+                s.emissive += float3(4.2f, 0.06f, 0.025f) * rearLight * (0.45f + 0.65f * headOn);
+            }
+        }
+    }
+
+    return s;
+}
+
 static HitSurface resolveHitSurface(
     float3 rayOrigin,
     float3 rayDir,
@@ -1294,6 +1542,7 @@ static HitSurface resolveHitSurface(
     device const uint* worldIndices,
     device const RkptMaterial* worldMaterials,
     device const BindlessTexEntry* worldTextures,
+    constant RTAISceneData& aiScene,
     constant RTFrameUniforms& u,
     constant RTDynamicFX& dynFX,
     texture2d<float> asphaltDiffTex,
@@ -1313,6 +1562,12 @@ static HitSurface resolveHitSurface(
     sampler repeatSamp
 ) {
     RTInstanceMeta inst = instances[instanceID];
+    if ((inst.flags & (1u << 7)) != 0u) {
+        return resolveAIVehicleSurface(
+            rayOrigin, rayDir, dist, inst, primitiveID, bary,
+            aiScene, u, dynFX, repeatSamp
+        );
+    }
     if ((inst.flags & (1u << 4)) != 0u) {
         return resolveWorldSurface(
             rayOrigin, rayDir, dist, inst, primitiveID, bary, isPrimary,
@@ -1757,9 +2012,24 @@ static HitSurface resolveHitSurface(
                 s.emissive   = chromeAmbientGlint
                              + (float3(7.5f, 8.2f, 10.0f) * xenonLens
                              +  float3(5.4f, 2.15f, 0.15f) * amberMask * 1.25f) * headOn * max(forwardGate, 0.45f);
+            } else if (carID == 4u) {
+                // Ford GT: smooth smoked gunmetal housing with twin recessed circular bi-xenon projector lenses + outer chrome bezel
+                // (replaces low-res PS2 "100" white chalk outline artifact with realistic 3D HID optics!)
+                float dProj1 = length(float2((carUV.x - 0.36f) * 1.95f, (carUV.y - 0.48f) * 1.45f));
+                float dProj2 = length(float2((carUV.x - 0.68f) * 1.95f, (carUV.y - 0.50f) * 1.45f));
+                float lens1 = smoothstep(0.24f, 0.08f, dProj1);
+                float lens2 = smoothstep(0.22f, 0.07f, dProj2);
+                float bezel = max(smoothstep(0.055f, 0.015f, abs(dProj1 - 0.27f)), smoothstep(0.050f, 0.015f, abs(dProj2 - 0.25f)));
+                float opticChrome = clamp(max(max(lens1, lens2) * 0.72f, bezel * 0.85f), 0.0f, 1.0f);
+                s.baseAlbedo = mix(float3(0.032f, 0.038f, 0.048f), float3(0.70f, 0.75f, 0.82f), opticChrome);
+                s.metallic   = mix(0.24f, 0.68f, opticChrome);
+                s.roughness  = mix(0.32f, 0.10f, opticChrome);
+                s.emissive   = float3(0.18f, 0.22f, 0.28f) * opticChrome * daylightOpticBounce * max(forwardGate, 0.35f)
+                             + (float3(6.2f, 6.8f, 8.4f) * max(lens1, lens2 * 0.85f)
+                             +  float3(2.8f, 1.05f, 0.10f) * amberMask * 0.80f) * headOn * max(forwardGate, 0.35f);
             } else {
                 // Universal UV-driven projector headlights for all 40 playable NFSMW cars!
-                // Soft silver-chrome reflector base prevents stark white-on-black line-art rings in daylight (e.g. Ford GT)!
+                // Soft silver-chrome reflector base prevents stark white-on-black line-art rings in daylight!
                 float softBowl  = smoothstep(0.16f, 0.66f, hlLuma) * (1.0f - amberMask * 0.85f);
                 float brightOrb = smoothstep(0.42f, 0.82f, hlLuma) * (1.0f - amberMask * 0.85f);
                 s.baseAlbedo = mix(mix(float3(0.10f, 0.115f, 0.135f), float3(0.56f, 0.60f, 0.66f), softBowl), amberLens, amberMask * 0.85f);
@@ -2208,19 +2478,24 @@ static void evaluateLocalAreaLightsSplit(
     }
 
     // Police Pursuit Red/Blue RT Lightbar Strobes (4 nearest active cops from RTDynamicFX[13])
+    // Physically grounded 20m radius + steep inverse-square falloff + 0.28x daylight attenuation:
+    // casts crisp local red/blue streaks on wet puddles & nearby fenders without bleaching city blocks or fences!
+    float copDayScale = mix(0.28f, 1.0f, isNight);
     for (int c = 0; c < 4; ++c) {
         float strobe = dynFX.copLightPos[c].w;
         float intens = dynFX.copLightCol[c].w;
         if (strobe > 0.01f && intens > 0.01f) {
             float3 toL = dynFX.copLightPos[c].xyz - s.worldPos;
             float d2 = dot(toL, toL) + 0.65f;
-            if (d2 < 1400.0f) {
+            if (d2 < 420.0f) {
                 float d = sqrt(d2);
                 float3 L = toL / d;
                 float NdotL = max(dot(s.N, L), 0.0f);
                 if (NdotL > 0.0f) {
-                    float atten = (strobe * intens) / (1.0f + d2 * 0.032f);
-                    float3 cCol = dynFX.copLightCol[c].rgb * 14.0f;
+                    float wCop = clamp(1.0f - d2 / 420.0f, 0.0f, 1.0f);
+                    wCop *= wCop;
+                    float atten = (strobe * intens * wCop * copDayScale) / (1.0f + d2 * 0.14f);
+                    float3 cCol = dynFX.copLightCol[c].rgb * 5.5f;
                     float3 H = normalize(V + L);
                     float NdotV = max(dot(s.N, V), 1e-4f);
                     float NdotH = max(dot(s.N, H), 0.0f);
@@ -2230,9 +2505,45 @@ static void evaluateLocalAreaLightsSplit(
                     float D = D_GGX(NdotH, max(rEff * rEff, 0.003f));
                     float G = G_SmithGGX(NdotV, NdotL, rEff);
                     float3 specBRDF = (D * G * F) / max(4.0f * NdotV * NdotL, 1e-4f);
-                    outDiffIrrad += (cCol / PI) * NdotL * atten;
-                    outSpec += min(specBRDF * cCol * NdotL * atten, float3(5.5f));
+                    outDiffIrrad += (cCol / PI) * NdotL * atten * 0.45f;
+                    outSpec += min(specBRDF * cCol * NdotL * atten, float3(3.2f));
+                    if (s.clearcoat > 0.05f) {
+                        float ccNdotL = max(dot(s.clearcoatN, L), 0.0f);
+                        float ccNdotV = max(dot(s.clearcoatN, V), 1e-4f);
+                        float ccNdotH = max(dot(s.clearcoatN, H), 0.0f);
+                        float ccR = max(s.ccRoughness, 0.042f);
+                        float f0_cc = pow((s.ior - 1.0f) / (s.ior + 1.0f), 2.0f);
+                        float F_cc = F_SchlickScalar(max(dot(V, H), 0.0f), f0_cc) * s.clearcoat;
+                        float specCC = (D_GGX(ccNdotH, ccR * ccR) * G_SmithGGX(ccNdotV, ccNdotL, ccR) * F_cc)
+                                     / max(4.0f * ccNdotV * ccNdotL, 1e-4f);
+                        outSpec += min(float3(specCC) * cCol * ccNdotL * atten, float3(3.0f));
+                    }
                 }
+            }
+        }
+    }
+
+    // Active NOS Boost Exhaust Ground Bounce Light (tightly localized directly beneath tailpipes — zero bottom-screen blob!)
+    if (dynFX.nosParams.x > 0.02f) {
+        float nosAct = clamp(dynFX.nosParams.x, 0.0f, 1.0f);
+        float rZ = (abs(dynFX.carMetrics.y) > 0.2f) ? (dynFX.carMetrics.y - 0.80f) : -1.96f;
+        float3 nosPos = carOrigin + rotateCarLocal(float3(0.0f, 0.30f, rZ));
+        float3 toN = nosPos - s.worldPos;
+        float d2 = dot(toN, toN) + 0.28f;
+        if (d2 < 7.5f) {
+            float d = sqrt(d2);
+            float3 L = toN / d;
+            float NdotL = max(dot(s.N, L), 0.0f);
+            if (NdotL > 0.0f) {
+                float wNos = clamp(1.0f - d2 / 7.5f, 0.0f, 1.0f);
+                wNos *= wNos;
+                float atten = (nosAct * wNos) / (1.0f + d2 * 0.85f);
+                float3 nosRad = float3(0.45f, 1.55f, 5.2f);
+                float3 H = normalize(V + L);
+                float specPow = mix(96.0f, 14.0f, s.roughness);
+                float spec = pow(max(dot(s.N, H), 0.0f), specPow) * mix(0.42f, 0.05f, s.roughness);
+                outDiffIrrad += (nosRad / PI) * NdotL * atten * 0.36f;
+                outSpec += min(float3(spec) * nosRad * NdotL * atten, float3(0.85f));
             }
         }
     }
@@ -2511,7 +2822,8 @@ kernel void raytraceKernel(
     device const BindlessTexEntry* worldTextures [[buffer(10)]],
     device const RTWorldLight* worldLights [[buffer(11)]],
     device const ushort* worldLightGrid [[buffer(12)]],
-    constant RTDynamicFX& dynFX [[buffer(13)]]
+    constant RTDynamicFX& dynFX [[buffer(13)]],
+    constant RTAISceneData& aiScene [[buffer(14)]]
 ) {
     // worldLights & worldLightGrid & dynFX actively drive real 4,309-light O(1) lookup, cop strobes, NOS & rain!
     uint width = uint(u.rtParams.x);
@@ -2602,7 +2914,7 @@ kernel void raytraceKernel(
             rayOrigin, rayDir, hit.distance,
             hit.instanceID, hit.primitiveID, hit.bary, true,
             vertices, indices, triMaterials, instances, materials,
-            worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+            worldVertices, worldIndices, worldMaterials, worldTextures, aiScene, u, dynFX,
             asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
             concreteDiffTex, concreteNormTex,
             carbonDiffTex, carbonNormTex,
@@ -2657,7 +2969,7 @@ kernel void raytraceKernel(
                         rr.origin, rr.direction, rh.distance,
                         rh.instanceID, rh.primitiveID, rh.bary, false,
                         vertices, indices, triMaterials, instances, materials,
-                        worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+                        worldVertices, worldIndices, worldMaterials, worldTextures, aiScene, u, dynFX,
                         asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                         concreteDiffTex, concreteNormTex,
                         carbonDiffTex, carbonNormTex,
@@ -2694,7 +3006,7 @@ kernel void raytraceKernel(
                     tr.origin, tr.direction, th.distance,
                     th.instanceID, th.primitiveID, th.bary, false,
                     vertices, indices, triMaterials, instances, materials,
-                    worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+                    worldVertices, worldIndices, worldMaterials, worldTextures, aiScene, u, dynFX,
                     asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                     concreteDiffTex, concreteNormTex,
                     carbonDiffTex, carbonNormTex,
@@ -2808,7 +3120,7 @@ kernel void raytraceKernel(
                             rr.origin, rr.direction, rh.distance,
                             rh.instanceID, rh.primitiveID, rh.bary, false,
                             vertices, indices, triMaterials, instances, materials,
-                            worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+                            worldVertices, worldIndices, worldMaterials, worldTextures, aiScene, u, dynFX,
                             asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                             concreteDiffTex, concreteNormTex,
                             carbonDiffTex, carbonNormTex,
@@ -2856,7 +3168,7 @@ kernel void raytraceKernel(
                             rr.origin, rr.direction, rh.distance,
                             rh.instanceID, rh.primitiveID, rh.bary, false,
                             vertices, indices, triMaterials, instances, materials,
-                            worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+                            worldVertices, worldIndices, worldMaterials, worldTextures, aiScene, u, dynFX,
                             asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                             concreteDiffTex, concreteNormTex,
                             carbonDiffTex, carbonNormTex,
@@ -2894,7 +3206,7 @@ kernel void raytraceKernel(
                                 cr.origin, cr.direction, ch.distance,
                                 ch.instanceID, ch.primitiveID, ch.bary, false,
                                 vertices, indices, triMaterials, instances, materials,
-                                worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+                                worldVertices, worldIndices, worldMaterials, worldTextures, aiScene, u, dynFX,
                                 asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                                 concreteDiffTex, concreteNormTex,
                                 carbonDiffTex, carbonNormTex,
@@ -2938,7 +3250,7 @@ kernel void raytraceKernel(
                         gr.origin, gr.direction, gh.distance,
                         gh.instanceID, gh.primitiveID, gh.bary, false,
                         vertices, indices, triMaterials, instances, materials,
-                        worldVertices, worldIndices, worldMaterials, worldTextures, u, dynFX,
+                        worldVertices, worldIndices, worldMaterials, worldTextures, aiScene, u, dynFX,
                         asphaltDiffTex, asphaltNormTex, asphaltRoughTex,
                         concreteDiffTex, concreteNormTex,
                         carbonDiffTex, carbonNormTex,
@@ -2959,7 +3271,8 @@ kernel void raytraceKernel(
             }
 
             bool isWorldGeom = ((hitInst.flags & (1u << 4)) != 0u);
-            bool isDynamicCar = (!isWorldGeom && (hitInst.flags & 4u) == 0u);
+            bool isAIVehicle = ((hitInst.flags & (1u << 7)) != 0u);
+            bool isDynamicCar = (!isWorldGeom && !isAIVehicle && (hitInst.flags & 4u) == 0u);
             float3 skyFill = (u.skyZenith.rgb * 0.55f + u.skyHorizon.rgb * 0.45f) * u.coronaColor.w * 0.28f;
             if (isWorldGeom) {
                 // Attenuate skyFill on ROAD_ASPHALT (0.35x) to keep tarmac rich charcoal; lift shaded walls/foliage (+36%)
@@ -3012,14 +3325,15 @@ kernel void raytraceKernel(
                 : s.roughness;
             gNormRough = float4(s.N, gDenoiseRough);
             gRoughVal = s.roughness;
-            // High reactivity on thin wing & emissives (zero ghosting); moderate reactivity on rigid-tracked tires/rims
-            // AND mirror-smooth wet puddles (prevents MetalFX TDS temporal dark smear clouds across moving reflections!)
-            bool highReactivePart = (s.matID == MAT_CARBON_FIBER || s.matID == MAT_TAILLIGHT_EMIT || s.matID == MAT_HEADLIGHT_EMIT);
+            // High reactivity on thin wing, emissives & police strobes (zero ghosting); moderate reactivity on rigid-tracked tires/rims,
+            // moving AI vehicles, exhaust chrome & mirror-smooth wet puddles!
+            bool highReactivePart = (s.matID == MAT_CARBON_FIBER || s.matID == MAT_TAILLIGHT_EMIT || s.matID == MAT_HEADLIGHT_EMIT || (isAIVehicle && s.matID == MAT_STREETLAMP_LED));
             bool wheelPart = (s.matID == MAT_RUBBER_TIRE || s.matID == MAT_ALLOY_RIM);
+            bool chromeTrimPart = (isDynamicCar && (s.matID == MAT_CAR_MISC_CHROME || s.matID == MAT_LICENSE_PLATE));
             float puddleReactive = (isWorldGeom && s.puddleMask > 0.18f) ? clamp(s.puddleMask * 0.58f, 0.0f, 0.58f) : 0.0f;
             gReactiveVal = highReactivePart
-                ? 0.92f
-                : (wheelPart ? 0.38f : ((length(gEmissive) > 0.5f) ? 0.82f : (isDynamicCar ? 0.42f : puddleReactive)));
+                ? 0.94f
+                : (wheelPart ? 0.38f : ((length(gEmissive) > 0.5f) ? 0.86f : (isAIVehicle ? 0.52f : (chromeTrimPart ? 0.58f : (isDynamicCar ? 0.42f : puddleReactive)))));
         }
     }
 
@@ -3097,49 +3411,66 @@ kernel void raytraceKernel(
         // Wet-lens screen droplets deferred to post-denoise refraction (removes flat pre-denoise gray ring artifacts).
     }
 
-    // Dual NOS Exhaust Flame Cones when NOS is active (RTDynamicFX.nosParams.x > 0.02)
+    // Multi-Sample Volumetric Dual NOS Exhaust Plasma Cones (RTDynamicFX.nosParams.x > 0.02)
+    // Seamless 9-node cyan-blue Mach-diamond exhaust jets tightly anchored to tailpipes (zero detached tail bead or FI tearing!)
     if (dynFX.nosParams.x > 0.02f) {
         float nosAct = clamp(dynFX.nosParams.x, 0.0f, 1.0f);
-        float flameLen = max(dynFX.nosParams.y, 0.75f);
+        float flameLen = clamp(dynFX.nosParams.y, 0.56f, 0.78f);
         float yaw = u.carDynParams.z;
         float cy = cos(yaw), sy = sin(yaw);
-        float rZ = (abs(dynFX.carMetrics.y) > 0.2f) ? (dynFX.carMetrics.y - 0.88f) : -2.02f;
-        float3 backAxis = normalize(float3(-sy, 0.02f, -cy));
+        float rZ = (abs(dynFX.carMetrics.y) > 0.2f) ? (dynFX.carMetrics.y - 0.94f) : -2.08f;
+        uint carID = uint(u.hudParams.w + 0.5f);
+        float pipeSepX = (carID == 4u || carID == 1u) ? 0.14f : 0.48f;
+        float pipeY    = (carID == 4u) ? 0.34f : 0.28f;
+        float3 backAxis = normalize(float3(-sy, 0.01f, -cy));
+        float3 rightAxis = float3(cy, 0.0f, -sy);
         float3 carO = u.carWorldPos.xyz;
-        float3 exL = carO + float3(-0.42f * cy + rZ * sy, 0.28f,  0.42f * sy + rZ * cy);
-        float3 exR = carO + float3( 0.42f * cy + rZ * sy, 0.28f, -0.42f * sy + rZ * cy);
+        float3 exL = carO - rightAxis * pipeSepX + float3(0.0f, pipeY, 0.0f) + float3(sy, 0.0f, cy) * rZ;
+        float3 exR = carO + rightAxis * pipeSepX + float3(0.0f, pipeY, 0.0f) + float3(sy, 0.0f, cy) * rZ;
+        float flicker = 0.88f + 0.12f * sin(dynFX.timeWeather.x * 58.0f + float(gid.x) * 0.03f);
         float3 nosGlow = float3(0.0f);
         for (int s = 0; s < 2; ++s) {
             float3 src = (s == 0) ? exL : exR;
-            float tNear = clamp(dot(src - rayOrigin, rayDir), 0.1f, min(gDepth, 16.0f));
-            float3 pW = rayOrigin + rayDir * tNear;
-            float3 rel = pW - src;
-            float along = dot(rel, backAxis);
-            if (along > -0.05f && along < flameLen) {
-                float rad = length(rel - backAxis * along);
-                float coneR = mix(0.065f, 0.16f, along / flameLen);
-                float core = exp(-pow(rad / max(coneR, 0.02f), 2.0f) * 3.5f) * (1.0f - along / flameLen);
-                float3 flameCol = mix(float3(0.30f, 0.82f, 3.80f), float3(2.80f, 0.95f, 0.25f), smoothstep(0.35f, 0.92f, along / flameLen));
-                nosGlow += flameCol * core * nosAct * 1.85f;
+            for (int k = 0; k < 9; ++k) {
+                float uAlong = (float(k) + 0.25f) * (1.0f / 9.0f);
+                float3 jetPt = src + backAxis * (uAlong * flameLen);
+                float tProj = dot(jetPt - rayOrigin, rayDir);
+                if (tProj > 0.15f && tProj < gDepth + 0.30f && tProj < 18.0f) {
+                    float rad = length((rayOrigin + rayDir * tProj) - jetPt);
+                    float coneR = mix(0.046f, 0.092f, uAlong) * (0.94f + 0.08f * sin(uAlong * 18.0f - dynFX.timeWeather.x * 45.0f));
+                    float core  = exp(-pow(rad / max(coneR, 0.015f), 2.0f) * 4.2f);
+                    float halo  = exp(-pow(rad / max(coneR * 1.45f, 0.03f), 2.0f) * 3.0f) * 0.16f;
+                    float shock = 0.78f + 0.34f * pow(max(0.0f, sin(uAlong * 14.0f - dynFX.timeWeather.x * 40.0f)), 2.0f);
+                    float taper = smoothstep(1.0f, 0.12f, uAlong);
+                    float3 innerCol = float3(1.10f, 2.90f, 9.20f);
+                    float3 midCol   = float3(0.28f, 1.25f, 5.80f);
+                    float3 tipCol   = float3(3.80f, 1.15f, 0.20f);
+                    float3 flameCol = mix(mix(innerCol, midCol, smoothstep(0.06f, 0.48f, uAlong)),
+                                          tipCol, smoothstep(0.55f, 0.94f, uAlong));
+                    nosGlow += flameCol * (core * shock + halo) * taper * nosAct * flicker * 0.28f;
+                }
             }
         }
-        if (length(nosGlow) > 0.005f) {
-            outSpecRad += nosGlow;
-            gReactiveVal = max(gReactiveVal, 0.95f);
+        float nosMag = length(nosGlow);
+        if (nosMag > 0.005f) {
+            outSpecRad += min(nosGlow, float3(8.5f));
+            gReactiveVal = max(gReactiveVal, 0.96f);
         }
     }
 
-    // Glowing Volumetric Halo for Active Police Lightbar Strobes (4 nearest cops)
+    // Glowing Volumetric Halo for Active Police Lightbar Strobes (4 nearest cops, crisp & tight)
+    float haloDayScale = mix(0.45f, 1.0f, rainNightGate);
     for (int c = 0; c < 4; ++c) {
         if (dynFX.copLightPos[c].w > 0.05f && dynFX.copLightCol[c].w > 0.05f) {
             float3 toCop = dynFX.copLightPos[c].xyz - rayOrigin;
             float tProj = dot(toCop, rayDir);
-            if (tProj > 0.5f && tProj < gDepth + 0.5f && tProj < 160.0f) {
+            if (tProj > 0.5f && tProj < gDepth + 0.5f && tProj < 140.0f) {
                 float perpD = length(toCop - rayDir * tProj);
-                float halo = exp(-perpD * perpD * 2.2f) * dynFX.copLightPos[c].w * dynFX.copLightCol[c].w * smoothstep(160.0f, 12.0f, tProj);
+                float halo = (exp(-perpD * perpD * 3.8f) + 0.18f * exp(-perpD * perpD * 0.95f))
+                           * dynFX.copLightPos[c].w * dynFX.copLightCol[c].w * smoothstep(140.0f, 8.0f, tProj) * haloDayScale;
                 if (halo > 0.004f) {
-                    outSpecRad += dynFX.copLightCol[c].rgb * halo * 1.35f;
-                    gReactiveVal = max(gReactiveVal, 0.92f);
+                    outSpecRad += dynFX.copLightCol[c].rgb * halo * 0.78f;
+                    gReactiveVal = max(gReactiveVal, 0.94f);
                 }
             }
         }
@@ -3356,6 +3687,77 @@ kernel void physicsProbeKernel(
         res.wallNormalSide = float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
     outP[0] = res;
+}
+
+// ---------------------------------------------------------------------------
+// Standalone AI Vehicle Road-Elevation & Slope Probe Kernel (<= 32 threads, <0.02ms GPU!)
+// Casts 2 vertical downward world-only rays (front & rear axle) per active AI car so all
+// 20 traffic & pursuing police vehicles hug Rockport's hills, bridges & ramps seamlessly.
+// ---------------------------------------------------------------------------
+
+kernel void aiRoadProbeKernel(
+    uint gid [[thread_position_in_grid]],
+    instance_acceleration_structure tlas [[buffer(0)]],
+    device const RTAIRoadProbeInput* inP [[buffer(1)]],
+    device RTAIRoadProbeOutput* outP [[buffer(2)]],
+    constant uint& count [[buffer(3)]]
+) {
+    if (gid >= count) return;
+
+    RTAIRoadProbeOutput res;
+    res.roadY    = -9999.0f;
+    res.pitchRad = 0.0f;
+    res.frontY   = -9999.0f;
+    res.rearY    = -9999.0f;
+
+    RTAIRoadProbeInput req = inP[gid];
+    if (req.posActive.w <= 0.5f) {
+        outP[gid] = res;
+        return;
+    }
+
+    float3 pos = req.posActive.xyz;
+    float3 fwd = req.fwdHalfWB.xyz;
+    float fwdLenSq = dot(fwd, fwd);
+    fwd = (fwdLenSq > 1e-5f) ? (fwd * rsqrt(fwdLenSq)) : float3(0.0f, 0.0f, 1.0f);
+    float halfWB = clamp(req.fwdHalfWB.w, 0.8f, 2.4f);
+
+    intersector<triangle_data, instancing> probeRT;
+    probeRT.assume_geometry_type(geometry_type::triangle);
+
+    float3 origins[2] = {
+        pos + fwd * halfWB + float3(0.0f, 2.5f, 0.0f),
+        pos - fwd * halfWB + float3(0.0f, 2.5f, 0.0f)
+    };
+    float hits[2] = { -9999.0f, -9999.0f };
+    for (int k = 0; k < 2; ++k) {
+        ray dr;
+        dr.origin = origins[k];
+        dr.direction = float3(0.0f, -1.0f, 0.0f);
+        dr.min_distance = 0.05f;
+        dr.max_distance = 10.5f; // y + 2.5m -> y - 8.0m
+        // World-only mask (ROAD preferred, WORLD_OPAQUE fallback) — skips TLAS_MASK_CAR so AI never snaps onto car roofs!
+        auto h = probeRT.intersect(dr, tlas, TLAS_MASK_ROAD);
+        if (h.type == intersection_type::none) {
+            h = probeRT.intersect(dr, tlas, TLAS_MASK_WORLD_OPAQUE);
+        }
+        if (h.type == intersection_type::triangle) {
+            hits[k] = dr.origin.y - h.distance;
+        }
+    }
+
+    res.frontY = hits[0];
+    res.rearY  = hits[1];
+    if (hits[0] > -5000.0f && hits[1] > -5000.0f) {
+        res.roadY = 0.5f * (hits[0] + hits[1]);
+        res.pitchRad = clamp(-atan2(hits[0] - hits[1], max(2.0f * halfWB, 1.2f)), -0.26f, 0.26f);
+    } else if (hits[0] > -5000.0f) {
+        res.roadY = hits[0];
+    } else if (hits[1] > -5000.0f) {
+        res.roadY = hits[1];
+    }
+
+    outP[gid] = res;
 }
 
 // ---------------------------------------------------------------------------
@@ -3592,13 +3994,17 @@ kernel void compositeKernel(
     float lum = dot(srgb, float3(0.2126f, 0.7152f, 0.0722f));
     srgb = clamp(mix(float3(lum), srgb, sat), 0.0f, 1.0f);
 
-    // Iconic NFSMW Speedbreaker amber-gold slow-mo grade (zero effect when u.fxParams.y == 0)
+    // Iconic NFSMW Speedbreaker amber-gold slow-mo bullet-time grade (zero effect when u.fxParams.y == 0)
     float sb = clamp(u.fxParams.y, 0.0f, 1.0f);
     if (sb > 0.01f) {
         float sbLum = dot(srgb, float3(0.2126f, 0.7152f, 0.0722f));
-        float3 amberGrade = mix(float3(sbLum), srgb, 0.45f) * float3(1.16f, 0.96f, 0.66f);
-        float edgeVig = 1.0f - dot(v, v) * 0.26f * sb;
-        srgb = clamp(mix(srgb, amberGrade * clamp(edgeVig, 0.55f, 1.0f), sb * 0.78f), 0.0f, 1.0f);
+        float3 punch = clamp((srgb - 0.5f) * 1.18f + 0.5f, 0.0f, 1.0f);
+        float3 amberGrade = mix(float3(sbLum), punch, 0.42f) * float3(1.24f, 0.94f, 0.54f);
+        float r2 = dot(v, v);
+        float edgeVig = 1.0f - r2 * 0.36f * sb;
+        float rimGlow = smoothstep(0.45f, 1.35f, r2) * 0.14f * sb;
+        float3 sbOut = amberGrade * clamp(edgeVig, 0.42f, 1.0f) + float3(0.32f, 0.18f, 0.04f) * rimGlow;
+        srgb = clamp(mix(srgb, sbOut, sb * 0.86f), 0.0f, 1.0f);
     }
 
     float3 outRGB = (encodeSRGB != 0u) ? srgb : srgbToLinear(srgb);

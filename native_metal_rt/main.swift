@@ -32,6 +32,15 @@ final class RTShowcaseMTKView: MTKView {
         if r.denoiseMode == .off { r.resetAccumulation() }
     }
 
+    override func flagsChanged(with event: NSEvent) {
+        guard let r = rendererRef else {
+            super.flagsChanged(with: event)
+            return
+        }
+        r.nosShiftHeld = event.modifierFlags.contains(.shift)
+        super.flagsChanged(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         guard let r = rendererRef else { return }
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
@@ -40,6 +49,9 @@ final class RTShowcaseMTKView: MTKView {
         case 125: r.brakeHeld = true; return
         case 123: r.steerLeftHeld = true; return
         case 124: r.steerRightHeld = true; return
+        case 49:  r.handbrakeHeld = true; return     // Space: Handbrake / Drift
+        case 48:  r.speedbreakerHeld = true; return  // Tab: Speedbreaker
+        case 53:  NSApp.terminate(nil); return       // Esc: Quit
         default: break
         }
         switch chars {
@@ -47,6 +59,11 @@ final class RTShowcaseMTKView: MTKView {
         case "s": r.brakeHeld = true
         case "a": r.steerLeftHeld = true
         case "d": r.steerRightHeld = true
+        case "z": r.nosKeyHeld = true
+        case "x": r.speedbreakerHeld = true
+        case "f":
+            r.triggerInstantPursuit()
+            print("Pursuit active — Heat x\(r.gameWorld.heatLevel) | Cops=\(r.gameWorld.activeCopCount) | Bounty=$\(Int(r.gameWorld.bounty))")
         case "c":
             r.applyCameraMode(r.cameraMode.next())
         case "1":
@@ -91,25 +108,10 @@ final class RTShowcaseMTKView: MTKView {
                 print("Failed to switch car to \(nextEntry.canonicalName): \(error)")
             }
         case "r":
-            r.speedKmh = 0.0
-            r.steerDeg = 0.0
-            r.carYawRad = 0.0
-            r.carRollRad = 0.0
-            r.carPitchRad = 0.0
-            if let w = r.world {
-                r.carWorldPosition = w.spawnPos
-                r.carHeadingRad = w.spawnYawRad
-                r.snapCarToWorldRoad()
-            } else {
-                r.carWorldPosition = .zero
-                r.carHeadingRad = 0.0
-            }
-            r.applyCameraMode(.hero)
-            try? r.rebuildTLAS(commandBuffer: nil)
-            r.resetAccumulation()
+            r.resetPlayer()
         case "p":
             onScreenshotRequested?()
-        case "q", "\u{1b}":
+        case "\u{1b}":
             NSApp.terminate(nil)
         default:
             super.keyDown(with: event)
@@ -124,6 +126,8 @@ final class RTShowcaseMTKView: MTKView {
         case 125: r.brakeHeld = false; return
         case 123: r.steerLeftHeld = false; return
         case 124: r.steerRightHeld = false; return
+        case 49:  r.handbrakeHeld = false; return
+        case 48:  r.speedbreakerHeld = false; return
         default: break
         }
         switch chars {
@@ -131,6 +135,8 @@ final class RTShowcaseMTKView: MTKView {
         case "s": r.brakeHeld = false
         case "a": r.steerLeftHeld = false
         case "d": r.steerRightHeld = false
+        case "z": r.nosKeyHeld = false
+        case "x": r.speedbreakerHeld = false
         default: super.keyUp(with: event)
         }
     }
@@ -187,7 +193,12 @@ final class RTAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        renderer.audioEngine.stop()
         NSApp.terminate(nil)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        renderer.audioEngine.stop()
     }
 }
 
@@ -201,6 +212,12 @@ struct RTCLIOptions {
     var driveDemo = false
     var driveBenchFrames: Int? = nil
     var hud: Bool? = nil
+    var pursuit = false
+    var pursuitHeat: Int = 3
+    var nos = false
+    var speedbreaker = false
+    var noAi = false
+    var noAudio = false
     var speedKmh: Float = 145.0
     var steerDeg: Float = 12.0
     var outPath = "build/metal_rt_wave5/rt_render.png"
@@ -253,6 +270,25 @@ func parseRTArgs() -> RTCLIOptions {
             opts.hud = true
         case "--no-hud":
             opts.hud = false
+        case "--pursuit":
+            opts.pursuit = true
+            if i + 1 < args.count, let h = Int(args[i + 1]), (1...5).contains(h) {
+                opts.pursuitHeat = h
+                i += 1
+            }
+        case "--heat":
+            if let v = nextVal(), let h = Int(v) {
+                opts.pursuit = true
+                opts.pursuitHeat = max(1, min(5, h))
+            }
+        case "--nos":
+            opts.nos = true
+        case "--speedbreaker":
+            opts.speedbreaker = true
+        case "--no-ai":
+            opts.noAi = true
+        case "--no-audio":
+            opts.noAudio = true
         case "--car":
             if let v = nextVal() { opts.carKey = v }
         case "--world":
@@ -317,11 +353,13 @@ func parseRTArgs() -> RTCLIOptions {
             print("""
             RockportMetalRT — NFSMW: Rockport 2026 Apple Silicon Hardware Ray Tracing + MetalFX Engine
             Usage:
-              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 30] [--hud] [--out|--output <png>] [--compare-out <png>]
-              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--hud]
-            Interactive Controls:
-              W/S: Throttle/Brake | A/D: Steer | C: Cycle Camera (Hero/Chase/Street/Overhead) | Mouse Drag: Orbit | Scroll: Zoom
-              G: Cycle Garage Car | H: Toggle Digital HUD | 1/2/3/4: Presets/Live24h | K: Toggle Frame-Gen | T: Toggle RT | N: Cycle Denoiser (MetalFX/SVGF/Off) | L: Toggle Livery | R: Reset | P: Save 64-SPP PNG | Q/Esc: Quit
+              RockportMetalRT --headless [--world <city.rkpt>] [--car m3_gtr|carrera_gt|gallardo|...] [--scene <dir/json>] [--config <lookdev.json>] [--synthetic] [--preset golden_hour|night_neon|daylight] [--landmark <name|idx>] [--time-of-day <0..24>] [--rain <0..1>] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--spp 64] [--width 1920] [--height 1080] [--drive-demo --speed-kmh 165 --steer-deg 10] [--drive-bench 60] [--pursuit [1..5]] [--nos] [--speedbreaker] [--no-ai] [--no-audio] [--hud|--no-hud] [--out|--output <png>] [--compare-out <png>]
+              RockportMetalRT [--world <city.rkpt>] [--car m3_gtr|...] [--preset golden_hour] [--denoise metalfx|svgf|off] [--frame-gen on|off] [--camera-mode chase|hero|street|overhead] [--pursuit] [--hud] [--no-ai] [--no-audio]
+            Interactive Controls (Canonical Keymap):
+              WASD / Arrows: Drive | Space: Handbrake/Drift | Shift / Z: NOS Boost | X / Tab: Speedbreaker
+              F: Instant Pursuit (Heat 1->5) | V: Cycle Landmark | G / Shift+G: Cycle Garage Car | C: Cycle Camera
+              1/2/3/4: Presets & Live 24h | B: Rain | K: Frame-Gen | H: HUD | L: Livery | T: RT | N: Denoiser
+              R: Reset Car & Pursuit | P: Save 64-SPP PNG | Mouse Drag: Orbit | Scroll: Zoom | Esc: Quit
             """)
             exit(0)
         default:
@@ -368,8 +406,22 @@ do {
         skipProceduralWorld: (worldPkg != nil)
     )
     let metalURL = URL(fileURLWithPath: "native_metal_rt/RayTracing.metal")
-    let renderer = try RTRenderer(device: device, commandQueue: queue, scene: scene, world: worldPkg, metalFileURL: metalURL)
+    let audioHeadless = opts.headless || opts.noAudio
+    let renderer = try RTRenderer(
+        device: device,
+        commandQueue: queue,
+        scene: scene,
+        world: worldPkg,
+        metalFileURL: metalURL,
+        headless: audioHeadless,
+        aiEnabled: !opts.noAi
+    )
     renderer.forceSyntheticMode = opts.synthetic
+    renderer.benchmarkNosForced = opts.nos
+    renderer.benchmarkSpeedbreakerForced = opts.speedbreaker
+    if opts.pursuit {
+        renderer.benchmarkPursuitHeat = opts.pursuitHeat
+    }
     renderer.activePresetKey = opts.preset
     if let tod = opts.timeOfDayHours {
         renderer.explicitTimeOfDay = tod
@@ -409,6 +461,21 @@ do {
         renderer.configureDrivePose(speedKmh: opts.speedKmh, steerDeg: opts.steerDeg, useChaseCam: true)
     }
 
+    if opts.pursuit && opts.driveBenchFrames == nil {
+        renderer.triggerInstantPursuit(setHeat: opts.pursuitHeat, showcaseFraming: opts.headless)
+    }
+    if opts.headless && opts.driveBenchFrames == nil && (opts.nos || opts.speedbreaker) {
+        renderer.throttleHeld = true
+        if renderer.speedKmh < 80.0 {
+            renderer.configureDrivePose(speedKmh: max(opts.speedKmh, 140.0), steerDeg: 0.0, useChaseCam: (opts.cameraMode == .chase || opts.driveDemo))
+        }
+        for _ in 0..<24 {
+            _ = renderer.stepDrivePhysics(dt: 1.0 / 60.0)
+        }
+        renderer.throttleHeld = false
+        try? renderer.rebuildTLAS(commandBuffer: nil)
+    }
+
     if let cm = opts.cameraMode {
         renderer.applyCameraMode(cm)
     }
@@ -418,19 +485,24 @@ do {
     if let dist = opts.distance { renderer.camera.distance = dist }
     if let fov = opts.fov { renderer.camera.fovDeg = fov }
 
-    let totalTris = scene.totalTriangles + (worldPkg?.totalTriangles ?? 0)
-    let totalBlas = scene.meshes.count + (worldPkg?.blasList.count ?? 0)
+    let totalTris = scene.totalTriangles + (worldPkg?.totalTriangles ?? 0) + (renderer.aiVehicles?.totalTriangles ?? 0)
+    let totalBlas = scene.meshes.count + (worldPkg?.blasList.count ?? 0) + (renderer.aiVehicles?.blasList.count ?? 0)
 
     if let benchFrames = opts.driveBenchFrames {
         let outURL = URL(fileURLWithPath: opts.outPath)
         if opts.hud == nil { renderer.hudEnabled = true }
         let (avgMs, fps) = try renderer.runDriveBenchmark(frames: benchFrames, width: opts.width, height: opts.height, outURL: outURL)
-        let vramMB = Double(renderer.worldStreamer?.estimatedWorldVRAMBytes ?? worldPkg?.estimatedVRAMBytes ?? 0) / (1024.0 * 1024.0)
-        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | landmark=%@ | blas=%d | activeInsts=%d | vram=%.1fMB | tris=%d | denoise=%@ | frameGen=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
+        let worldBytes = renderer.worldStreamer?.estimatedWorldVRAMBytes ?? worldPkg?.estimatedVRAMBytes ?? 0
+        let aiBytes = renderer.aiVehicles?.estimatedVRAMBytes ?? 0
+        let vramMB = Double(worldBytes + aiBytes) / (1024.0 * 1024.0)
+        print(String(format: "Metal RT DriveBench GPU=%@ | msl=%@ | supportsRaytracing=true | car=%@ | world=%@ | landmark=%@ | blas=%d | activeInsts=%d | aiInsts=%d | aiTraffic=%d | aiCops=%d | heat=%d | speed=%.1fkmh | vram=%.1fMB | tris=%d | denoise=%@ | frameGen=%@ | frames=%d | avg=%.2f ms/frame (%.1f FPS) -> %@",
                      device.name, renderer.compiledMSLVersion, scene.carAlias,
                      worldPkg?.url.lastPathComponent ?? "procedural",
                      renderer.activeLandmarkName,
-                     totalBlas, renderer.activeWorldInstanceCount, vramMB, totalTris, renderer.effectiveDenoiseLabel,
+                     totalBlas, renderer.activeWorldInstanceCount,
+                     renderer.activeAIInstanceCount,
+                     renderer.gameWorld.activeTrafficCount, renderer.gameWorld.activeCopCount, renderer.gameWorld.heatLevel,
+                     renderer.speedKmh, vramMB, totalTris, renderer.effectiveDenoiseLabel,
                      renderer.effectiveFrameGenActive ? "on" : "off",
                      benchFrames, avgMs, fps, outURL.path))
     } else if opts.headless {

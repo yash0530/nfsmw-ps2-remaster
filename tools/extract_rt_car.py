@@ -752,7 +752,10 @@ def weld_smooth_normals_yup(
             return mn in ("CARBODY", "DIABLOHP")
         return False
 
-    # Compute face area normals & group vertex indices by quantized 3D position
+    # Compute face area normals & group vertex indices by 2.5mm spatial grid (3x3x3 neighbor lookup welds
+    # sub-millimeter EA panel boundary vertices like Carrera GT's front fender/door seam!)
+    cell_scale = 400.0
+    max_weld_dist_sq = 0.0042 * 0.0042
     pos_groups: Dict[Tuple[int, int, int], List[int]] = {}
     vert_faces: List[List[Tuple[Tuple[float, float, float], bool]]] = [[] for _ in range(n_verts)]
     for i0, i1, i2, _tx, lm in mesh.triangles:
@@ -767,16 +770,14 @@ def weld_smooth_normals_yup(
         mag = math.sqrt(fn[0] * fn[0] + fn[1] * fn[1] + fn[2] * fn[2])
         if mag < 1e-12:
             continue
-        unit_fn = (fn[0] / mag, fn[1] / mag, fn[2] / mag)
         is_paint = _is_paint_lm(lm)
         for idx in (i0, i1, i2):
             vert_faces[idx].append((fn, is_paint))
-            # Check orientation alignment with original normal so we never flip inward-wound faces
             vx, vy, vz = mesh.vertices[idx]
-            qk = (round(vx * 2000.0), round(vy * 2000.0), round(vz * 2000.0))
+            qk = (int(math.floor(vx * cell_scale)), int(math.floor(vy * cell_scale)), int(math.floor(vz * cell_scale)))
             pos_groups.setdefault(qk, []).append(idx)
 
-    # Deduplicate index lists per position
+    # Deduplicate index lists per cell
     for qk, lst in pos_groups.items():
         pos_groups[qk] = list(set(lst))
 
@@ -787,7 +788,6 @@ def weld_smooth_normals_yup(
             continue
         if only_paint_materials and not any(ip for _, ip in own_faces):
             continue
-        # Reference normal: average of this vertex's own incident faces (preserves original orientation)
         ox, oy, oz = mesh.normals[idx]
         rx, ry, rz = 0.0, 0.0, 0.0
         for fn, ip in own_faces:
@@ -802,24 +802,31 @@ def weld_smooth_normals_yup(
             continue
         rx, ry, rz = rx / rmag, ry / rmag, rz / rmag
 
-        # Accumulate smoothly across coincident vertices within crease_deg
         vx, vy, vz = mesh.vertices[idx]
-        qk = (round(vx * 2000.0), round(vy * 2000.0), round(vz * 2000.0))
+        cx0 = int(math.floor(vx * cell_scale))
+        cy0 = int(math.floor(vy * cell_scale))
+        cz0 = int(math.floor(vz * cell_scale))
         ax, ay, az = 0.0, 0.0, 0.0
-        for nb_idx in pos_groups.get(qk, (idx,)):
-            for fn, ip in vert_faces[nb_idx]:
-                if only_paint_materials and not ip:
-                    continue
-                fmag = math.sqrt(fn[0] * fn[0] + fn[1] * fn[1] + fn[2] * fn[2])
-                if fmag < 1e-12:
-                    continue
-                # Align sign with reference normal so double-sided/inward EA faces weld cleanly
-                dot = (fn[0] * rx + fn[1] * ry + fn[2] * rz) / fmag
-                if abs(dot) >= cos_thresh:
-                    sign = 1.0 if dot >= 0.0 else -1.0
-                    ax += fn[0] * sign
-                    ay += fn[1] * sign
-                    az += fn[2] * sign
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for nb_idx in pos_groups.get((cx0 + dx, cy0 + dy, cz0 + dz), ()):
+                        nx_, ny_, nz_ = mesh.vertices[nb_idx]
+                        ddx, ddy, ddz = nx_ - vx, ny_ - vy, nz_ - vz
+                        if ddx * ddx + ddy * ddy + ddz * ddz > max_weld_dist_sq:
+                            continue
+                        for fn, ip in vert_faces[nb_idx]:
+                            if only_paint_materials and not ip:
+                                continue
+                            fmag = math.sqrt(fn[0] * fn[0] + fn[1] * fn[1] + fn[2] * fn[2])
+                            if fmag < 1e-12:
+                                continue
+                            dot = (fn[0] * rx + fn[1] * ry + fn[2] * rz) / fmag
+                            if abs(dot) >= cos_thresh:
+                                sign = 1.0 if dot >= 0.0 else -1.0
+                                ax += fn[0] * sign
+                                ay += fn[1] * sign
+                                az += fn[2] * sign
         amag = math.sqrt(ax * ax + ay * ay + az * az)
         if amag > 1e-10:
             new_norms[idx] = (ax / amag, ay / amag, az / amag)
@@ -1359,6 +1366,26 @@ def extract_rt_car(
         pu = part.name.upper()
         if "BODY" in pu:
             raw_ps2, _ = strip_occluding_light_decals(raw_ps2, part, light_parts_all, mat_lookup)
+            # For non-M3 OEM cars (e.g. Carrera GT), unify DIABLOHP triangle lm index into CARBODY BEFORE PN subdivision
+            # so lock_material_seams never creates an artificial fender-door luminance jump!
+            if not canon.startswith("BMWM3") and part.light_material_hashes:
+                carbody_lm = next(
+                    (i for i, h in enumerate(part.light_material_hashes) if mat_lookup.get(h.lower(), "").upper() == "CARBODY"),
+                    None,
+                )
+                diablo_lms = {
+                    i for i, h in enumerate(part.light_material_hashes) if mat_lookup.get(h.lower(), "").upper() == "DIABLOHP"
+                }
+                if carbody_lm is not None and diablo_lms:
+                    raw_ps2 = gi.DecodedMesh(
+                        vertices=list(raw_ps2.vertices),
+                        normals=list(raw_ps2.normals),
+                        uvs=list(raw_ps2.uvs),
+                        triangles=[
+                            (i0, i1, i2, tx, carbody_lm if lm in diablo_lms else lm)
+                            for i0, i1, i2, tx, lm in raw_ps2.triangles
+                        ],
+                    )
         src_ps2 = _maybe_subdivide(raw_ps2, part.name)
         ymesh = eps.transform_ps2_mesh_to_yup(src_ps2, ground_z_ps2=ground_z_ps2)
         if "MIRROR" in pu:
@@ -1367,7 +1394,7 @@ def extract_rt_car(
         elif "BODY" in pu:
             # Weld cross-material normals between CARBODY and DIABLOHP (eliminates Carrera GT fender-door seam!)
             ymesh = weld_smooth_normals_yup(
-                ymesh, crease_deg=38.0, part_info=part, mat_lookup=mat_lookup, only_paint_materials=True
+                ymesh, crease_deg=44.0, part_info=part, mat_lookup=mat_lookup, only_paint_materials=True
             )
             if ymesh.vertices:
                 body_min_y = min(v[1] for v in ymesh.vertices)
