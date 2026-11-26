@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "profile_id": "rockport2026_authentic_vlt",
+  "name": "NFSMW: Rockport 2026 — Authentic HD + Measured VLT (16:9)",
+  "description": "Purist HD visual ELF patches plus the single measured authentic_measured_v24 VLT recipe (handling within +/-5%, pursuit pacing within +/-10% of stock). SYSTEM.CNF and the ELF memory-card save identity are untouched, so BASLUS-21351 saves transfer between this ISO and the retail disc.",
+  "target": {
+    "game": "Need for Speed: Most Wanted - Black Edition (NTSC-U)",
+    "serial": "SLUS-21351",
+    "elf_name": "SLUS_213.51",
+    "elf_pcsx2_crc": "0518D274"
+  },
+  "output_filename": "NFSMW_BlackEdition_Rockport2026_AuthenticVLT.iso",
+  "elf_patches": {
+    "spec": "patches/elf_patches.json",
+    "include_ids": [
+      "remove_brown_filter",
+      "remove_motion_blur",
+      "widescreen_16_9_native",
+      "high_lod_cars",
+      "full_rate_car_reflections",
+      "extended_scenery_draw_distance",
+      "screen_efx_60fps_timing"
+    ],
+    "include_optional": false
+  },
+  "vlt_recipes": [
+    {"virtual_path": "GLOBAL\\ATTRIBUTES.BIN", "recipe": "patches/vlt/authentic_measured_v24.json"}
+  ],
+  "zz_overrides": [],
+  "allow_zzdata3_append": true
+}

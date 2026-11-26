@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "authentic_measured_v24",
+  "name": "Rockport 2026 Authentic Measured Handling & Pursuit Polish (v2.4)",
+  "description": "Small, measured nudges that keep the 2005 NFSMW feel: a slightly more linear analog curve for modern sticks, a touch more turn-in on the hero BMW M3 GTR and the career Corvette, and a little more pressure in cop spawn pacing. Handling deltas stay within +/-5% and pursuit deltas within +/-10% of stock (budget enforced by tools/verify_v24_vlt_and_saves.py). No grip, brake, NOS, traffic or patrol-count changes. Use instead of modern_handling_tuning + pursuit_and_traffic, not stacked with them.",
+  "target": {"game": "SLUS-21351", "virtual_path": "GLOBAL\\ATTRIBUTES.BIN", "vault": "db"},
+  "authenticity_budget": {"handling_max_rel_delta": 0.05, "pursuit_max_rel_delta": 0.10},
+  "patches": [
+    {"class": "world", "node": "default", "field": "CONTROLLER_CURVE", "expected_offset": "0x0007b13c", "expected_orig": 1.25, "new_value": 1.2, "note": "Slightly more linear analog response for DualSense sticks while keeping the stock centre feel (-4%)"},
+    {"class": "tires", "node": "bmwm3gtre46", "field": "STEERING", "expected_offset": "0x00022468", "expected_orig": 0.9, "new_value": 0.94, "note": "Hero BMW M3 GTR: a little more turn-in (+4.4%), still the softest steering in the roster"},
+    {"class": "tires", "node": "bmwm3gtre46", "field": "YAW_SPEED", "expected_offset": "0x0002246c", "expected_orig": 0.25, "new_value": 0.26, "note": "Hero BMW M3 GTR: slightly quicker yaw settle (+4%)"},
+    {"class": "tires", "node": "m3gtre46careerstart", "field": "YAW_SPEED", "expected_offset": "0x00023c7c", "expected_orig": 0.26, "new_value": 0.27, "note": "Prologue BMW M3 GTR: matching yaw settle (+3.8%)"},
+    {"class": "tires", "node": "corvette", "field": "YAW_SPEED", "expected_offset": "0x000225fc", "expected_orig": 0.3, "new_value": 0.31, "note": "Corvette C6: marginally crisper direction changes (+3.3%)"},
+    {"class": "pursuitlevels", "node": "heat_01", "field": "TimeBetweenCopSpawn", "expected_offset": "0x0003dc30", "expected_orig": 10.0, "new_value": 9.5, "note": "Heat 1: cop reinforcements arrive 0.5 s sooner (-5%)"},
+    {"class": "pursuitlevels", "node": "heat_02", "field": "TimeBetweenCopSpawn", "expected_offset": "0x0003d610", "expected_orig": 10.0, "new_value": 9.5, "note": "Heat 2: cop reinforcements arrive 0.5 s sooner (-5%)"},
+    {"class": "pursuitlevels", "node": "heat_03", "field": "roadblockprobability", "expected_offset": "0x0003dd2c", "expected_orig": 25.0, "new_value": 27.5, "note": "Heat 3: roadblock chance 25% -> 27.5% (+10%)"},
+    {"class": "pursuitlevels", "node": "heat_04", "field": "TimeBetweenCopSpawn", "expected_offset": "0x0003df80", "expected_orig": 5.0, "new_value": 4.75, "note": "Heat 4: cop reinforcements arrive 0.25 s sooner (-5%)"}
+  ]
+}
