@@ -82,6 +82,26 @@ class TestPcsx2Profile2026(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(prof.main(["--scale", "0"]), 2)
 
+    def test_v241_clean_preset_and_pacing_keys(self) -> None:
+        ini = prof.build_v241_clean_profile()
+        self.assertEqual(prof.validate_profile_ini(ini), [])
+        kv = _kv(ini)
+        for expected in ("VsyncEnable = true", "VsyncQueueSize = 2", "FramerateNTSC = 60",
+                         "SkipDuplicateFrames = false", "accurate_blending_unit = 1",
+                         "CASMode = 0", "CASSharpness = 0", "fxaa = true", "TVShader = 0",
+                         "ShadeBoost_Brightness = 43", "ShadeBoost_Contrast = 55",
+                         "PrecacheTextureReplacements = true",
+                         "Enable = Disable All Post-Processing (Zero Double-Lining)"):
+            self.assertIn(expected, kv)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "SLUS-21351_2DAD2310.ini"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(prof.main(["--preset", "v24_clean", "--scale", "6", "--out", str(out), "--json"]), 0)
+            self.assertIn("VsyncEnable = true", out.read_text(encoding="utf-8"))
+        self.assertTrue(prof.validate_profile_ini("[EmuCore/GS]\nVsyncQueueSize = 9\n"))
+        self.assertTrue(prof.validate_profile_ini("[EmuCore/GS]\nFramerateNTSC = 200\n"))
+
 
 def _stream(fps: int, n: int = 40) -> List[Dict[str, Any]]:
     recs: List[Dict[str, Any]] = [{"timestamp": i * 0.1, "flow_state": 3, "paused": False, "player_present": False,

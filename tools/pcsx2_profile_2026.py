@@ -40,6 +40,8 @@ SCHEMA: Dict[str, Dict[str, str]] = {
         "UserHacks": _B, "UserHacks_BilinearHack": "int:0:2", "UserHacks_HalfPixelOffset": "int:0:5",
         "UserHacks_native_scaling": "int:0:4", "UserHacks_CPUCLUTRender": "int:0:2",
         "UserHacks_GPUTargetCLUTMode": "int:0:2",
+        "VsyncEnable": _B, "VsyncQueueSize": "int:0:4",
+        "FramerateNTSC": "float:30:120", "SkipDuplicateFrames": _B,
     },
     "Patches": {"Enable": "str", "Disable": "str"},
 }
@@ -52,6 +54,11 @@ V21_DEFAULT_PATCHES: List[str] = [
     "Extended Scenery Draw Distance and High-LOD World", "Warm Late-Autumn Lighting & Fog (Optional)",
     "60 FPS Companion: Fix ScreenEFX 30Hz Timestep (Experimental)",
     "High-Detail Car EnvMap and Road Reflection Scenery (Optional)",
+]
+
+V241_CLEAN_PATCHES: List[str] = [
+    "Widescreen 16:9 (Runtime Confirm)",
+    "Disable All Post-Processing (Zero Double-Lining)",
 ]
 
 V28_DEFAULT_PATCHES: List[str] = [
@@ -157,6 +164,11 @@ def build_v21_metal_profile(
     shade_contrast: int = 52,
     shade_saturation: int = 54,
     shade_gamma: int = 50,
+    accurate_blending: int = 3,
+    vsync: Optional[bool] = None,
+    vsync_queue_size: Optional[int] = None,
+    framerate_ntsc: Optional[float] = None,
+    skip_duplicate_frames: Optional[bool] = None,
 ) -> str:
     """Build the v2.1 'Metal 2.3' 4K/5K per-game INI (raises ValueError on any invalid value)."""
     if isinstance(scale, bool) or not isinstance(scale, int):
@@ -166,7 +178,7 @@ def build_v21_metal_profile(
     gs: Dict[str, object] = {
         "Renderer": renderer, "AspectRatio": "16:9", "FMVAspectRatioSwitch": "Off",
         "upscale_multiplier": scale, "MaxAnisotropy": anisotropy, "TriFilter": 2,
-        "mipmap": True, "hw_mipmap": True, "dithering_ps2": 3, "accurate_blending_unit": 3,
+        "mipmap": True, "hw_mipmap": True, "dithering_ps2": 3, "accurate_blending_unit": accurate_blending,
         "ShadeBoost": True, "ShadeBoost_Brightness": shade_brightness, "ShadeBoost_Contrast": shade_contrast,
         "ShadeBoost_Saturation": shade_saturation, "ShadeBoost_Gamma": shade_gamma,
         "TVShader": 6 if rgss else 0, "CASMode": eff_cas_mode,
@@ -176,6 +188,10 @@ def build_v21_metal_profile(
         "DumpReplaceableMipmaps": bool(enable_dump), "DumpTexturesWithFMVActive": False,
         **SLUS21351_HW_FIXES,
     }
+    for k, val in (("VsyncEnable", vsync), ("VsyncQueueSize", vsync_queue_size),
+                   ("FramerateNTSC", framerate_ntsc), ("SkipDuplicateFrames", skip_duplicate_frames)):
+        if val is not None:
+            gs[k] = val
     sections = {
         "EmuCore": {k: True for k in SCHEMA["EmuCore"]},
         "EmuCore/Speedhacks": {"EECycleRate": ee_cycle_rate},
@@ -184,6 +200,27 @@ def build_v21_metal_profile(
     patches = list(V21_DEFAULT_PATCHES if enabled_patches is None else enabled_patches)
     mode = f"4xRGSS + CAS {eff_cas_sharp}" if (rgss and eff_cas_mode) else ("4xRGSS" if rgss else f"CAS {eff_cas_sharp} + FXAA")
     return _render(f"v2.1 Metal 2.3 profile: {scale}x upscale, {mode}, EE cycle rate {ee_cycle_rate}", sections, patches)
+
+
+def build_v241_clean_profile(
+    *,
+    scale: int = 6,
+    ee_cycle_rate: int = 3,
+    renderer: int = 17,
+    enable_dump: bool = False,
+    enabled_patches: Optional[Sequence[str]] = None,
+    anisotropy: int = 16,
+) -> str:
+    """Build v2.4.1 clean profile: zero RT9 double-lining, tear-free 60 Hz Mailbox VSync, FXAA + CAS 0."""
+    return build_v21_metal_profile(
+        scale=scale, rgss=False, ee_cycle_rate=ee_cycle_rate, renderer=renderer,
+        enable_dump=enable_dump, precache=True, anisotropy=anisotropy,
+        cas_mode=0, cas_sharpness=0,
+        shade_brightness=43, shade_contrast=55, shade_saturation=54, shade_gamma=50,
+        accurate_blending=1, vsync=True, vsync_queue_size=2,
+        framerate_ntsc=60, skip_duplicate_frames=False,
+        enabled_patches=V241_CLEAN_PATCHES if enabled_patches is None else enabled_patches,
+    )
 
 
 def build_v28_5k_rgss_profile(
@@ -224,8 +261,8 @@ def build_original_ps2_baseline_profile(*, renderer: int = 17) -> str:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PCSX2 v2.6.3 Metal 2.3 per-game profile builder (SLUS-21351)")
     parser.add_argument("--profile", choices=["v21_2026", "original_ps2"], default="v21_2026")
-    parser.add_argument("--preset", choices=["default", "5k_rgss"], default="default",
-                        help="Preset tuning: default (v2.1) or 5k_rgss (v2.8 8x 5K 4xRGSS + CAS 48 + async zero-freeze)")
+    parser.add_argument("--preset", choices=["default", "5k_rgss", "v24_clean"], default="default",
+                        help="Preset: default (v2.1), 5k_rgss (v2.8), or v24_clean (v2.4.1 zero double-lining + 60Hz VSync)")
     parser.add_argument("--scale", type=int, default=6, help="Upscale multiplier (6 = 4K, 8 = 5K)")
     parser.add_argument("--rgss", action="store_true", help="Use 4xRGSS TV shader instead of CAS + FXAA")
     parser.add_argument("--ee-cycle-rate", type=int, default=3, help="EE cycle rate -3..3 (3 = 300%%)")
@@ -238,6 +275,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.profile == "v21_2026" and args.preset == "5k_rgss":
             ini = build_v28_5k_rgss_profile(ee_cycle_rate=args.ee_cycle_rate, renderer=renderer)
+        elif args.profile == "v21_2026" and args.preset == "v24_clean":
+            ini = build_v241_clean_profile(scale=args.scale, ee_cycle_rate=args.ee_cycle_rate, renderer=renderer)
         elif args.profile == "v21_2026":
             ini = build_v21_metal_profile(
                 scale=args.scale, rgss=args.rgss, ee_cycle_rate=args.ee_cycle_rate, renderer=renderer

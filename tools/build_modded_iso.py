@@ -642,6 +642,16 @@ def emit_companion_pnach(new_crc: str, out_path: Path, applied_ids: List[str]) -
                 "",
             ]
         )
+    if "disable_all_post_processing" not in applied_ids:
+        lines.extend(
+            [
+                "[Disable All Post-Processing (Zero Double-Lining)]",
+                "author=Steelmax / PCSX2 community & NFSMW: Rockport 2026 (MIPS-verified on SLUS_213.51)",
+                "description=Skips RenderMWVisualLook (0x00550D28=0) to eliminate the shifted native-res RT9 double-border ghosting across cars, buildings, and trees at 4K/5K. Pair with ShadeBoost 43/55/54/50.",
+                "patch=0,EE,00550D28,word,00000000",
+                "",
+            ]
+        )
     if "disable_ai_catchup" not in applied_ids:
         lines.extend(
             [
