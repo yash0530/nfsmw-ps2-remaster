@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-"""Physically-Motivated 3D Surface Relief, Normal-Mapped Bevels & Baked AO (v2.5).
+"""Physically-Motivated 3D Surface Relief, Normal-Mapped Bevels & Baked AO (v2.5 + v2.9 polish).
 
 Pure NumPy + Pillow deterministic offline texture shader for NFSMW: Rockport 2026.
 Bakes multi-scale height-field normals, Rockport late-afternoon directional sun
 shading, cool sky-fill crevice ambient occlusion, and material-aware micro-relief
 into upscaled RGBA textures while preserving 2005 art, palette, and PS2 [0..128]
-alpha channels.
+alpha channels. The v2.9 ``polished`` mode adds recessed reflective window glass,
+gentle cornice-grit coring, a grounded car contact shadow (GLOBALB ``CARSHADOW``)
+and PS2-aware coverage-preserving foliage mip chains.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import hashlib
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 from PIL import Image
 
-RELIEF_MODES: Tuple[str, ...] = ("faithful", "sculpted")
+RELIEF_MODES: Tuple[str, ...] = ("faithful", "sculpted", "polished")
 
 # Rockport late-afternoon directional sun vector (upper-left key light in image XY, +Z out)
 _SUN_RAW = np.array([-0.54, -0.68, 0.496], dtype=np.float32)
@@ -437,3 +439,190 @@ def sculpt_texture_relief_rgba(
     if alpha_mode == "cutout_0_128":
         out_rgb = _dilate_cutout_rgb(out_rgb, up_a, threshold=16, iters=4)
     return np.dstack([out_rgb, up_a]), mat, alpha_mode
+
+
+# ---------------------------------------------------------------------------
+# v2.9 DDS surface-depth polish
+# ---------------------------------------------------------------------------
+
+# Exact (archive, name) of the retail under-car contact shadow (64x32 PSM_T4, black RGB, alpha 0..127).
+CAR_CONTACT_SHADOWS: Dict[str, Tuple[str, ...]] = {r"GLOBAL\GLOBALB.LZC": ("CARSHADOW",)}
+PS2_ALPHA_TEST_REF = 64  # half of PS2 GS opaque alpha 128
+_SKY_REFLECT = np.array([0.62, 0.71, 0.82], dtype=np.float32) ** 2  # upper-sky blue (linear)
+_WARM_REFLECT = np.array([0.88, 0.70, 0.50], dtype=np.float32) ** 2  # low warm street haze (linear)
+
+
+def is_car_contact_shadow(name: str, archive: str = "") -> bool:
+    """True only for the exact retail car contact shadow (never SHD_* world maps / UI / SHADOWRAMP)."""
+    return name.strip().upper() in CAR_CONTACT_SHADOWS.get(archive.replace("/", "\\").upper(), ())
+
+
+def is_window_texture(name: str) -> bool:
+    nm = name.strip().upper()
+    if "REFLECTION" in nm:
+        return False
+    return (nm.startswith(("ARC_", "BLD_", "WIN_")) and ("WIN" in nm or "GLASS" in nm)) or "_WIN" in nm
+
+
+def _box_mean(arr: np.ndarray, k: int) -> np.ndarray:
+    """Separable k x k box mean (edge-padded) via cumulative sums; O(1) per pixel."""
+    out = arr.astype(np.float32)
+    if k <= 1:
+        return out
+    for _ in range(2):
+        p = np.pad(out, ((k // 2, k - 1 - k // 2), (0, 0)), mode="edge")
+        c = np.concatenate([np.zeros((1, p.shape[1])), np.cumsum(p, axis=0, dtype=np.float64)])
+        out = ((c[k:] - c[:-k]) / k).astype(np.float32).T
+    return out
+
+
+def _box_open(mask: np.ndarray, k: int) -> np.ndarray:
+    """Morphological opening with a k x k square: keeps rectangles >= k, removes thin mortar/grit."""
+    eroded = _box_mean(mask, k) > np.float32(1.0 - 1e-4)
+    return _box_mean(eroded, k) > np.float32(1e-4)
+
+
+def _run_len(mask: np.ndarray) -> np.ndarray:
+    """Per-pixel count of consecutive True pixels ending here, walking down axis 0 (0 outside mask)."""
+    idx = np.arange(mask.shape[0])[:, None]
+    last_off = np.maximum.accumulate(np.where(mask, -1, idx), axis=0)
+    return np.where(mask, idx - last_off, 0)
+
+
+def detect_window_panes(rgb_f32: np.ndarray) -> np.ndarray:
+    """Detect dark rectangular painted window panes (bool mask) on a lighter facade."""
+    h, w = rgb_f32.shape[:2]
+    luma = 0.299 * rgb_f32[:, :, 0] + 0.587 * rgb_f32[:, :, 1] + 0.114 * rgb_f32[:, :, 2]
+    med = float(np.median(luma))
+    if med < 0.08 or min(h, w) < 16:
+        return np.zeros((h, w), dtype=bool)
+    dark = (luma < np.float32(0.74 * med)) & (luma < np.float32(0.42))
+    dark = _box_mean(dark, 3) > np.float32(0.5)
+    k = max(3, int(round(min(h, w) * 0.045)))
+    pane = _box_open(dark, k)
+    kc = max(3, k // 3)  # close pinholes (painted interior specks) while keeping light mullions
+    pane = _box_mean(_box_mean(pane, kc) > np.float32(1e-4), kc) > np.float32(1.0 - 1e-4)
+    pane &= (_run_len(pane.T).T + _run_len(pane.T[::-1])[::-1].T) <= int(0.9 * w)  # drop full-width trim bands
+    pane &= (_run_len(pane) + _run_len(pane[::-1])[::-1]) <= int(0.9 * h)
+    pane = _box_open(pane, k)
+    frac = float(pane.mean())
+    return pane if 0.01 <= frac <= 0.70 else np.zeros((h, w), dtype=bool)
+
+
+def polish_window_glass(rgb_u8: np.ndarray, strength: float = 1.0) -> Tuple[np.ndarray, float]:
+    """Recess painted panes: inner-perimeter AO + upper-left frame drop shadow + sky/warm glass reflection."""
+    rgb = rgb_u8.astype(np.float32) * np.float32(1.0 / 255.0)
+    pane = detect_window_panes(rgb)
+    if not pane.any():
+        return rgb_u8.copy(), 0.0
+    h, w = pane.shape
+    up, down = _run_len(pane), _run_len(pane[::-1])[::-1]
+    left, right = _run_len(pane.T).T, _run_len(pane.T[::-1])[::-1].T
+    band = np.float32(max(2.0, round(min(h, w) * 0.012)))
+    edge_d = np.minimum(np.minimum(up, down), np.minimum(left, right)).astype(np.float32)
+    v = (up - 1).astype(np.float32) / np.maximum(up + down - 2, 1).astype(np.float32)  # 0 top .. 1 bottom
+    recess_ao = np.float32(0.24) * np.exp(-(edge_d - 1.0) / band)
+    sd = (np.minimum(up, left).astype(np.float32) - 1.0) / (np.float32(2.4) * band)  # sun from upper-left
+    t = np.clip(1.0 - sd, 0.0, 1.0)
+    drop = np.float32(0.30) * t * t * (3.0 - 2.0 * t)
+    mult = np.where(pane, (1.0 - recess_ao) * (1.0 - drop), 1.0).astype(np.float32)
+    warm_t = np.clip((v - 0.35) / 0.65, 0.0, 1.0)
+    luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    glass = np.clip((0.42 - luma) * 4.0, 0.25, 1.0)  # reflections read on dark glass; lit interiors stay painted
+    refl_w = np.where(pane, (0.12 * (1.0 - v) ** 1.4 + 0.035) * mult * glass, 0.0).astype(np.float32) * np.float32(strength)
+    mult, refl_w = _blur3x3(mult, wrap=False), _blur3x3(refl_w, wrap=False)
+    refl = _SKY_REFLECT[None, None, :] * (1.0 - warm_t[:, :, None]) + _WARM_REFLECT[None, None, :] * warm_t[:, :, None]
+    lin = (rgb * rgb) * (1.0 - np.float32(strength) * (1.0 - mult[:, :, None]))
+    lin = lin + refl_w[:, :, None] * refl * (1.0 - lin)  # screen blend keeps painted interior detail
+    out = np.clip(np.round(np.sqrt(np.clip(lin, 0.0, 1.0)) * 255.0), 0, 255).astype(np.uint8)
+    return out, float(pane.mean())
+
+
+def reduce_cornice_grit(rgb_u8: np.ndarray, strength: float = 0.4) -> np.ndarray:
+    """Gentle luma coring: damp low-amplitude grit while brick mortar / sill edges (> ~0.045) stay crisp."""
+    rgb = rgb_u8.astype(np.float32) * np.float32(1.0 / 255.0)
+    luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    detail = luma - _blur3x3(luma, wrap=True)
+    att = np.float32(strength) * np.clip(1.0 - (np.abs(detail) - 0.012) / 0.033, 0.0, 1.0)
+    return np.clip(np.round((rgb - (detail * att)[:, :, None]) * 255.0), 0, 255).astype(np.uint8)
+
+
+def polish_car_contact_shadow(rgba_u8: np.ndarray) -> np.ndarray:
+    """Deeper solid dark core + tighter soft penumbra, strictly inside the retail footprint, alpha <= 128."""
+    a = rgba_u8[:, :, 3].astype(np.float32) * np.float32(1.0 / 128.0)
+    if float(a.max()) <= 0.0:
+        return rgba_u8.copy()
+    k = max(3, min(a.shape) // 8)
+
+    def _ss(x: np.ndarray, lo: float, hi: float) -> np.ndarray:
+        t = np.clip((x - lo) / (hi - lo), 0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    core = _ss(_box_mean(a, k), 0.55, 0.95)
+    tight = _ss(a, 0.04, 0.90)  # ~half-width penumbra, still soft (smoothstep)
+    a_new = np.where(a > np.float32(0.02), np.maximum(tight, core), 0.0)
+    out = rgba_u8.copy()
+    out[:, :, :3] = np.round(out[:, :, :3].astype(np.float32) * (1.0 - core[:, :, None])).astype(np.uint8)
+    out[:, :, 3] = np.clip(np.round(a_new * 128.0), 0, 128).astype(np.uint8)
+    return out
+
+
+def _alpha_cov(alpha: np.ndarray, ref: int) -> float:
+    return float((alpha >= ref).mean())
+
+
+def build_coverage_preserving_mips(rgba_u8: np.ndarray, alpha_ref: int = PS2_ALPHA_TEST_REF) -> List[np.ndarray]:
+    """Full mip chain for PS2 [0..128] cutouts preserving alpha-test coverage + outward RGB dilation."""
+    h0, w0 = rgba_u8.shape[:2]
+    chain = [rgba_u8]
+    target = _alpha_cov(rgba_u8[:, :, 3], alpha_ref)
+    while len(chain) < int(max(w0, h0)).bit_length():  # same level count as rockport_dds
+        prev = chain[-1].astype(np.float32)
+        h, w = prev.shape[:2]
+        nh, nw = max(1, h // 2), max(1, w // 2)
+        ys0, xs0 = np.minimum(np.arange(nh) * 2, h - 1), np.minimum(np.arange(nw) * 2, w - 1)
+        ys1, xs1 = np.minimum(ys0 + 1, h - 1), np.minimum(xs0 + 1, w - 1)
+        quads = [prev[ys][:, xs] for ys in (ys0, ys1) for xs in (xs0, xs1)]
+        a_sum = sum(q[:, :, 3] for q in quads)
+        wsum = sum(q[:, :, :3] * q[:, :, 3:4] for q in quads)
+        plain = sum(q[:, :, :3] for q in quads) * np.float32(0.25)
+        rgb = np.where(a_sum[:, :, None] > 0, wsum / np.maximum(a_sum, 1e-6)[:, :, None], plain)
+        alpha = a_sum * np.float32(0.25)
+        if 0.0 < target < 1.0 and min(nh, nw) >= 2:
+            part = alpha < np.float32(127.5)  # only partial texels scale; opaque stays locked at 128
+
+            def _scaled(s: float) -> np.ndarray:
+                return np.where(part, np.minimum(alpha * np.float32(s), np.float32(128.0)), alpha)
+
+            lo, hi = 0.5, 4.0
+            for _ in range(14):
+                mid = 0.5 * (lo + hi)
+                lo, hi = (mid, hi) if _alpha_cov(_scaled(mid), alpha_ref) < target else (lo, mid)
+            alpha = min((_scaled(lo), _scaled(hi)), key=lambda a: abs(_alpha_cov(a, alpha_ref) - target))
+        a_u8 = np.clip(np.round(alpha), 0, 128).astype(np.uint8)
+        rgb_u8 = _dilate_cutout_rgb(np.clip(np.round(rgb), 0, 255).astype(np.uint8), a_u8, threshold=16, iters=2)
+        chain.append(np.dstack([rgb_u8, a_u8]))
+    return chain
+
+
+def polish_texture_relief_rgba(
+    rgba_u8: np.ndarray,
+    *,
+    name: str,
+    archive: str = "",
+    scale: int = 4,
+    small_scale: int = 8,
+    max_size: int = 1024,
+) -> Tuple[np.ndarray, str, str]:
+    """v2.9: v2.5 sculpted relief + car contact shadow / recessed window glass / cornice grit polish."""
+    out, mat, amode = sculpt_texture_relief_rgba(
+        rgba_u8, name=name, archive=archive, scale=scale, small_scale=small_scale, max_size=max_size)
+    if is_car_contact_shadow(name, archive):
+        return polish_car_contact_shadow(out), "car_contact_shadow", amode
+    if mat != "architecture":
+        return out, mat, amode
+    rgb = reduce_cornice_grit(out[:, :, :3])
+    if is_window_texture(name):
+        rgb, frac = polish_window_glass(rgb)
+        mat = "window_glass" if frac > 0.0 else mat
+    return np.dstack([rgb, out[:, :, 3]]), mat, amode

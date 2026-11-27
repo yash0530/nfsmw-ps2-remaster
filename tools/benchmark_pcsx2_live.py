@@ -6,15 +6,22 @@ Each profile runs in an isolated PCSX2 sandbox (HOME override; global PCSX2.ini,
 untouched), is driven by PINE autopilot, recorded to MP4, measured for honest world-loop FPS + sim timestep,
 and stitched into five letterboxed side-by-side PNGs plus `benchmark_report.json`.
 
+v2.9: drive checkpoints are paired by PINE world position / driven distance (same Rosewood block in both
+panels), and `--include-fair-control` adds a stock-retail session at the SAME upscale/AA/EE settings (no texture
+pack, no mod patches) so the report shows what the mod adds on top of plain PCSX2 upscaling.
+
 Usage: python3 tools/benchmark_pcsx2_live.py --iso /path/to/NFSMW.iso --scale 6 --modes freeroam,challenge --json
+       [--include-fair-control] [--replacements-dir build/pcsx2_textures_v29/SLUS-21351/replacements]
 """
 
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import math
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -35,6 +42,9 @@ CHECKPOINT_LABELS = ["01_boot_loading", "02_main_menu", "03_drive_launch", "04_d
 ADDR_DISPLAY_FRAME_COUNTER = 0x0054B5E4  # SLUS_213.51 eDisplayFrame() hardware swap counter (0x0020DCE0)
 FLOW_STATE_RACING = 6
 PANEL_BG = (0x0E, 0x12, 0x1A)
+FAIR_CONTROL_SESSION = "stock_control_freeroam"
+FAIR_CONTROL_PATCHES: Tuple[str, ...] = ("Widescreen 16:9",)  # framing parity only (same FOV as the mod run)
+MAX_TRACK_STEP_M = 60.0  # larger per-sample jumps are resets/teleports, not driven distance
 
 
 def _num(v: Any) -> bool:
@@ -203,6 +213,105 @@ def select_five_checkpoints(run_dir: Path) -> List[Tuple[str, Path]]:
     return list(zip(CHECKPOINT_LABELS, chosen))
 
 
+def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines() if Path(path).is_file() else []:
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def load_pine_track(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Active-racing PINE samples as {t, pos, dist}: dist = cumulative driven metres (teleports/resets excluded)."""
+    track: List[Dict[str, Any]] = []
+    dist = 0.0
+    for r in records:
+        pos = r.get("pos")
+        if not (_is_active(r) and isinstance(pos, list) and len(pos) == 3 and all(map(_num, pos))):
+            continue
+        t, p = float(r["timestamp"]), [float(v) for v in pos]
+        if track and 0.0 < t - track[-1]["t"] <= 2.0 and math.dist(track[-1]["pos"], p) <= MAX_TRACK_STEP_M:
+            dist += math.dist(track[-1]["pos"], p)
+        track.append({"t": t, "pos": p, "dist": round(dist, 3)})
+    return track
+
+
+def annotate_frames(frames: Sequence[Path], track: Sequence[Dict[str, Any]], *,
+                    frame_times: Optional[Sequence[float]] = None, max_dt: float = 1.5) -> List[Dict[str, Any]]:
+    """Attach the nearest-in-time PINE sample (world pos + driven distance) to each frame (default time: mtime)."""
+    ts = [s["t"] for s in track]
+    out: List[Dict[str, Any]] = []
+    for i, p in enumerate(frames):
+        t = float(frame_times[i]) if frame_times is not None else Path(p).stat().st_mtime
+        j = bisect.bisect_left(ts, t)
+        near = [k for k in (j - 1, j) if 0 <= k < len(ts)]
+        if near:
+            k = min(near, key=lambda k: abs(ts[k] - t))
+            if abs(ts[k] - t) <= max_dt:
+                out.append({"path": Path(p), "t": t, "pos": track[k]["pos"], "dist": track[k]["dist"]})
+    return out
+
+
+def match_checkpoints_by_position(left: Sequence[Dict[str, Any]], right: Sequence[Dict[str, Any]], *, n: int = 3,
+                                  pos_tol_m: float = 40.0) -> List[Dict[str, Any]]:
+    """Pair n left frames (spread over driven distance) with the right frame at the nearest world position.
+
+    Falls back to the right frame at the closest matched driven distance when no right frame lies within
+    ``pos_tol_m`` metres (e.g. the two autopilot runs diverged at an intersection).
+    """
+    if not left or not right or n <= 0:
+        return []
+    ref = sorted(left, key=lambda f: f["dist"])
+    d0, span = ref[0]["dist"], ref[-1]["dist"] - ref[0]["dist"]
+    used_l: set = set()
+    used_r: set = set()
+    pairs: List[Dict[str, Any]] = []
+    for frac in ([0.5] if n == 1 else [i / (n - 1) for i in range(n)]):
+        cand_l = [i for i in range(len(ref)) if i not in used_l]
+        if not cand_l:
+            break
+        i = min(cand_l, key=lambda i: abs(ref[i]["dist"] - (d0 + frac * span)))
+        cand_r = [j for j in range(len(right)) if j not in used_r] or list(range(len(right)))
+        j = min(cand_r, key=lambda j: math.dist(ref[i]["pos"], right[j]["pos"]))
+        method = "position"
+        if math.dist(ref[i]["pos"], right[j]["pos"]) > pos_tol_m:
+            j, method = min(cand_r, key=lambda j: abs(ref[i]["dist"] - right[j]["dist"])), "distance"
+        used_l.add(i); used_r.add(j)
+        pairs.append({"left": ref[i]["path"], "right": right[j]["path"], "method": method,
+                      "position_gap_m": round(math.dist(ref[i]["pos"], right[j]["pos"]), 2),
+                      "distance_gap_m": round(abs(ref[i]["dist"] - right[j]["dist"]), 2),
+                      "left_distance_m": ref[i]["dist"], "left_pos": ref[i]["pos"], "right_pos": right[j]["pos"]})
+    return pairs
+
+
+def matched_checkpoint_pairs(left_run: Path, right_run: Path) -> List[Tuple[str, Path, Path, Dict[str, Any]]]:
+    """Five labeled pairs; drive checkpoints 03-05 replaced by PINE position/distance-matched frames when possible."""
+    pairs = [(lab, lp, rp, {"method": "label"}) for (lab, lp), (_, rp)
+             in zip(select_five_checkpoints(left_run), select_five_checkpoints(right_run))]
+    ann = [annotate_frames(_valid_frames([Path(r) / "frames"]), load_pine_track(_read_jsonl(Path(r) / "pine_telemetry.jsonl")))
+           for r in (left_run, right_run)]
+    matched = match_checkpoints_by_position(ann[0], ann[1], n=3)
+    if len(pairs) == 5 and len(matched) == 3:
+        for k, m in enumerate(matched):
+            pairs[2 + k] = (pairs[2 + k][0], m["left"], m["right"], {x: v for x, v in m.items() if x not in ("left", "right")})
+    return pairs
+
+
+def build_fair_control_profile(*, scale: int = 6, rgss: bool = False, ee_cycle_rate: int = 3) -> str:
+    """Stock-retail control INI: identical GS/upscale/AA/aniso/EE to the mod run, but no texture pack / mod patches."""
+    ini = profiles.build_v21_metal_profile(scale=scale, rgss=rgss, ee_cycle_rate=ee_cycle_rate,
+                                           enabled_patches=list(FAIR_CONTROL_PATCHES))
+    for key in ("LoadTextureReplacements", "LoadTextureReplacementsAsync", "PrecacheTextureReplacements"):
+        ini = re.sub(rf"^{key} = true$", f"{key} = false", ini, flags=re.M)
+    ini = "; Fair stock-retail control (texture replacements OFF, widescreen-only patch)\n" + ini
+    errors = profiles.validate_profile_ini(ini)
+    if errors:
+        raise ValueError("Invalid fair-control profile: " + "; ".join(errors))
+    return ini
+
+
 def _run_pine_autopilot_inproc(pine_slot: int, pid: int, key_driver_bin: Path, *, duration: float,
                                wait_racing_timeout: float, menu_mode: str, telemetry: Path) -> Dict[str, Any]:
     import pcsx2_pine_driver as pine
@@ -260,7 +369,8 @@ def _integrity_snapshot(iso_path: Path, data_dir: Path, preflight: Dict[str, Any
 
 def run_benchmark_session(iso_path: Path, session: str, profile_ini: str, *, menu_mode: str, bench_dir: Path,
                           preflight: Dict[str, Any], data_dir: Path, duration: float = 25.0,
-                          wait_racing_timeout: float = 50.0, pine_slot: int = 28011) -> Dict[str, Any]:
+                          wait_racing_timeout: float = 50.0, pine_slot: int = 28011,
+                          replacements_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Run one isolated live PCSX2 session with the given per-game INI; returns metrics + artifact paths."""
     import pcsx2_live_verify as lv
     import race_flywheel as rf
@@ -274,7 +384,7 @@ def run_benchmark_session(iso_path: Path, session: str, profile_ini: str, *, men
         d.mkdir(parents=True, exist_ok=True)
     shutil.copy2(PNACH_PATH, staged / PNACH_PATH.name)
     info = rf.prepare_flywheel_sandbox(root, iter_dir, data_dir, preflight, patches_dir=staged, record_video=True,
-                                       enable_pine=True, pine_slot=pine_slot)
+                                       enable_pine=True, pine_slot=pine_slot, replacements_dir=replacements_dir)
     Path(info["target_gamesettings_ini"]).write_text(profile_ini, encoding="utf-8")
 
     snaps_dir, emu_log = Path(info["snaps_dir"]), iter_dir / "pcsx2_emulog.txt"
@@ -327,12 +437,7 @@ def run_benchmark_session(iso_path: Path, session: str, profile_ini: str, *, men
     iso_info = preflight.get("iso") or {}
     result["log"] = lv.parse_pcsx2_log(log_text, expected_serial=iso_info.get("serial"),
                                        expected_crc=iso_info.get("elf_crc"))
-    records = []
-    for line in telemetry.read_text(encoding="utf-8").splitlines() if telemetry.is_file() else []:
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+    records = _read_jsonl(telemetry)
     metrics = compute_pine_fps_metrics(records)
     if metrics["sim_timestep_s"] is None:
         metrics["sim_timestep_s"] = result.get("probed_sim_timestep_s")
@@ -356,49 +461,73 @@ def _default_iso_path() -> Optional[Path]:
     return cand if cand.is_file() else None
 
 
+def _stitch_pairs(pairs: Sequence[Tuple[str, Path, Path, Dict[str, Any]]], out_dir: Path, prefix: str,
+                  left: Dict[str, Any], right: Dict[str, Any], left_label: str, right_label: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for label, lp, rp, match in pairs:
+        gap = f" | matched {match['method']} gap {match['position_gap_m']} m" if "position_gap_m" in match else ""
+        try:
+            res = stitch_side_by_side(lp, rp, out_dir / f"{prefix}_{label}.png",
+                                      title=f"NFSMW SLUS-21351 | {label}{gap}", left_label=left_label,
+                                      right_label=right_label, left_meta=_meta(left), right_meta=_meta(right))
+            out.append({**res, "label": label, "match": match})
+        except (ValueError, OSError) as exc:
+            out.append({"label": label, "valid": False, "error": str(exc), "match": match})
+    return out
+
+
 def run_full_benchmark(iso_path: Path, *, out_dir: Path, bench_dir: Path, scale: int = 6, rgss: bool = False,
                        ee_cycle_rate: int = 3, duration: float = 25.0, wait_racing_timeout: float = 50.0,
-                       modes: Sequence[str] = ("freeroam", "challenge"), pine_slot: int = 28011) -> Dict[str, Any]:
+                       modes: Sequence[str] = ("freeroam", "challenge"), pine_slot: int = 28011,
+                       include_fair_control: bool = False, replacements_dir: Optional[Path] = None,
+                       mod_iso: Optional[Path] = None) -> Dict[str, Any]:
     import pcsx2_live_verify as lv
 
     iso_path, out_dir, bench_dir = Path(iso_path), Path(out_dir), Path(bench_dir)
+    mod_iso_path = Path(mod_iso) if mod_iso else iso_path
     data_dir = lv.default_pcsx2_data_dir()
     preflight = lv.run_preflight(iso_path)
     if not preflight.get("ok"):
         return {"ok": False, "error": "preflight failed", "preflight": preflight}
     before = _integrity_snapshot(iso_path, data_dir, preflight)
     v21 = profiles.build_v21_metal_profile(scale=scale, rgss=rgss, ee_cycle_rate=ee_cycle_rate)
-    plan = [("original_ps2", profiles.build_original_ps2_baseline_profile(), "freeroam"),
-            ("v21_2026_freeroam", v21, "freeroam")] + ([("v21_2026_challenge", v21, "challenge")]
-                                                       if "challenge" in modes else [])
+    plan = [("original_ps2", profiles.build_original_ps2_baseline_profile(), "freeroam", iso_path, None),
+            ("v21_2026_freeroam", v21, "freeroam", mod_iso_path, replacements_dir)]
+    plan += [("v21_2026_challenge", v21, "challenge", mod_iso_path, replacements_dir)] if "challenge" in modes else []
+    if include_fair_control:  # untouched retail ISO, SAME PCSX2 settings, no texture pack / mod patches
+        plan.append((FAIR_CONTROL_SESSION, build_fair_control_profile(scale=scale, rgss=rgss, ee_cycle_rate=ee_cycle_rate),
+                     "freeroam", iso_path, None))
     out_dir.mkdir(parents=True, exist_ok=True)
     sessions: Dict[str, Dict[str, Any]] = {}
-    for idx, (name, ini, mode) in enumerate(plan):
-        res = run_benchmark_session(iso_path, name, ini, menu_mode=mode, bench_dir=bench_dir, preflight=preflight,
+    for idx, (name, ini, mode, s_iso, s_repl) in enumerate(plan):
+        res = run_benchmark_session(s_iso, name, ini, menu_mode=mode, bench_dir=bench_dir, preflight=preflight,
                                     data_dir=data_dir, duration=duration, wait_racing_timeout=wait_racing_timeout,
-                                    pine_slot=pine_slot + idx)
+                                    pine_slot=pine_slot + idx, replacements_dir=s_repl)
         video = res.get("session_video_path")
         if video and Path(video).is_file():
             res["video_out"] = str(shutil.copy2(video, out_dir / f"{name}.mp4"))
         sessions[name] = res
 
     left, right = sessions["original_ps2"], sessions["v21_2026_freeroam"]
-    comparisons: List[Dict[str, Any]] = []
-    lcp, rcp = select_five_checkpoints(Path(left["run_dir"])), select_five_checkpoints(Path(right["run_dir"]))
-    for (label, lp), (_, rp) in zip(lcp, rcp):
-        try:
-            comparisons.append(stitch_side_by_side(
-                lp, rp, out_dir / f"compare_{label}.png", title=f"NFSMW SLUS-21351 | {label}",
-                left_label="Original PS2 (1x, 4:3)", right_label=f"v2.1 Metal 2026 ({scale}x, 16:9)",
-                left_meta=_meta(left), right_meta=_meta(right)))
-        except (ValueError, OSError) as exc:
-            comparisons.append({"label": label, "valid": False, "error": str(exc)})
+    comparisons = _stitch_pairs(matched_checkpoint_pairs(Path(left["run_dir"]), Path(right["run_dir"])), out_dir,
+                                "compare", left, right, "Original PS2 (1x, 4:3)", f"v2.1 Metal 2026 ({scale}x, 16:9)")
+    fair: Optional[Dict[str, Any]] = None
+    if include_fair_control:
+        ctrl = sessions[FAIR_CONTROL_SESSION]
+        fair_cmp = _stitch_pairs(matched_checkpoint_pairs(Path(ctrl["run_dir"]), Path(right["run_dir"])), out_dir, "fair",
+                                 ctrl, right, f"Stock retail ({scale}x, same PCSX2 settings)", f"Rockport 2026 mod ({scale}x)")
+        fps = [(s.get("metrics") or {}).get("avg_fps") for s in (ctrl, right)]
+        fair = {"session": FAIR_CONTROL_SESSION, "patches": list(FAIR_CONTROL_PATCHES), "texture_replacements": False,
+                "comparisons": fair_cmp, "mod_minus_control_avg_fps": _r2(fps[1] - fps[0]) if all(map(_num, fps)) else None}
     after = _integrity_snapshot(iso_path, data_dir, preflight)
     untouched = {k: before[k] == after[k] for k in before}
-    report = {"ok": all(untouched.values()) and len(comparisons) == 5 and all(c.get("valid") for c in comparisons),
-              "untouched": untouched, "sessions": sessions, "comparisons": comparisons,
+    fair_ok = fair is None or (len(fair["comparisons"]) == 5 and all(c.get("valid") for c in fair["comparisons"]))
+    report = {"ok": all(untouched.values()) and len(comparisons) == 5 and all(c.get("valid") for c in comparisons) and fair_ok,
+              "untouched": untouched, "sessions": sessions, "comparisons": comparisons, "fair_control": fair,
               "config": {"scale": scale, "rgss": rgss, "ee_cycle_rate": ee_cycle_rate, "duration": duration,
-                         "modes": list(modes)}}
+                         "modes": list(modes), "include_fair_control": include_fair_control,
+                         "replacements_dir": str(replacements_dir) if replacements_dir else None,
+                         "mod_iso": str(mod_iso) if mod_iso else None}}
     (out_dir / "benchmark_report.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     return report
 
@@ -415,15 +544,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--wait-racing-timeout", type=float, default=50.0)
     ap.add_argument("--modes", default="freeroam,challenge")
     ap.add_argument("--pine-slot", type=int, default=28011)
+    ap.add_argument("--include-fair-control", "--stock-control", dest="include_fair_control", action="store_true",
+                    help="also run the untouched retail ISO at the SAME PCSX2 settings (no texture pack / mod patches)")
+    ap.add_argument("--replacements-dir", type=Path, default=None, help="mod texture pack for the mod sessions")
+    ap.add_argument("--mod-iso", type=Path, default=None, help="modded ISO for the mod sessions (default: --iso)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     if not args.iso or not Path(args.iso).is_file():
         print("error: --iso (or NFSMW_ISO) must point to an existing SLUS-21351 ISO", file=sys.stderr)
         return 2
+    for opt in ("replacements_dir", "mod_iso"):
+        val = getattr(args, opt)
+        if val is not None and not (Path(val).is_dir() if opt == "replacements_dir" else Path(val).is_file()):
+            print(f"error: --{opt.replace('_', '-')} {val} does not exist", file=sys.stderr)
+            return 2
     report = run_full_benchmark(
         Path(args.iso), out_dir=args.out_dir, bench_dir=args.bench_dir, scale=args.scale, rgss=args.rgss,
         ee_cycle_rate=args.ee_cycle_rate, duration=args.duration, wait_racing_timeout=args.wait_racing_timeout,
-        modes=[m.strip() for m in args.modes.split(",") if m.strip()], pine_slot=args.pine_slot)
+        modes=[m.strip() for m in args.modes.split(",") if m.strip()], pine_slot=args.pine_slot,
+        include_fair_control=args.include_fair_control, replacements_dir=args.replacements_dir, mod_iso=args.mod_iso)
     if args.json:
         print(json.dumps(report, indent=2, default=str))
     else:
