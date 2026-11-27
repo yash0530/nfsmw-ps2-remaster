@@ -24,6 +24,10 @@ from zdir_tool import PS2NFSMWArchive  # noqa: E402
 
 DEFAULT_OUT_DIR = _REPO_ROOT / "build" / "pcsx2_textures_v25" / "SLUS-21351" / "replacements"
 DEFAULT_FAITHFUL_OUT_DIR = _REPO_ROOT / "build" / "pcsx2_textures_v22" / "SLUS-21351" / "replacements"
+DEFAULT_POLISHED_OUT_DIR = _REPO_ROOT / "build" / "pcsx2_textures_v29" / "SLUS-21351" / "replacements"
+_MODE_INFO: Dict[str, Tuple[str, Path]] = {
+    "faithful": ("2.2", DEFAULT_FAITHFUL_OUT_DIR), "sculpted": ("2.5", DEFAULT_OUT_DIR), "polished": ("2.9", DEFAULT_POLISHED_OUT_DIR),
+}
 RELIEF_MODE_CHOICES: Tuple[str, ...] = tr3d.RELIEF_MODES
 DISTRICT_CHOICES: Tuple[str, ...] = ("rosewood", "downtown", "camden", "highway99", "all")
 DXGI_FORMAT_BC7_UNORM = 98
@@ -69,12 +73,17 @@ _DISTRICT_HINTS: Dict[str, Tuple[str, ...]] = {
 }
 
 
-def is_denylisted_texture(name: str, archive: str = "") -> Tuple[bool, str]:
-    """Return ``(blocked, reason)`` under the hard UI/loading-icon/FX denylist & GLOBAL allowlist."""
+def is_denylisted_texture(name: str, archive: str = "", *, allow_car_shadow: bool = False) -> Tuple[bool, str]:
+    """Return ``(blocked, reason)`` under the hard UI/loading-icon/FX denylist & GLOBAL allowlist.
+
+    ``allow_car_shadow`` (v2.9 polished) admits ONLY the exact retail ``GLOBAL\\GLOBALB.LZC`` ``CARSHADOW``;
+    every other ``*SHADOW*`` (SHADOWRAMP, SHADOW_*), UI/loading/FX texture stays blocked.
+    """
     arc_u, nm = archive.replace("/", "\\").upper(), name.strip().upper()
     for tok in DENYLIST_ARCHIVE_TOKENS:
         if tok in arc_u: return True, f"archive:{tok}"
     if not nm: return True, "empty_name"
+    if allow_car_shadow and tr3d.is_car_contact_shadow(nm, arc_u): return False, ""
     for pfx in DENYLIST_NAME_PREFIXES:
         if nm.startswith(pfx): return True, f"prefix:{pfx}"
     for sub in DENYLIST_NAME_SUBSTRINGS:
@@ -188,11 +197,13 @@ def enhance_texture_rgba(
     rgba_u8: np.ndarray, *, name: str, archive: str = "", scale: int = 4, small_scale: int = 8,
     max_size: int = 1024, relief_mode: str = "sculpted",
 ) -> Tuple[np.ndarray, str, str]:
-    """Dispatch texture enhancement between v2.2 faithful mode and v2.5 sculpted 3D relief mode."""
+    """Dispatch texture enhancement: v2.2 faithful, v2.5 sculpted 3D relief, or v2.9 polished (sculpted + polish)."""
     if relief_mode == "faithful":
         return enhance_faithful_rgba(rgba_u8, name=name, archive=archive, scale=scale, small_scale=small_scale, max_size=max_size)
     if relief_mode == "sculpted":
         return tr3d.sculpt_texture_relief_rgba(rgba_u8, name=name, archive=archive, scale=scale, small_scale=small_scale, max_size=max_size)
+    if relief_mode == "polished":
+        return tr3d.polish_texture_relief_rgba(rgba_u8, name=name, archive=archive, scale=scale, small_scale=small_scale, max_size=max_size)
     raise ValueError(f"Unsupported relief_mode: {relief_mode!r}")
 
 
@@ -209,32 +220,42 @@ def build_bc7_dds_header(width: int, height: int, mip_count: int) -> bytes:
 
 
 def encode_batch_to_dds(
-    items: Sequence[Tuple[List[Tuple[str, int]], np.ndarray]], out_dir: Path, encoder_bin: Path, threads: int = 0,
+    items: Sequence[Tuple[List[Tuple[str, int]], Any]], out_dir: Path, encoder_bin: Path, threads: int = 0,
 ) -> Tuple[int, int]:
-    """Batch-encode RGBA arrays via ``rockport_dds --batch`` and emit DX10 BC7_UNORM DDS files."""
+    """Batch-encode RGBA arrays via ``rockport_dds --batch`` and emit DX10 BC7_UNORM DDS files.
+
+    An item may carry a pre-built mip chain (``list`` of RGBA levels, e.g. v2.9 coverage-preserving
+    foliage mips); each level is then encoded top-only (flags=0) and concatenated into one DDS.
+    """
     if not items:
         return 0, 0
     out_dir.mkdir(parents=True, exist_ok=True)
     fw, bw = 0, 0
+    records = [(lv, 0 if isinstance(img, list) else 1) for _t, img in items for lv in (img if isinstance(img, list) else [img])]
     with tempfile.TemporaryDirectory(prefix="rp_v22_") as tmp:
         in_p, out_p = Path(tmp) / "batch.rkb1", Path(tmp) / "batch.rko1"
-        buf = bytearray(b"RKB1") + bytearray(struct.pack("<I", len(items)))
-        for _targets, rgba in items:
+        buf = bytearray(b"RKB1") + bytearray(struct.pack("<I", len(records)))
+        for rgba, flags in records:
             h, w = rgba.shape[:2]
             raw = np.ascontiguousarray(rgba, dtype=np.uint8).tobytes()
-            buf += struct.pack("<4I", w, h, 1, len(raw)) + raw
+            buf += struct.pack("<4I", w, h, flags, len(raw)) + raw
         in_p.write_bytes(buf)
         cmd = [str(encoder_bin), "--batch", str(in_p), "--output", str(out_p), "--format", "bc7", "--mipmaps"] + (["-j", str(threads)] if threads > 0 else [])
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             raise RuntimeError(f"rockport_dds batch failed: {proc.stderr.strip() or proc.stdout.strip()}")
         out_data = out_p.read_bytes()
-        if len(out_data) < 8 or out_data[:4] != b"RKO1" or struct.unpack_from("<I", out_data, 4)[0] != len(items):
+        if len(out_data) < 8 or out_data[:4] != b"RKO1" or struct.unpack_from("<I", out_data, 4)[0] != len(records):
             raise RuntimeError("Invalid RKO1 batch output")
         pos = 8
-        for targets, _rgba in items:
-            w, h, mips, plen = struct.unpack_from("<4I", out_data, pos)
-            payload, pos = out_data[pos + 16 : pos + 16 + plen], pos + 16 + plen
+        for targets, img in items:
+            parts: List[bytes] = []
+            for li in range(len(img) if isinstance(img, list) else 1):
+                lw, lh, lm, plen = struct.unpack_from("<4I", out_data, pos)
+                parts.append(out_data[pos + 16 : pos + 16 + plen]); pos += 16 + plen
+                if li == 0:
+                    w, h, mips = lw, lh, lm
+            mips, payload = (len(parts) if isinstance(img, list) else mips), b"".join(parts)
             for stem, shift in targets:
                 tw, th, tm, off = w, h, mips, 0
                 for _ in range(shift):
@@ -296,16 +317,23 @@ def build_texture_pack(
     out_dir.mkdir(parents=True, exist_ok=True)
     workers = threads if threads > 0 else max(1, os.cpu_count() or 4)
     seen_stems, blocked_stems = set(), set()
-    track_blocked = supplement_dumps is not None and supplement_dumps.is_dir()
+    polished = relief_mode == "polished"
+    track_blocked = polished or (supplement_dumps is not None and supplement_dumps.is_dir())
+    if polished:  # v2.9 strict guard: pre-hash every protected UI/FRONTEND/HUD texture before queueing anything
+        collect_blocked_archive_stems(arc, blocked_stems)
     skipped, by_mat, by_alpha, by_src = collections.Counter(), collections.Counter(), collections.Counter(), collections.Counter()
+    polish_stats: collections.Counter = collections.Counter()
+    car_shadow_stems: List[str] = []
     jobs: List[Tuple[List[Tuple[str, int]], np.ndarray, str, str, str]] = []
     files_written, bytes_written, unique_tex = 0, 0, 0
 
-    def _enhance_one(j: Tuple[List[Tuple[str, int]], np.ndarray, str, str, str]) -> Tuple[List[Tuple[str, int]], np.ndarray, str, str, str]:
+    def _enhance_one(j: Tuple[List[Tuple[str, int]], np.ndarray, str, str, str]) -> Tuple[List[Tuple[str, int]], Any, str, str, str]:
         enh, mat, amode = enhance_texture_rgba(
             j[1], name=j[2], archive=j[3], scale=scale, small_scale=small_scale,
             max_size=max_size, relief_mode=relief_mode,
         )
+        if polished and mat == "foliage" and amode == "cutout_0_128":
+            return j[0], tr3d.build_coverage_preserving_mips(enh), mat, amode, j[4]
         return j[0], enh, mat, amode, j[4]
 
     def _flush(pool: concurrent.futures.ThreadPoolExecutor) -> None:
@@ -313,8 +341,10 @@ def build_texture_pack(
         if not jobs:
             return
         res = list(pool.map(_enhance_one, jobs)); jobs.clear()
-        for _t, _e, mat, amode, bkt in res:
+        for _t, enh, mat, amode, bkt in res:
             unique_tex += 1; by_mat[mat] += 1; by_alpha[amode] += 1; by_src[bkt] += 1
+            if polished and (isinstance(enh, list) or mat in ("window_glass", "car_contact_shadow")):
+                polish_stats["foliage_coverage_mips" if isinstance(enh, list) else mat] += 1
         fw, bw = encode_batch_to_dds([(r[0], r[1]) for r in res], out_dir, encoder_bin, threads=threads)
         files_written += fw; bytes_written += bw
 
@@ -322,7 +352,7 @@ def build_texture_pack(
         def _queue(tex: pth.RawTPKTexture, bucket: str) -> None:
             if tex.psm not in (pth.PSM_T4, pth.PSM_T8, pth.PSM_CT32):
                 skipped["unsupported_psm"] += 1; return
-            blocked, reason = is_denylisted_texture(tex.name, tex.archive)
+            blocked, reason = is_denylisted_texture(tex.name, tex.archive, allow_car_shadow=polished)
             if blocked:
                 skipped[reason] += 1
                 if track_blocked:
@@ -331,6 +361,8 @@ def build_texture_pack(
             stems = pth.compute_pcsx2_stems(tex, include_sub_mips=emit_mip1_tails)
             if not stems or stems[0] in seen_stems:
                 return
+            if polished and stems[0] in blocked_stems:
+                skipped["blocked_stem_collision"] += 1; return
             targets: List[Tuple[str, int]] = [(stems[0], 0)]
             seen_stems.add(stems[0])
             if emit_mip1_tails and len(stems) > 1:
@@ -344,6 +376,8 @@ def build_texture_pack(
                     for st in stems[1:]:
                         if st.endswith(fl1) and st not in seen_stems:
                             targets.append((st, 1)); seen_stems.add(st); break
+            if polished and tr3d.is_car_contact_shadow(tex.name, tex.archive):
+                car_shadow_stems.extend(st for st, _ in targets)
             jobs.append((targets, pth.decode_raw_tpk_rgba(tex, scale_alpha=False), tex.name, tex.archive, bucket))
             if len(jobs) >= batch_size:
                 _flush(pool)
@@ -369,8 +403,9 @@ def build_texture_pack(
                 continue
 
         stage2_added = 0
-        if track_blocked and supplement_dumps is not None:
-            collect_blocked_archive_stems(arc, blocked_stems)
+        if supplement_dumps is not None and supplement_dumps.is_dir():
+            if not polished:
+                collect_blocked_archive_stems(arc, blocked_stems)
             for png in sorted(supplement_dumps.glob("*.png")):
                 stem = png.stem.lower()
                 ok, rej = filter_stage2_stem(stem, seen_stems, blocked_stems)
@@ -395,7 +430,7 @@ def build_texture_pack(
         _flush(pool)
 
     manifest = {
-        "schema_version": "2.5" if relief_mode == "sculpted" else "2.2",
+        "schema_version": _MODE_INFO[relief_mode][0],
         "relief_mode": relief_mode, "district": district, "include_global": include_global, "include_cars": include_cars,
         "scale": scale, "small_scale": small_scale, "max_size": max_size, "dxgi_format": DXGI_FORMAT_BC7_UNORM,
         "sections_matched": sections_matched, "unique_textures_enhanced": unique_tex, "dds_files_written": files_written,
@@ -405,15 +440,18 @@ def build_texture_pack(
         "by_source": dict(by_src), "by_material": dict(by_mat), "by_alpha_mode": dict(by_alpha),
         "skipped_denylist_total": sum(skipped.values()), "skipped_top": dict(skipped.most_common(12)),
     }
+    if polished:
+        manifest.update(polish=dict(polish_stats), car_contact_shadow_stems=car_shadow_stems,
+                        ui_leak_stems=sorted(seen_stems & blocked_stems))
     (out_dir.parent / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Build 4x/8x BC7 DDS PCSX2 texture packs (v2.2 faithful or v2.5 sculpted 3D) offline from PS2 ISO.")
+    ap = argparse.ArgumentParser(description="Build 4x/8x BC7 DDS PCSX2 texture packs (v2.2 faithful, v2.5 sculpted, v2.9 polished) offline from PS2 ISO.")
     ap.add_argument("--iso", type=Path, default=None); ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--district", choices=DISTRICT_CHOICES, default="all")
-    ap.add_argument("--relief-mode", choices=RELIEF_MODE_CHOICES, default="sculpted")
+    ap.add_argument("--relief-mode", choices=RELIEF_MODE_CHOICES, default="polished")
     ap.add_argument("--include-global", action="store_true"); ap.add_argument("--include-cars", action="store_true")
     ap.add_argument("--scale", type=int, default=4, choices=(2, 4, 8)); ap.add_argument("--small-scale", type=int, default=8, choices=(4, 8))
     ap.add_argument("--max-size", type=int, default=1024); ap.add_argument("--no-sub-mips", action="store_true")
@@ -424,7 +462,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if iso_path is None or not iso_path.is_file():
         print("ERROR: PS2 NFSMW ISO not found (pass --iso or set NFSMW_ISO).", file=sys.stderr)
         return 1
-    out_dir = args.out.expanduser().resolve() if args.out else (DEFAULT_OUT_DIR if args.relief_mode == "sculpted" else DEFAULT_FAITHFUL_OUT_DIR)
+    out_dir = args.out.expanduser().resolve() if args.out else _MODE_INFO[args.relief_mode][1]
     m = build_texture_pack(
         iso_path=iso_path, out_dir=out_dir, district=args.district,
         include_global=args.include_global, include_cars=args.include_cars, scale=args.scale,
@@ -432,7 +470,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         supplement_dumps=args.supplement_dumps.expanduser().resolve() if args.supplement_dumps else None,
         threads=args.threads, relief_mode=args.relief_mode,
     )
-    ver = "v2.5" if args.relief_mode == "sculpted" else "v2.2"
+    ver = "v" + _MODE_INFO[args.relief_mode][0]
     print(json.dumps(m, indent=2) if args.json else f"Built {ver} ({m['district']}, {m['relief_mode']}): {m['dds_files_written']} BC7 DDS ({m['total_dds_mb']} MB) in {m['elapsed_seconds']}s")
     return 0
 
