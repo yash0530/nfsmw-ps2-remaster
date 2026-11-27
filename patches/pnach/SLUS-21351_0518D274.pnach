@@ -161,3 +161,23 @@ patch=0,EE,00407560,word,00000000
 patch=0,EE,005A2C80,word,3F147AE1
 patch=0,EE,004075A0,word,3C013D4C
 patch=0,EE,004075A4,word,3421CCCD
+
+[Race-Balanced Car Reflections 4 Faces per Frame (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Adds one face per row to the stock moving-camera envmap throttle table (0x0054FEE0): 4 faces/frame instead of stock 3 or full-rate 5. Disable [Full-Rate Car Reflections (All 5 Faces Every Frame)] when enabling this section.
+patch=0,EE,0054FEF0,word,00000001
+patch=0,EE,0054FEFC,word,00000001
+patch=0,EE,0054FF24,word,00000001
+patch=0,EE,0054FF2C,word,00000001
+patch=0,EE,0054FF4C,word,00000001
+
+[Race-Balanced Scenery Draw Distance 2x (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=DrawAScenery cull 18px -> 9px (2x distance) and high-LOD ratio 8.7f -> 4.35f. Disable [Extended Scenery Draw Distance and High-LOD World] when enabling this section.
+patch=0,EE,003DB110,word,2A020009
+patch=0,EE,003DB178,word,3C01408B
+
+[Race-Balanced Car LOD 3x Distance (Optional)]
+author=NFSMW: Rockport 2026 (MIPS-verified for SLUS-21351)
+description=Car LOD A pixel cutoff 120px -> 40px (0x00505178) so near cars stay LOD A to 3x stock distance while distant AI/traffic keep light meshes. Disable [Force High-LOD Cars and Wheels] when enabling this section.
+patch=0,EE,00505178,word,42200000

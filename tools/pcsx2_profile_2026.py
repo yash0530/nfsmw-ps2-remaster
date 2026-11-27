@@ -24,9 +24,11 @@ _B = "bool"
 _PCT = "int:0:100"
 
 # Audited PCSX2 v2.6.3 per-game INI keys (section -> key -> type spec).
+EMUCORE_PATCH_KEYS = ("EnablePatches", "EnableWideScreenPatches", "EnableNoInterlacingPatches", "EnableGameFixes")
 SCHEMA: Dict[str, Dict[str, str]] = {
-    "EmuCore": {k: _B for k in ("EnablePatches", "EnableWideScreenPatches", "EnableNoInterlacingPatches", "EnableGameFixes")},
-    "EmuCore/Speedhacks": {"EECycleRate": "int:-3:3"},
+    # EnableThreadPinning / CdvdPrecache / vuThread / EECycleSkip: key strings verified in the v2.6.3 binary
+    "EmuCore": {**{k: _B for k in EMUCORE_PATCH_KEYS}, "EnableThreadPinning": _B, "CdvdPrecache": _B},
+    "EmuCore/Speedhacks": {"EECycleRate": "int:-3:3", "EECycleSkip": "int:0:3", "vuThread": _B},
     "EmuCore/GS": {
         "Renderer": "enum_int:-1,11,13,14,17", "AspectRatio": "enum_str:Stretch,Auto 4:3/3:2,4:3,16:9,10:7",
         "FMVAspectRatioSwitch": "enum_str:Off,Auto 4:3/3:2,4:3,16:9,10:7", "upscale_multiplier": "float:1:25",
@@ -193,7 +195,7 @@ def build_v21_metal_profile(
         if val is not None:
             gs[k] = val
     sections = {
-        "EmuCore": {k: True for k in SCHEMA["EmuCore"]},
+        "EmuCore": {k: True for k in EMUCORE_PATCH_KEYS},
         "EmuCore/Speedhacks": {"EECycleRate": ee_cycle_rate},
         "EmuCore/GS": gs,
     }

@@ -1749,6 +1749,20 @@ _MENU_SCHEDULES: Dict[str, Tuple[Tuple[float, str, int, str], ...]] = {
         (11.8, "left", 250, "dialog_move_no_to_yes"),
         (12.3, "k", 250, "dialog_confirm_yes"),
     ),
+    # Boot -> Main Menu -> Right x2 (Quick Race) -> Circuit -> first track -> car -> options (3 opponents) -> Start.
+    # Not yet live-calibrated: tools/benchmark_4car_race.py --menu-keys overrides it, and its gate rejects any
+    # run where PINE does not see >= 3 AI racers (so a mis-navigation can never pass as a 4-car race).
+    "quickrace": (
+        (2.0, "k", 250, "dismiss_title_or_memcard"),
+        (5.0, "right", 250, "select_challenge_series"),
+        (5.8, "right", 250, "select_quick_race"),
+        (6.6, "k", 250, "enter_quick_race"),
+        (8.6, "k", 250, "select_circuit"),
+        (10.6, "k", 250, "select_first_track"),
+        (12.6, "k", 250, "select_car"),
+        (14.6, "k", 250, "accept_race_options"),
+        (16.2, "k", 250, "start_race"),
+    ),
 }
 
 
@@ -2050,9 +2064,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_auto.add_argument("--menu-auto-advance", action="store_true", help="Auto-navigate IN_FRONTEND menus into race")
     p_auto.add_argument(
         "--menu-mode",
-        choices=["freeroam", "challenge"],
+        choices=sorted(_MENU_SCHEDULES),
         default="freeroam",
-        help="IN_FRONTEND navigation route: 'freeroam' (Career Safe House -> Yes) or 'challenge' (Challenge Series)",
+        help="IN_FRONTEND route: 'freeroam' (Career Safe House), 'challenge' (Challenge Series) or 'quickrace' (4-car Circuit)",
     )
     p_auto.add_argument("--no-nos", action="store_true", help="Disable automatic NOS activation")
     p_auto.add_argument(

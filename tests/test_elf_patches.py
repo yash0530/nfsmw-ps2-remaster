@@ -221,7 +221,7 @@ class TestElfPatchJsonSchema(unittest.TestCase):
         spec = self._validate_patch_file(PATCHES_PATH)
         self.assertEqual(spec["target"].get("elf_sha1"), EXPECTED_ELF_SHA1)
         patches = spec["patches"]
-        self.assertEqual(len(patches), 22)
+        self.assertEqual(len(patches), 25)
 
         default_ids = [p["id"] for p in patches if p["enabled_by_default"]]
         self.assertEqual(
@@ -237,7 +237,7 @@ class TestElfPatchJsonSchema(unittest.TestCase):
         )
 
         total_writes = sum(len(p["writes"]) for p in patches)
-        self.assertEqual(total_writes, 60)
+        self.assertEqual(total_writes, 68)
 
 
 class TestElfDisasmOffline(unittest.TestCase):
@@ -470,7 +470,7 @@ class TestLiveRetailElfVerification(unittest.TestCase):
                         f"{patch['id']} @ 0x{vaddr:08X}: patched instruction 0x{pat:08X} failed decode",
                     )
                 checked += 1
-        self.assertEqual(checked, 60)
+        self.assertEqual(checked, 68)
 
     def test_apply_elf_patches_defaults_and_each_individual_patch(self) -> None:
         assert self._elf is not None
