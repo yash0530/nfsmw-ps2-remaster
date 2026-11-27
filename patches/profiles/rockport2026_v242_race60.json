@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "profile_id": "rockport2026_v242_race60",
+  "name": "NFSMW: Rockport 2026 — v2.4.2 4-Car Race 60 FPS Target + Authentic VLT (16:9)",
+  "description": "Clean v2.4 authentic_measured_v24 VLT recipe paired with a race-tuned ELF draw budget (stock 3-face moving car reflections, 2x scenery draw distance, 3x opponent car LOD distance) and companion zero-double-lining runtime patch (0x00550D28=0). Preserves v2.4.1's 6x Metal clean look (FXAA, CAS 0, ShadeBoost, 60 Hz VSync, GPUTargetCLUTMode=1) while cutting host EE/GS CPU load for higher 4-car race headroom, with BASLUS-21351 save transferability verified against the retail disc.",
+  "target": {
+    "game": "Need for Speed: Most Wanted - Black Edition (NTSC-U)",
+    "serial": "SLUS-21351",
+    "elf_name": "SLUS_213.51",
+    "elf_pcsx2_crc": "0518D274"
+  },
+  "output_filename": "NFSMW_BlackEdition_Rockport2026_v242_Race60.iso",
+  "elf_patches": {
+    "spec": "patches/elf_patches.json",
+    "include_ids": [
+      "remove_brown_filter",
+      "remove_motion_blur",
+      "widescreen_16_9_native",
+      "balanced_car_lod_3x_distance",
+      "balanced_scenery_draw_distance_2x",
+      "screen_efx_60fps_timing"
+    ],
+    "include_optional": false
+  },
+  "vlt_recipes": [
+    {"virtual_path": "GLOBAL\\ATTRIBUTES.BIN", "recipe": "patches/vlt/authentic_measured_v24.json"}
+  ],
+  "zz_overrides": [],
+  "allow_zzdata3_append": true
+}

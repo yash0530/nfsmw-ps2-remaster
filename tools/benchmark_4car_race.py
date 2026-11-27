@@ -81,6 +81,12 @@ VARIANTS: Dict[str, Dict[str, Any]] = {
                       "apply": ["balanced_car_reflections_4_faces", "balanced_scenery_draw_distance_2x",
                                 "balanced_car_lod_3x_distance"],
                       "ini": {"EmuCore/GS": {"UserHacks_CPUCLUTRender": "0"}}},
+    "v242_race60": {"desc": "v2.4.2 60 FPS target race profile: 3-face refl + 2x scenery + 3x car LOD + EE=2 + Pin/Precache/MTVU + CPUCLUT 0",
+                    "restore": ["full_rate_car_reflections", "extended_scenery_draw_distance", "high_lod_cars"],
+                    "apply": ["balanced_scenery_draw_distance_2x", "balanced_car_lod_3x_distance"],
+                    "ini": {"EmuCore": {"EnableThreadPinning": "true", "CdvdPrecache": "true"},
+                            "EmuCore/Speedhacks": {"EECycleRate": "2", "vuThread": "true"},
+                            "EmuCore/GS": {"UserHacks_CPUCLUTRender": "0", "HWDownloadMode": "0"}}},
 }
 
 

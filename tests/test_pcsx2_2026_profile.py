@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import sys
 import tempfile
@@ -101,6 +102,37 @@ class TestPcsx2Profile2026(unittest.TestCase):
             self.assertIn("VsyncEnable = true", out.read_text(encoding="utf-8"))
         self.assertTrue(prof.validate_profile_ini("[EmuCore/GS]\nVsyncQueueSize = 9\n"))
         self.assertTrue(prof.validate_profile_ini("[EmuCore/GS]\nFramerateNTSC = 200\n"))
+
+    def test_v242_race60_preset_and_profile(self) -> None:
+        import build_modded_iso
+
+        ini = prof.build_v242_race60_profile()
+        self.assertEqual(prof.validate_profile_ini(ini), [])
+        kv = _kv(ini)
+        for expected in (
+            "EECycleRate = 2", "EnableThreadPinning = true", "CdvdPrecache = true",
+            "vuThread = true", "UserHacks_CPUCLUTRender = 0", "UserHacks_GPUTargetCLUTMode = 1",
+            "HWDownloadMode = 0", "upscale_multiplier = 6",
+            "VsyncEnable = true", "VsyncQueueSize = 2", "FramerateNTSC = 60",
+            "SkipDuplicateFrames = false", "CASMode = 0", "fxaa = true",
+            "PrecacheTextureReplacements = true",
+            "Enable = Disable All Post-Processing (Zero Double-Lining)",
+        ):
+            self.assertIn(expected, kv)
+        self.assertNotIn("vu1Instant", ini)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "SLUS-21351_V242RACE.ini"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(prof.main(["--preset", "v242_race60", "--out", str(out), "--json"]), 0)
+            self.assertIn("EECycleRate = 2", out.read_text(encoding="utf-8"))
+            self.assertEqual(json.loads(buf.getvalue())["ee_cycle_rate"], 2)
+        spec = build_modded_iso.load_build_profile(REPO_ROOT / "patches" / "profiles" / "rockport2026_v242_race60.json")
+        self.assertEqual(
+            spec["elf_patches"]["include_ids"],
+            ["remove_brown_filter", "remove_motion_blur", "widescreen_16_9_native",
+             "balanced_car_lod_3x_distance", "balanced_scenery_draw_distance_2x", "screen_efx_60fps_timing"],
+        )
 
 
 def _stream(fps: int, n: int = 40) -> List[Dict[str, Any]]:

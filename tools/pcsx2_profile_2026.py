@@ -41,7 +41,7 @@ SCHEMA: Dict[str, Dict[str, str]] = {
         "DumpTexturesWithFMVActive": _B, "DumpDirectTextures": _B, "DumpPaletteTextures": _B,
         "UserHacks": _B, "UserHacks_BilinearHack": "int:0:2", "UserHacks_HalfPixelOffset": "int:0:5",
         "UserHacks_native_scaling": "int:0:4", "UserHacks_CPUCLUTRender": "int:0:2",
-        "UserHacks_GPUTargetCLUTMode": "int:0:2",
+        "UserHacks_GPUTargetCLUTMode": "int:0:2", "HWDownloadMode": "int:0:3",
         "VsyncEnable": _B, "VsyncQueueSize": "int:0:4",
         "FramerateNTSC": "float:30:120", "SkipDuplicateFrames": _B,
     },
@@ -171,6 +171,12 @@ def build_v21_metal_profile(
     vsync_queue_size: Optional[int] = None,
     framerate_ntsc: Optional[float] = None,
     skip_duplicate_frames: Optional[bool] = None,
+    enable_thread_pinning: Optional[bool] = None,
+    cdvd_precache: Optional[bool] = None,
+    vu_thread: Optional[bool] = None,
+    cpu_clut_render: Optional[int] = None,
+    hw_download_mode: Optional[int] = None,
+    profile_label: str = "v2.1 Metal 2.3 profile",
 ) -> str:
     """Build the v2.1 'Metal 2.3' 4K/5K per-game INI (raises ValueError on any invalid value)."""
     if isinstance(scale, bool) or not isinstance(scale, int):
@@ -190,18 +196,30 @@ def build_v21_metal_profile(
         "DumpReplaceableMipmaps": bool(enable_dump), "DumpTexturesWithFMVActive": False,
         **SLUS21351_HW_FIXES,
     }
+    if cpu_clut_render is not None:
+        gs["UserHacks_CPUCLUTRender"] = cpu_clut_render
+    if hw_download_mode is not None:
+        gs["HWDownloadMode"] = hw_download_mode
     for k, val in (("VsyncEnable", vsync), ("VsyncQueueSize", vsync_queue_size),
                    ("FramerateNTSC", framerate_ntsc), ("SkipDuplicateFrames", skip_duplicate_frames)):
         if val is not None:
             gs[k] = val
+    emucore: Dict[str, object] = {k: True for k in EMUCORE_PATCH_KEYS}
+    if enable_thread_pinning is not None:
+        emucore["EnableThreadPinning"] = bool(enable_thread_pinning)
+    if cdvd_precache is not None:
+        emucore["CdvdPrecache"] = bool(cdvd_precache)
+    speedhacks: Dict[str, object] = {"EECycleRate": ee_cycle_rate}
+    if vu_thread is not None:
+        speedhacks["vuThread"] = bool(vu_thread)
     sections = {
-        "EmuCore": {k: True for k in EMUCORE_PATCH_KEYS},
-        "EmuCore/Speedhacks": {"EECycleRate": ee_cycle_rate},
+        "EmuCore": emucore,
+        "EmuCore/Speedhacks": speedhacks,
         "EmuCore/GS": gs,
     }
     patches = list(V21_DEFAULT_PATCHES if enabled_patches is None else enabled_patches)
     mode = f"4xRGSS + CAS {eff_cas_sharp}" if (rgss and eff_cas_mode) else ("4xRGSS" if rgss else f"CAS {eff_cas_sharp} + FXAA")
-    return _render(f"v2.1 Metal 2.3 profile: {scale}x upscale, {mode}, EE cycle rate {ee_cycle_rate}", sections, patches)
+    return _render(f"{profile_label}: {scale}x upscale, {mode}, EE cycle rate {ee_cycle_rate}", sections, patches)
 
 
 def build_v241_clean_profile(
@@ -221,6 +239,30 @@ def build_v241_clean_profile(
         shade_brightness=43, shade_contrast=55, shade_saturation=54, shade_gamma=50,
         accurate_blending=1, vsync=True, vsync_queue_size=2,
         framerate_ntsc=60, skip_duplicate_frames=False,
+        enabled_patches=V241_CLEAN_PATCHES if enabled_patches is None else enabled_patches,
+    )
+
+
+def build_v242_race60_profile(
+    *,
+    scale: int = 6,
+    ee_cycle_rate: int = 2,
+    renderer: int = 17,
+    enable_dump: bool = False,
+    enabled_patches: Optional[Sequence[str]] = None,
+    anisotropy: int = 16,
+) -> str:
+    """Build v2.4.2 Race60 profile: v2.4.1 clean 6x look + thread pinning, MTVU, CdvdPrecache, EE=2, CPUCLUT=0 (GPUTargetCLUT=1)."""
+    return build_v21_metal_profile(
+        scale=scale, rgss=False, ee_cycle_rate=ee_cycle_rate, renderer=renderer,
+        enable_dump=enable_dump, precache=True, anisotropy=anisotropy,
+        cas_mode=0, cas_sharpness=0,
+        shade_brightness=43, shade_contrast=55, shade_saturation=54, shade_gamma=50,
+        accurate_blending=1, vsync=True, vsync_queue_size=2,
+        framerate_ntsc=60, skip_duplicate_frames=False,
+        enable_thread_pinning=True, cdvd_precache=True, vu_thread=True,
+        cpu_clut_render=0, hw_download_mode=0,
+        profile_label="v2.4.2 Race60 Metal 2.3 profile",
         enabled_patches=V241_CLEAN_PATCHES if enabled_patches is None else enabled_patches,
     )
 
@@ -263,25 +305,28 @@ def build_original_ps2_baseline_profile(*, renderer: int = 17) -> str:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PCSX2 v2.6.3 Metal 2.3 per-game profile builder (SLUS-21351)")
     parser.add_argument("--profile", choices=["v21_2026", "original_ps2"], default="v21_2026")
-    parser.add_argument("--preset", choices=["default", "5k_rgss", "v24_clean"], default="default",
-                        help="Preset: default (v2.1), 5k_rgss (v2.8), or v24_clean (v2.4.1 zero double-lining + 60Hz VSync)")
+    parser.add_argument("--preset", choices=["default", "5k_rgss", "v24_clean", "v242_race60"], default="default",
+                        help="Preset: default (v2.1), 5k_rgss (v2.8), v24_clean (v2.4.1), or v242_race60 (v2.4.2 4-car race 60 FPS)")
     parser.add_argument("--scale", type=int, default=6, help="Upscale multiplier (6 = 4K, 8 = 5K)")
     parser.add_argument("--rgss", action="store_true", help="Use 4xRGSS TV shader instead of CAS + FXAA")
-    parser.add_argument("--ee-cycle-rate", type=int, default=3, help="EE cycle rate -3..3 (3 = 300%%)")
+    parser.add_argument("--ee-cycle-rate", type=int, default=None, help="EE cycle rate -3..3 (default 2 for v242_race60, 3 otherwise)")
     parser.add_argument("--renderer", choices=sorted(RENDERERS), default="metal")
     parser.add_argument("--out", type=Path, default=None, help="Write INI to this path")
     parser.add_argument("--json", action="store_true", help="Print JSON metadata (+ INI when no --out)")
     args = parser.parse_args(argv)
 
+    eff_ee = (2 if args.preset == "v242_race60" else 3) if args.ee_cycle_rate is None else args.ee_cycle_rate
     renderer = RENDERERS[args.renderer]
     try:
         if args.profile == "v21_2026" and args.preset == "5k_rgss":
-            ini = build_v28_5k_rgss_profile(ee_cycle_rate=args.ee_cycle_rate, renderer=renderer)
+            ini = build_v28_5k_rgss_profile(ee_cycle_rate=eff_ee, renderer=renderer)
         elif args.profile == "v21_2026" and args.preset == "v24_clean":
-            ini = build_v241_clean_profile(scale=args.scale, ee_cycle_rate=args.ee_cycle_rate, renderer=renderer)
+            ini = build_v241_clean_profile(scale=args.scale, ee_cycle_rate=eff_ee, renderer=renderer)
+        elif args.profile == "v21_2026" and args.preset == "v242_race60":
+            ini = build_v242_race60_profile(scale=args.scale, ee_cycle_rate=eff_ee, renderer=renderer)
         elif args.profile == "v21_2026":
             ini = build_v21_metal_profile(
-                scale=args.scale, rgss=args.rgss, ee_cycle_rate=args.ee_cycle_rate, renderer=renderer
+                scale=args.scale, rgss=args.rgss, ee_cycle_rate=eff_ee, renderer=renderer
             )
         else:
             ini = build_original_ps2_baseline_profile(renderer=renderer)
@@ -298,7 +343,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.profile == "v21_2026":
             meta.update(scale=8 if args.preset == "5k_rgss" else args.scale,
                         rgss=True if args.preset == "5k_rgss" else args.rgss,
-                        ee_cycle_rate=args.ee_cycle_rate)
+                        ee_cycle_rate=eff_ee)
         if args.out is None:
             meta["ini"] = ini
         print(json.dumps(meta, indent=2))
