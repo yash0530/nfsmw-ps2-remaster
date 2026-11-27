@@ -69,20 +69,20 @@ class SectionRecord:
 @dataclasses.dataclass(frozen=True)
 class BakeConfig:
     sun_dir: Tuple[float, float, float] = ROCKPORT_SUN_DIR_PS2
-    sun_boost: float = 0.24
-    shadow_darken: float = 0.24
-    underside_darken: float = 0.34
-    ground_ao_strength: float = 0.24
+    sun_boost: float = 0.28
+    shadow_darken: float = 0.09
+    underside_darken: float = 0.13
+    ground_ao_strength: float = 0.14
     ground_ao_height: float = 1.8
-    curb_seam_darken: float = 0.16
-    overhead_ao_strength: float = 0.30
-    concave_ao_strength: float = 0.22
-    convex_edge_lift: float = 0.05
+    curb_seam_darken: float = 0.10
+    overhead_ao_strength: float = 0.18
+    concave_ao_strength: float = 0.14
+    convex_edge_lift: float = 0.06
     emissive_start: float = 204.0
     emissive_full: float = 232.0
-    min_factor: float = 0.44
-    max_factor: float = 1.28
-    rgb_max_non_emissive: float = 242.0
+    min_factor: float = 0.65
+    max_factor: float = 1.32
+    rgb_max_non_emissive: float = 246.0
     strength: float = 1.0
 
 
@@ -346,7 +346,7 @@ def compute_3d_vertex_colors(
     sun = sun / max(float(np.linalg.norm(sun)), 1e-6)
     ndotl = np.clip(normals @ sun, -1.0, 1.0)
     pos_sun, neg_sun = np.maximum(ndotl, 0.0), np.maximum(-ndotl, 0.0)
-    sun_w = pos_sun * (1.0 - 0.65 * np.maximum(nz, 0.0))
+    sun_w = pos_sun * (1.0 - 0.50 * np.maximum(nz, 0.0))
 
     dir_rgb = np.ones((n, 3), dtype=np.float32)
     for ch, s_mul, sh_mul in ((0, 1.15, 1.15), (1, 0.98, 0.98), (2, 0.72, 0.72)):
@@ -571,7 +571,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--stream", type=Path, default=None, help="Standalone TRACKS\\STREAML2RA.BUN")
     ap.add_argument("--district", choices=sorted(DISTRICT_LETTERS), default="all")
     ap.add_argument("--sections", type=str, default="", help="Optional comma-separated section names (e.g. A41,D41)")
-    ap.add_argument("--output", type=Path, default=repo_root / "build" / "world3d_v27" / "STREAML2RA.BUN")
+    ap.add_argument("--output", type=Path, default=repo_root / "build" / "world3d_v28" / "STREAML2RA.BUN")
     ap.add_argument("--strength", type=float, default=1.0)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--json", action="store_true")
@@ -602,7 +602,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps(rep, indent=2))
     else:
         print(
-            f"v2.7 3D World Lighting Bake ({rep['district']}, dry_run={rep['dry_run']}):\n"
+            f"v2.8 Golden-Hour 3D World Lighting Bake ({rep['district']}, dry_run={rep['dry_run']}):\n"
             f"  Sections : {rep['sections_baked']}/{rep['sections_selected']} selected ({rep['sections_total']} total)\n"
             f"  Geometry : {rep['solids_baked']:,} solids ({rep['solids_skipped']:,} skipped) | "
             f"{rep['strips_baked']:,} strips | {rep['vertices_baked']:,} verts | {rep['triangles_decoded']:,} tris\n"

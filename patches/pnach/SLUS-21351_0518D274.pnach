@@ -149,15 +149,15 @@ patch=0,EE,005A2C80,word,3F051EB8
 
 [Crisp 3D Sun-Shadow Contrast and Grounded Damp Road Reflections (v2.6 Optional)]
 author=NFSMW: Rockport 2026 (MIPS/ELF-verified for SLUS-21351)
-description=Boosts PrimaryLightDiffuseIntensity (6.5f -> 7.8f) vs cool sky FillLightDiffuse (2.1f -> 1.75f, [0.78,0.84,0.96]) for 4.46:1 3D depth separation, clears mid-fog (340f/380f), and unlocks planar road reflections capped at g_MaxRoadDampness=0.48f. Do not combine with [Real-Time Planar Damp-Asphalt Road Reflections (Optional)] or [Warm Late-Autumn Lighting & Fog (Optional)].
-patch=0,EE,00547490,word,40F9999A
-patch=0,EE,005474A0,word,3F47AE14
-patch=0,EE,005474A4,word,3F570A3D
+description=Golden-hour v2.8 rebalance: boosts PrimaryLightDiffuseIntensity (6.5f -> 8.8f) over luminous sky FillLightDiffuse (2.1f -> 2.15f, [0.88,0.905,0.96]) for crisp 4.09:1 3D depth without dark-wall crush, clears mid-fog (340f/380f), and unlocks planar road reflections capped at g_MaxRoadDampness=0.58f. Do not combine with [Real-Time Planar Damp-Asphalt Road Reflections (Optional)] or [Warm Late-Autumn Lighting & Fog (Optional)].
+patch=0,EE,00547490,word,410CCCCD
+patch=0,EE,005474A0,word,3F6147AE
+patch=0,EE,005474A4,word,3F67AE14
 patch=0,EE,005474A8,word,3F75C28F
-patch=0,EE,005474B0,word,3FE00000
+patch=0,EE,005474B0,word,4009999A
 patch=0,EE,00593E94,word,43AA0000
 patch=0,EE,00593ED0,word,43BE0000
 patch=0,EE,00407560,word,00000000
-patch=0,EE,005A2C80,word,3EF5C28F
+patch=0,EE,005A2C80,word,3F147AE1
 patch=0,EE,004075A0,word,3C013D4C
 patch=0,EE,004075A4,word,3421CCCD

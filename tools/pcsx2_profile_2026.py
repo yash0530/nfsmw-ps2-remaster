@@ -54,6 +54,15 @@ V21_DEFAULT_PATCHES: List[str] = [
     "High-Detail Car EnvMap and Road Reflection Scenery (Optional)",
 ]
 
+V28_DEFAULT_PATCHES: List[str] = [
+    "Widescreen 16:9", "Remove Brown Filter (Rockport 2026)", "Disable Motion Blur Effect",
+    "Force High-LOD Cars and Wheels", "Full-Rate Car Reflections (All 5 Faces Every Frame)",
+    "Extended Scenery Draw Distance and High-LOD World",
+    "Crisp 3D Sun-Shadow Contrast and Grounded Damp Road Reflections (v2.6 Optional)",
+    "60 FPS Companion: Fix ScreenEFX 30Hz Timestep (Experimental)",
+    "High-Detail Car EnvMap and Road Reflection Scenery (Optional)",
+]
+
 # Official PCSX2 GameIndex.yaml SLUS-21351 GS hardware fixes.
 SLUS21351_HW_FIXES: Dict[str, str] = {
     "UserHacks": "true", "UserHacks_BilinearHack": "2", "UserHacks_HalfPixelOffset": "5",
@@ -142,18 +151,26 @@ def build_v21_metal_profile(
     precache: bool = True,
     enabled_patches: Optional[Sequence[str]] = None,
     anisotropy: int = 16,
+    cas_mode: Optional[int] = None,
+    cas_sharpness: Optional[int] = None,
+    shade_brightness: int = 50,
+    shade_contrast: int = 52,
+    shade_saturation: int = 54,
+    shade_gamma: int = 50,
 ) -> str:
     """Build the v2.1 'Metal 2.3' 4K/5K per-game INI (raises ValueError on any invalid value)."""
     if isinstance(scale, bool) or not isinstance(scale, int):
         raise ValueError(f"scale must be an integer, got {scale!r}")
+    eff_cas_mode = (0 if rgss else 2) if cas_mode is None else cas_mode
+    eff_cas_sharp = (0 if rgss else 38) if cas_sharpness is None else cas_sharpness
     gs: Dict[str, object] = {
         "Renderer": renderer, "AspectRatio": "16:9", "FMVAspectRatioSwitch": "Off",
         "upscale_multiplier": scale, "MaxAnisotropy": anisotropy, "TriFilter": 2,
         "mipmap": True, "hw_mipmap": True, "dithering_ps2": 3, "accurate_blending_unit": 3,
-        "ShadeBoost": True, "ShadeBoost_Brightness": 50, "ShadeBoost_Contrast": 52,
-        "ShadeBoost_Saturation": 54, "ShadeBoost_Gamma": 50,
-        "TVShader": 6 if rgss else 0, "CASMode": 0 if rgss else 2,
-        "CASSharpness": 0 if rgss else 38, "fxaa": not rgss, "SoftwareRendererFMV": False,
+        "ShadeBoost": True, "ShadeBoost_Brightness": shade_brightness, "ShadeBoost_Contrast": shade_contrast,
+        "ShadeBoost_Saturation": shade_saturation, "ShadeBoost_Gamma": shade_gamma,
+        "TVShader": 6 if rgss else 0, "CASMode": eff_cas_mode,
+        "CASSharpness": eff_cas_sharp, "fxaa": not rgss, "SoftwareRendererFMV": False,
         "LoadTextureReplacements": True, "LoadTextureReplacementsAsync": True,
         "PrecacheTextureReplacements": bool(precache), "DumpReplaceableTextures": bool(enable_dump),
         "DumpReplaceableMipmaps": bool(enable_dump), "DumpTexturesWithFMVActive": False,
@@ -165,8 +182,26 @@ def build_v21_metal_profile(
         "EmuCore/GS": gs,
     }
     patches = list(V21_DEFAULT_PATCHES if enabled_patches is None else enabled_patches)
-    mode = "4xRGSS" if rgss else "CAS 38 + FXAA"
+    mode = f"4xRGSS + CAS {eff_cas_sharp}" if (rgss and eff_cas_mode) else ("4xRGSS" if rgss else f"CAS {eff_cas_sharp} + FXAA")
     return _render(f"v2.1 Metal 2.3 profile: {scale}x upscale, {mode}, EE cycle rate {ee_cycle_rate}", sections, patches)
+
+
+def build_v28_5k_rgss_profile(
+    *,
+    ee_cycle_rate: int = 3,
+    renderer: int = 17,
+    enable_dump: bool = False,
+    enabled_patches: Optional[Sequence[str]] = None,
+    anisotropy: int = 16,
+) -> str:
+    """Build the v2.8 8x 5K 4xRGSS + CAS 48 + zero-freeze async streaming profile."""
+    return build_v21_metal_profile(
+        scale=8, rgss=True, ee_cycle_rate=ee_cycle_rate, renderer=renderer,
+        enable_dump=enable_dump, precache=False, anisotropy=anisotropy,
+        cas_mode=2, cas_sharpness=48,
+        shade_brightness=54, shade_contrast=53, shade_saturation=55, shade_gamma=50,
+        enabled_patches=V28_DEFAULT_PATCHES if enabled_patches is None else enabled_patches,
+    )
 
 
 def build_original_ps2_baseline_profile(*, renderer: int = 17) -> str:
@@ -189,6 +224,8 @@ def build_original_ps2_baseline_profile(*, renderer: int = 17) -> str:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PCSX2 v2.6.3 Metal 2.3 per-game profile builder (SLUS-21351)")
     parser.add_argument("--profile", choices=["v21_2026", "original_ps2"], default="v21_2026")
+    parser.add_argument("--preset", choices=["default", "5k_rgss"], default="default",
+                        help="Preset tuning: default (v2.1) or 5k_rgss (v2.8 8x 5K 4xRGSS + CAS 48 + async zero-freeze)")
     parser.add_argument("--scale", type=int, default=6, help="Upscale multiplier (6 = 4K, 8 = 5K)")
     parser.add_argument("--rgss", action="store_true", help="Use 4xRGSS TV shader instead of CAS + FXAA")
     parser.add_argument("--ee-cycle-rate", type=int, default=3, help="EE cycle rate -3..3 (3 = 300%%)")
@@ -199,7 +236,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     renderer = RENDERERS[args.renderer]
     try:
-        if args.profile == "v21_2026":
+        if args.profile == "v21_2026" and args.preset == "5k_rgss":
+            ini = build_v28_5k_rgss_profile(ee_cycle_rate=args.ee_cycle_rate, renderer=renderer)
+        elif args.profile == "v21_2026":
             ini = build_v21_metal_profile(
                 scale=args.scale, rgss=args.rgss, ee_cycle_rate=args.ee_cycle_rate, renderer=renderer
             )
@@ -213,10 +252,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(ini, encoding="utf-8")
     if args.json:
-        meta = {"profile": args.profile, "renderer": renderer, "out": str(args.out) if args.out else None,
-                "valid": not validate_profile_ini(ini)}
+        meta = {"profile": args.profile, "preset": args.preset, "renderer": renderer,
+                "out": str(args.out) if args.out else None, "valid": not validate_profile_ini(ini)}
         if args.profile == "v21_2026":
-            meta.update(scale=args.scale, rgss=args.rgss, ee_cycle_rate=args.ee_cycle_rate)
+            meta.update(scale=8 if args.preset == "5k_rgss" else args.scale,
+                        rgss=True if args.preset == "5k_rgss" else args.rgss,
+                        ee_cycle_rate=args.ee_cycle_rate)
         if args.out is None:
             meta["ini"] = ini
         print(json.dumps(meta, indent=2))
