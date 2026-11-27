@@ -40,6 +40,7 @@ from zdir_tool import PS2NFSMWArchive  # noqa: E402
 
 DEFAULT_OUT_DIR = _TOOLS_DIR.parent / "build" / "optin_cars_v23"
 DEFAULT_OUT_DIR_V26 = _TOOLS_DIR.parent / "build" / "optin_cars_v26"
+DEFAULT_OUT_DIR_V28 = _TOOLS_DIR.parent / "build" / "optin_cars_v28"
 DEFAULT_ISO = Path.home() / "Documents" / "PS2Games" / "Need for Speed - Most Wanted - Black Edition.iso"
 RETAIL_MAX_CAR_PACK = 3_090_112  # CARS\SL500\GEOMETRY.BIN, largest stock car pack (WHEELS excluded)
 SAFE_CAR_PACK_CAP = 2_450_000    # conservative cap enforced on all cars whose stock pack < 2.45 MB
@@ -53,6 +54,7 @@ BLACKLIST_PRESET: Tuple[str, ...] = (
     "IMPREZAWRX", "LANCEREVO8", "GTO", "911TURBO", "911GT2",
     "MURCIELAGO", "CAYMANS", "CLIO", "COBALTSS", "PUNTO",
     "COPGTO", "COPSPORT", "COPMIDSIZE",
+    "GTI", "IS300", "A3", "ECLIPSEGT",
 )
 HERO_PARTS: Tuple[str, ...] = ("KIT00_BODY_B", "KIT00_FRONT_TIRE_B")
 HUB_KEYS = ("TIRE", "WHEEL", "RIM", "BRAKE")
@@ -444,7 +446,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                            "opt-in only; pass --car <NAME>, --hero-preset, or --blacklist-preset"), file=sys.stderr)
         return 2
     budget = LIMIT_BUDGET if args.tier == "limit" else CarBudget()
-    out_dir = args.out or (DEFAULT_OUT_DIR_V26 if args.tier == "limit" else DEFAULT_OUT_DIR)
+    out_dir = args.out or (DEFAULT_OUT_DIR_V28 if args.tier == "limit" else DEFAULT_OUT_DIR)
     m = run(iso, cars, out_dir, parts=args.part, budget=budget, write=not args.validate_only)
     for r in m["cars"]:
         parts = ", ".join(

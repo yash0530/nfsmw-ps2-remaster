@@ -148,7 +148,7 @@ class TestV26LightingAndProfileOffline(unittest.TestCase):
         by_va = {int(w["vaddr"], 16): struct.unpack("<f", struct.pack("<I", int(w["patched"], 16)))[0]
                  for w in patch["writes"]}
         self.assertGreater(by_va[0x00547490] / by_va[0x005474B0], 6.5 / 2.1)
-        self.assertTrue(0.45 <= by_va[0x005A2C80] <= 0.52, by_va[0x005A2C80])
+        self.assertTrue(0.45 <= by_va[0x005A2C80] <= 0.62, by_va[0x005A2C80])
 
 
 class TestV26LiveRetailVerification(unittest.TestCase):

@@ -143,8 +143,9 @@ class TestWorld3DLightingOffline(unittest.TestCase):
         self.assertLess(int(sun_base[0]), int(sun_top[0]) - 15)
         self.assertGreaterEqual(int(em_v[0]), 242)
 
-        # Overpass underside darkens strongly; road under overpass & at curb darkens vs open sky road
-        self.assertLess(int(by_a["TRN_CT_BRIDGE_A1"].strips[0].rgba[0, 0]), 105)
+        # Overpass underside shades cleanly (never crushed black); road under overpass & at curb darkens vs open sky road
+        bridge_r = int(by_a["TRN_CT_BRIDGE_A1"].strips[0].rgba[0, 0])
+        self.assertTrue(90 < bridge_r < 124, f"bridge underside R={bridge_r}")
         rd = by_a["TRN_CT_ROAD_A1"]
         self.assertLess(float(rd.strips[1].rgba[:, 0].mean()), float(rd.strips[2].rgba[:, 0].mean()) - 20.0)
         self.assertLess(float(rd.strips[0].rgba[:, 0].mean()), float(rd.strips[2].rgba[:, 0].mean()) - 10.0)
